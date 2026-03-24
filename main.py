@@ -4,6 +4,7 @@ from gurobipy import GRB
 import random
 import logging
 import time
+import heapq
 from itertools import combinations
 from collections import deque
 
@@ -26,16 +27,13 @@ def generate_fast_scale_free_dag(
     G = nx.DiGraph()
     G.add_nodes_from(range(n_total))
 
-    # Enforce DAG topology by strictly directing edges from lower to higher IDs
     G.add_edges_from((min(u, v), max(u, v)) for u, v in G_bg.edges())
 
-    # Randomize planted community placement to avoid the extreme hubs near index 0
     community_start_idx = rng.randint(n_total // 4, n_total - n_community)
     community_nodes = range(community_start_idx, community_start_idx + n_community)
     community = set(community_nodes)
     q_node = community_start_idx
 
-    # Plant the dense target community
     G.add_edges_from(
         (u, v)
         for u, v in combinations(community_nodes, 2)
@@ -122,6 +120,9 @@ class FullBranchAndPriceSolver:
         self.V_active = set()
         self.F = set()
         self.E_known = set()
+
+        self.adj_out = {}
+        self.adj_in = {}
         self.pending_edges = set()
 
         self._initialize_active_set()
@@ -130,6 +131,14 @@ class FullBranchAndPriceSolver:
     # ------------------------------------------
     # Initialization & State Management
     # ------------------------------------------
+    def _add_edge(self, u, v):
+        """Centralized edge registration maintaining fast adjacency indices."""
+        if (u, v) not in self.E_known:
+            self.E_known.add((u, v))
+            self.adj_out.setdefault(u, set()).add(v)
+            self.adj_in.setdefault(v, set()).add(u)
+            self.pending_edges.add((u, v))
+
     def _initialize_active_set(self):
         """Executes a BFS to guarantee the initial active set strictly satisfies size k."""
         self.V_active.add(self.q)
@@ -142,15 +151,18 @@ class FullBranchAndPriceSolver:
             preds, succs = self.oracle.query(curr)
 
             for u in preds:
-                self.E_known.add((u, curr))
-                self.pending_edges.add((u, curr))
+                self._add_edge(u, curr)
+                if u not in self.V_active:
+                    self.F.add(u)
             for w in succs:
-                self.E_known.add((curr, w))
-                self.pending_edges.add((curr, w))
+                self._add_edge(curr, w)
+                if w not in self.V_active:
+                    self.F.add(w)
 
             for nb in preds + succs:
                 if nb not in self.V_active:
                     self.V_active.add(nb)
+                    self.F.discard(nb)  # Maintain strict disjoint invariant
                     queue.append(nb)
                     if len(self.V_active) >= self.k:
                         break
@@ -160,18 +172,13 @@ class FullBranchAndPriceSolver:
             if v not in bfs_queried:
                 preds, succs = self.oracle.query(v)
                 for u in preds:
-                    self.E_known.add((u, v))
-                    self.pending_edges.add((u, v))
+                    self._add_edge(u, v)
+                    if u not in self.V_active:
+                        self.F.add(u)
                 for w in succs:
-                    self.E_known.add((v, w))
-                    self.pending_edges.add((v, w))
-
-        # Compile the initial 1-hop frontier
-        for u, v in self.E_known:
-            if u in self.V_active and v not in self.V_active:
-                self.F.add(v)
-            if v in self.V_active and u not in self.V_active:
-                self.F.add(u)
+                    self._add_edge(v, w)
+                    if w not in self.V_active:
+                        self.F.add(w)
 
     def _init_global_model(self):
         """
@@ -189,6 +196,8 @@ class FullBranchAndPriceSolver:
         self._y_obj_terms = []
         self._w_obj_terms = []
 
+        self._bound_fixed = set()
+
         self.size_constr = self.rmp.addConstr(gp.LinExpr() >= self.k, name="size_k")
         self.last_lambda = -1.0
 
@@ -196,15 +205,11 @@ class FullBranchAndPriceSolver:
     # Subgraph Combinatorics
     # ------------------------------------------
     def _count_edges_in(self, nodes):
-        """Exact O(|S|^2) directed edge count via O(1) hash lookups."""
-        node_list = list(nodes)
-        n = len(node_list)
-        edges = 0
-        for i in range(n):
-            for j in range(n):
-                if i != j and (node_list[i], node_list[j]) in self.E_known:
-                    edges += 1
-        return edges
+        """Fast O(S * avg_deg) localized edge count leveraging adjacency indices."""
+        node_set = set(nodes)
+        return sum(
+            1 for u in node_set for v in self.adj_out.get(u, ()) if v in node_set
+        )
 
     def _density(self, nodes):
         """Calculates subgraph density restricted to locally queried edges."""
@@ -225,13 +230,11 @@ class FullBranchAndPriceSolver:
         preds, succs = self.oracle.query(f)
 
         for u in preds:
-            self.E_known.add((u, f))
-            self.pending_edges.add((u, f))
+            self._add_edge(u, f)
             if u not in self.V_active:
                 self.F.add(u)
         for w in succs:
-            self.E_known.add((f, w))
-            self.pending_edges.add((f, w))
+            self._add_edge(f, w)
             if w not in self.V_active:
                 self.F.add(w)
 
@@ -241,56 +244,60 @@ class FullBranchAndPriceSolver:
     def _sync_rmp_structure(self, lambda_val):
         """
         Executes a Delta-Sync, incrementally appending newly discovered nodes, edges,
-        and McCormick envelopes to the Gurobi backend.
+        and McCormick envelopes to the Gurobi backend using batch API calls.
         """
         structural_changes = False
         new_nodes = self.V_active - self.synced_nodes
 
-        # 1. Delta-Sync Nodes (x variables)
-        for v in new_nodes:
-            var = self.rmp.addVar(lb=0.0, ub=1.0, name=f"x_{v}")
-            self.x_vars[v] = var
-            self.rmp.chgCoeff(self.size_constr, var, 1.0)
+        # 1. Delta-Sync Nodes (x variables) via batch API
+        if new_nodes:
+            new_x = self.rmp.addVars(list(new_nodes), lb=0.0, ub=1.0, name="x")
+            self.x_vars.update(new_x)
+            for var in new_x.values():
+                self.rmp.chgCoeff(self.size_constr, var, 1.0)
             structural_changes = True
 
-        # 2. Delta-Sync Edges (y variables)
+        # 2. Delta-Sync Edges (y variables) via batch API
         processed_edges = set()
+        new_y_pairs = []
         for u, v in self.pending_edges:
             if u in self.x_vars and v in self.x_vars:
                 if (u, v) not in self.y_vars:
-                    yvar = self.rmp.addVar(lb=0.0, ub=1.0, name=f"y_{u}_{v}")
-                    self.rmp.addConstr(yvar <= self.x_vars[u])
-                    self.rmp.addConstr(yvar <= self.x_vars[v])
-                    self.y_vars[(u, v)] = yvar
-                    self._y_obj_terms.append(yvar)
-                    structural_changes = True
+                    new_y_pairs.append((u, v))
                 processed_edges.add((u, v))
+
+        if new_y_pairs:
+            new_y = self.rmp.addVars(new_y_pairs, lb=0.0, ub=1.0, name="y")
+            self.y_vars.update(new_y)
+            for (u, v), yvar in new_y.items():
+                self.rmp.addConstr(yvar <= self.x_vars[u])
+                self.rmp.addConstr(yvar <= self.x_vars[v])
+                self._y_obj_terms.append(yvar)
+            structural_changes = True
 
         self.pending_edges -= processed_edges
 
-        # 3. Delta-Sync McCormick Envelopes (w variables)
+        # 3. Delta-Sync McCormick Envelopes (w variables) via batch API
         if new_nodes:
+            new_w_pairs = []
+
             for u in new_nodes:
                 for v in self.synced_nodes:
                     u_key, v_key = (u, v) if u < v else (v, u)
                     if (u_key, v_key) not in self.w_vars:
-                        wvar = self.rmp.addVar(
-                            lb=0.0, ub=1.0, name=f"w_{u_key}_{v_key}"
-                        )
-                        self.rmp.addConstr(
-                            wvar >= self.x_vars[u_key] + self.x_vars[v_key] - 1
-                        )
-                        self.w_vars[(u_key, v_key)] = wvar
-                        self._w_obj_terms.append(wvar)
-                        structural_changes = True
+                        new_w_pairs.append((u_key, v_key))
 
             for u, v in combinations(sorted(new_nodes), 2):
                 if (u, v) not in self.w_vars:
-                    wvar = self.rmp.addVar(lb=0.0, ub=1.0, name=f"w_{u}_{v}")
+                    new_w_pairs.append((u, v))
+
+            if new_w_pairs:
+                new_w = self.rmp.addVars(new_w_pairs, lb=0.0, ub=1.0, name="w")
+                self.w_vars.update(new_w)
+                for (u, v), wvar in new_w.items():
                     self.rmp.addConstr(wvar >= self.x_vars[u] + self.x_vars[v] - 1)
-                    self.w_vars[(u, v)] = wvar
                     self._w_obj_terms.append(wvar)
-                    structural_changes = True
+                structural_changes = True
 
             self.synced_nodes.update(new_nodes)
 
@@ -310,17 +317,23 @@ class FullBranchAndPriceSolver:
             self.last_lambda = lambda_val
 
     def _apply_node_bounds(self, v1, v0):
-        """O(|V|) bound mutation for zero-allocation B&B tree traversal."""
-        for v, var in self.x_vars.items():
-            if v in v1:
-                var.LB = 1.0
-                var.UB = 1.0
-            elif v in v0:
-                var.LB = 0.0
-                var.UB = 0.0
-            else:
-                var.LB = 0.0
-                var.UB = 1.0
+        """O(|v1 u v0|) bound mutation for ultra-fast B&B tree traversal."""
+        for v in self._bound_fixed:
+            if v in self.x_vars:
+                self.x_vars[v].LB = 0.0
+                self.x_vars[v].UB = 1.0
+
+        for v in v1:
+            if v in self.x_vars:
+                self.x_vars[v].LB = 1.0
+                self.x_vars[v].UB = 1.0
+
+        for v in v0:
+            if v in self.x_vars:
+                self.x_vars[v].LB = 0.0
+                self.x_vars[v].UB = 0.0
+
+        self._bound_fixed = v1 | v0
 
     # ------------------------------------------
     # Column Generation (Pricing)
@@ -328,32 +341,28 @@ class FullBranchAndPriceSolver:
     def _price_frontier(self, x_bar, pi, v0, lambda_val):
         """
         Evaluates the continuous reduced cost of all unexplored frontier nodes.
-        Implements Dynamic Batch Pricing to mitigate frontier cascades.
+        O(deg) adjacency traversal with heap-optimized candidate selection.
         """
         sum_x_bar = sum(x_bar.values())
         omega = -2 * lambda_val * sum_x_bar - pi
 
         eligible_frontier = {f for f in self.F if f not in v0}
-        frac_degrees = {f: 0.0 for f in eligible_frontier}
-
-        for u, v in self.E_known:
-            if u in frac_degrees and v in self.V_active:
-                frac_degrees[u] += x_bar.get(v, 0.0)
-            if v in frac_degrees and u in self.V_active:
-                frac_degrees[v] += x_bar.get(u, 0.0)
-
         candidates = []
-        for f, frac_deg in frac_degrees.items():
+
+        for f in eligible_frontier:
+            frac_deg = sum(
+                x_bar.get(v, 0.0) for v in self.adj_out.get(f, ()) if v in self.V_active
+            ) + sum(
+                x_bar.get(u, 0.0) for u in self.adj_in.get(f, ()) if u in self.V_active
+            )
             rc = frac_deg + omega
             if rc > self.tol:
                 candidates.append((rc, f))
 
-        candidates.sort(reverse=True, key=lambda x: x[0])
-
         dynamic_limit = int(len(self.V_active) * self.cg_batch_fraction)
         batch_size = max(self.cg_min_batch, min(dynamic_limit, self.cg_max_batch))
 
-        return [f for rc, f in candidates[:batch_size]]
+        return [f for rc, f in heapq.nlargest(batch_size, candidates)]
 
     def _column_generation(self, v1, v0, lambda_val, t_start):
         """
@@ -363,6 +372,10 @@ class FullBranchAndPriceSolver:
         local_x_bar = None
         local_lp_obj = float("-inf")
 
+        # Hoisted feasibility check: v0 is static during CG, active set only grows
+        if sum(1 for v in self.V_active if v not in v0) < self.k:
+            return None, float("-inf")
+
         while True:
             if time.time() - t_start > self.bb_time_limit:
                 logger.warning("    [!] Column Generation loop hit global time limit.")
@@ -370,10 +383,6 @@ class FullBranchAndPriceSolver:
 
             self._sync_rmp_structure(lambda_val)
             self._apply_node_bounds(v1, v0)
-
-            eligible_count = sum(1 for v in self.V_active if v not in v0)
-            if eligible_count < self.k:
-                return None, float("-inf")
 
             self.rmp.optimize()
 
@@ -528,7 +537,7 @@ if __name__ == "__main__":
     t_start = time.time()
 
     G_dag, q_node, true_community = generate_fast_scale_free_dag(
-        n_total=100_000, m_edges=5, n_community=20, p_community=0.8
+        n_total=1_000_000, m_edges=10, n_community=20, p_community=0.8
     )
     oracle = DAGOracle(G_dag)
     t_gen = time.time()
@@ -541,10 +550,10 @@ if __name__ == "__main__":
     solver = FullBranchAndPriceSolver(
         oracle,
         q=q_node,
-        k=20,
+        k=10,
         gurobi_env=global_env,
-        bb_node_limit=100_000,
-        bb_time_limit=300.0,
+        bb_node_limit=1_000_000,
+        bb_time_limit=900.0,
         bb_gap_tol=1e-4,
     )
     t_init = time.time()
