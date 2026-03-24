@@ -5,53 +5,51 @@ import random
 import logging
 import time
 from itertools import combinations
+from collections import deque
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
-logging.getLogger("gurobipy").setLevel(logging.ERROR)
-
-# --- FLUSH GUROBI STARTUP LOGS ---
-_ghost = gp.Model("ghost")
-_ghost.setParam("OutputFlag", 0)
 
 
 # ==========================================
 # 1. GRAPH FACTORY & ORACLE
 # ==========================================
 def generate_fast_scale_free_dag(
-    n_total=100_000, n_community=20, p_community=0.8, m_edges=100, seed=42
+    n_total=100_000,
+    n_community=20,
+    p_community=0.8,
+    m_edges=100,
+    seed=42,
+    community_start_idx=None,
 ):
     """
-    Generates a scale-free DAG.
-    m_edges: The number of background edges (citations) each new node creates.
+    Generates a scale-free Directed Acyclic Graph (DAG) with a planted dense community.
     """
-    random.seed(seed)
+    # 1. Unify random state: Pass the instance directly to NetworkX
+    rng = random.Random(seed)
 
-    # 1. Fast Background Graph (Scale-Free)
-    # m_edges controls the out-degree of our simulated papers
-    G_bg = nx.barabasi_albert_graph(n_total, m=m_edges, seed=seed)
+    G_bg = nx.barabasi_albert_graph(n_total, m=m_edges, seed=rng)
 
     G = nx.DiGraph()
     G.add_nodes_from(range(n_total))
 
-    # 2. Enforce DAG Topology (Lower ID -> Higher ID prevents cycles)
-    directed_edges = [(u, v) if u < v else (v, u) for u, v in G_bg.edges()]
+    # Enforce DAG topology (Lower ID -> Higher ID)
+    directed_edges = [(min(u, v), max(u, v)) for u, v in G_bg.edges()]
     G.add_edges_from(directed_edges)
 
-    # 3. Plant Dense Community
-    start_idx = n_total // 2
-    community = set(range(start_idx, start_idx + n_community))
-    q_node = start_idx
+    # 2. Parameterize placement to avoid BA hub bias
+    if community_start_idx is None:
+        # Avoid the extreme hubs near 0; pick a random valid starting point
+        community_start_idx = rng.randint(n_total // 4, n_total - n_community)
 
-    # 4. Inject Edges for Density
+    # Keep as an ordered range to guarantee u < v
+    community_nodes = range(community_start_idx, community_start_idx + n_community)
+    community = set(community_nodes)
+    q_node = community_start_idx
+
+    # 3. Clean combinations (u < v is guaranteed by the range iterable)
     edges_to_add = []
-    for u, v in combinations(community, 2):
-        if u > v:
-            u, v = v, u
-
-        if random.random() < p_community:
+    for u, v in combinations(community_nodes, 2):
+        if rng.random() < p_community:
             edges_to_add.append((u, v))
 
     G.add_edges_from(edges_to_add)
@@ -60,20 +58,31 @@ def generate_fast_scale_free_dag(
 
 
 class DAGOracle:
+    """
+    Simulates a localized 1-hop query interface for massive or remote graphs.
+    """
+
     def __init__(self, G: nx.DiGraph):
         self._G = G
         self.queries_made = 0
         self.revealed_nodes = set()
+        self._cache = {}
 
     def query(self, v: int):
         if v not in self._G:
             return [], []
-        self.queries_made += 1
-        self.revealed_nodes.add(v)
-        return list(self._G.predecessors(v)), list(self._G.successors(v))
+        if v not in self._cache:
+            self.queries_made += 1
+            self.revealed_nodes.add(v)
+            self._cache[v] = (
+                list(self._G.predecessors(v)),
+                list(self._G.successors(v)),
+            )
+        return self._cache[v]
 
 
-def calculate_true_density(G_true, nodes):
+def calculate_true_density(G_true: nx.DiGraph, nodes: set):
+    """Calculates the absolute density of a node set based on the underlying graph."""
     n = len(nodes)
     if n < 2:
         return 0.0
@@ -82,349 +91,498 @@ def calculate_true_density(G_true, nodes):
 
 
 # ==========================================
-# 2. FULL BRANCH-AND-PRICE SOLVER
+# 2. EXACT FULL BRANCH-AND-PRICE SOLVER
 # ==========================================
 class FullBranchAndPriceSolver:
-    def __init__(self, oracle: DAGOracle, q: int, k: int, tol=1e-5):
+    """
+    Exact solver for the Maximum Density Subgraph problem with a size constraint.
+    Utilizes Dinkelbach's fractional programming algorithm wrapped around a
+    custom stateful Branch-and-Price (Column Generation) tree.
+    """
+
+    def __init__(
+        self,
+        oracle: DAGOracle,
+        q: int,
+        k: int,
+        gurobi_env,
+        tol=1e-6,
+        bb_node_limit=10_000,
+        bb_time_limit=300.0,
+        bb_gap_tol=1e-4,
+        dinkelbach_max_iter=50,
+        cg_batch_fraction=0.1,
+        cg_min_batch=5,
+        cg_max_batch=50,
+    ):
         self.oracle = oracle
         self.q = q
         self.k = k
+        self.env = gurobi_env
         self.tol = tol
+
+        self.bb_node_limit = bb_node_limit
+        self.bb_time_limit = bb_time_limit
+        self.bb_gap_tol = bb_gap_tol
+        self.dinkelbach_max_iter = dinkelbach_max_iter
+
+        self.cg_batch_fraction = cg_batch_fraction
+        self.cg_min_batch = cg_min_batch
+        self.cg_max_batch = cg_max_batch
 
         self.V_active = set()
         self.F = set()
         self.E_known = set()
+        self.pending_edges = set()
 
-        self._initialize_warm_start()
+        self._initialize_active_set()
+        self._init_global_model()
 
-    def _initialize_warm_start(self):
-        """BFS to get initial feasible basis and expose frontier."""
+    # ------------------------------------------
+    # Initialization & State Management
+    # ------------------------------------------
+    def _initialize_active_set(self):
+        """Executes a BFS to guarantee the initial active set strictly satisfies size k."""
         self.V_active.add(self.q)
-        queue = [self.q]
+        queue = deque([self.q])
 
         while len(self.V_active) < self.k and queue:
-            curr = queue.pop(0)
-            in_n, out_n = self.oracle.query(curr)
-            for neighbor in in_n + out_n:
-                if neighbor in in_n:
-                    self.E_known.add((neighbor, curr))
-                else:
-                    self.E_known.add((curr, neighbor))
+            curr = queue.popleft()
+            preds, succs = self.oracle.query(curr)
 
-                if neighbor not in self.V_active:
-                    self.V_active.add(neighbor)
-                    queue.append(neighbor)
+            for u in preds:
+                self.E_known.add((u, curr))
+                self.pending_edges.add((u, curr))
+            for w in succs:
+                self.E_known.add((curr, w))
+                self.pending_edges.add((curr, w))
+
+            for nb in preds + succs:
+                if nb not in self.V_active:
+                    self.V_active.add(nb)
+                    queue.append(nb)
                     if len(self.V_active) >= self.k:
                         break
 
-        # Fully map the active frontier
+        # Map internal topology of the initialized active set
         for v in list(self.V_active):
-            if v not in self.oracle.revealed_nodes:
-                in_n, out_n = self.oracle.query(v)
-                for u in in_n:
-                    self.E_known.add((u, v))
-                for w in out_n:
-                    self.E_known.add((v, w))
-            else:
-                in_n = list(self.oracle._G.predecessors(v))
-                out_n = list(self.oracle._G.successors(v))
-                for u in in_n:
-                    self.E_known.add((u, v))
-                for w in out_n:
-                    self.E_known.add((v, w))
+            preds, succs = self.oracle.query(v)
+            for u in preds:
+                self.E_known.add((u, v))
+                self.pending_edges.add((u, v))
+            for w in succs:
+                self.E_known.add((v, w))
+                self.pending_edges.add((v, w))
 
-        for u, w in self.E_known:
-            if u in self.V_active and w not in self.V_active:
-                self.F.add(w)
-            if w in self.V_active and u not in self.V_active:
+        # Compile the initial 1-hop frontier
+        for u, v in self.E_known:
+            if u in self.V_active and v not in self.V_active:
+                self.F.add(v)
+            if v in self.V_active and u not in self.V_active:
                 self.F.add(u)
 
-    def _compute_lookahead_bound(self, v1, lambda_val):
-        """Purely combinatorial DAG bound. Cannot be cheated by fractional variables."""
-        k_rem = max(0, self.k - len(v1))
-        e_fixed = sum(1 for u, v in self.E_known if u in v1 and v in v1)
+    def _init_global_model(self):
+        """
+        Instantiates the persistent Gurobi Restricted Master Problem (RMP).
+        Variables and constraints are appended monotonically to prevent C-level memory leaks.
+        """
+        self.rmp = gp.Model("Persistent_RMP", env=self.env)
+        self.rmp.setParam("OutputFlag", 0)
 
-        # Max cross edges a frontier node can provide to the fixed set
-        deltas = []
-        for f in self.F:
-            cross = sum(
-                1 for v in v1 if (f, v) in self.E_known or (v, f) in self.E_known
-            )
-            deltas.append(cross)
+        self.x_vars = {}
+        self.y_vars = {}
+        self.w_vars = {}
+        self.synced_nodes = set()
 
-        deltas.sort(reverse=True)
-        top_cross = sum(deltas[:k_rem])
+        self.size_constr = self.rmp.addConstr(gp.LinExpr() >= self.k, name="size_k")
+        self.last_lambda = -1.0
 
-        # Combinatorial upper limit: Fixed + Max Cross + Max DAG Internal (s choose 2)
-        raw_edges = e_fixed + top_cross + (k_rem * (k_rem - 1)) / 2.0
-
-        s_size = max(self.k, len(v1))
-        penalty = lambda_val * (s_size**2 - s_size)
-
-        return raw_edges - penalty
-
-    def get_density(self, nodes):
-        n = len(nodes)
+    # ------------------------------------------
+    # Subgraph Combinatorics
+    # ------------------------------------------
+    def _density(self, nodes):
+        """Exact O(|S|^2) directed density evaluation strictly restricted to known edges."""
+        node_list = list(nodes)
+        n = len(node_list)
         if n < 2:
             return 0.0
-        edges = sum(1 for u, w in self.E_known if u in nodes and w in nodes)
+
+        edges = 0
+        for i in range(n):
+            for j in range(n):
+                if i != j and (node_list[i], node_list[j]) in self.E_known:
+                    edges += 1
+
         return edges / (n * (n - 1))
 
-    def solve(self):
-        """Outer Dinkelbach Loop."""
-        lambda_val = self.get_density(self.V_active)
-        best_sol = set(self.V_active)
-        iteration = 0
+    def _parametric_obj(self, nodes, lambda_val):
+        """Evaluates the Dinkelbach exact quadratic objective: |E(S)| - lambda*(|S|^2 - |S|)."""
+        node_list = list(nodes)
+        n = len(node_list)
+
+        edges = 0
+        for i in range(n):
+            for j in range(n):
+                if i != j and (node_list[i], node_list[j]) in self.E_known:
+                    edges += 1
+
+        return edges - lambda_val * (n * n - n)
+
+    def _expand_node(self, f):
+        """Absorbs a frontier node into the active set and updates the boundary."""
+        self.V_active.add(f)
+        self.F.discard(f)
+        preds, succs = self.oracle.query(f)
+
+        for u in preds:
+            self.E_known.add((u, f))
+            self.pending_edges.add((u, f))
+            if u not in self.V_active:
+                self.F.add(u)
+        for w in succs:
+            self.E_known.add((f, w))
+            self.pending_edges.add((f, w))
+            if w not in self.V_active:
+                self.F.add(w)
+
+    # ------------------------------------------
+    # Stateful RMP Management
+    # ------------------------------------------
+    def _sync_rmp_structure(self, lambda_val):
+        """
+        Executes a Delta-Sync, appending only newly discovered nodes, edges,
+        and McCormick envelopes to the Gurobi backend.
+        """
+        structural_changes = False
+        new_nodes = self.V_active - self.synced_nodes
+
+        # 1. Delta-Sync Nodes (x variables)
+        for v in new_nodes:
+            var = self.rmp.addVar(lb=0.0, ub=1.0, name=f"x_{v}")
+            self.x_vars[v] = var
+            self.rmp.chgCoeff(self.size_constr, var, 1.0)
+            structural_changes = True
+
+        # 2. Delta-Sync Edges (y variables) via O(|pending|) scan
+        processed_edges = set()
+        for u, v in self.pending_edges:
+            if u in self.x_vars and v in self.x_vars:
+                if (u, v) not in self.y_vars:
+                    yvar = self.rmp.addVar(lb=0.0, ub=1.0, name=f"y_{u}_{v}")
+                    self.rmp.addConstr(yvar <= self.x_vars[u])
+                    self.rmp.addConstr(yvar <= self.x_vars[v])
+                    self.y_vars[(u, v)] = yvar
+                    structural_changes = True
+                processed_edges.add((u, v))
+
+        self.pending_edges -= processed_edges
+
+        # 3. Delta-Sync McCormick Envelopes (w variables)
+        if new_nodes:
+            for u in new_nodes:
+                for v in self.V_active:
+                    if u == v:
+                        continue
+
+                    # Ensure alphabetical/ordinal keying to prevent envelope duplication
+                    u_key, v_key = (u, v) if u < v else (v, u)
+                    if (u_key, v_key) not in self.w_vars:
+                        wvar = self.rmp.addVar(
+                            lb=0.0, ub=1.0, name=f"w_{u_key}_{v_key}"
+                        )
+                        self.rmp.addConstr(
+                            wvar >= self.x_vars[u_key] + self.x_vars[v_key] - 1
+                        )
+                        self.w_vars[(u_key, v_key)] = wvar
+                        structural_changes = True
+
+            self.synced_nodes.update(new_nodes)
+
+        # 4. Objective Realignment
+        if structural_changes or lambda_val != self.last_lambda:
+            self.rmp.update()
+
+            obj_expr = gp.LinExpr()
+            if self.y_vars:
+                obj_expr.addTerms([1.0] * len(self.y_vars), list(self.y_vars.values()))
+            if self.w_vars:
+                obj_expr.addTerms(
+                    [-2.0 * lambda_val] * len(self.w_vars), list(self.w_vars.values())
+                )
+
+            self.rmp.setObjective(obj_expr, GRB.MAXIMIZE)
+            self.last_lambda = lambda_val
+
+    def _apply_node_bounds(self, v1, v0):
+        """O(|V|) bound mutation for zero-allocation B&B tree traversal."""
+        for v, var in self.x_vars.items():
+            if v in v1:
+                var.LB = 1.0
+                var.UB = 1.0
+            elif v in v0:
+                var.LB = 0.0
+                var.UB = 0.0
+            else:
+                var.LB = 0.0
+                var.UB = 1.0
+
+    # ------------------------------------------
+    # Column Generation (Pricing)
+    # ------------------------------------------
+    def _price_frontier(self, x_bar, pi, v0, lambda_val):
+        """
+        Evaluates the continuous reduced cost of all unexplored frontier nodes.
+        Implements Dynamic Batch Pricing to mitigate frontier cascades.
+        """
+        sum_x_bar = sum(x_bar.values())
+        omega = -2 * lambda_val * sum_x_bar - pi
+        candidates = []
+
+        for f in self.F:
+            if f in v0:
+                continue
+
+            frac_deg = sum(
+                x_bar.get(v, 0.0)
+                for v in self.V_active
+                if (f, v) in self.E_known or (v, f) in self.E_known
+            )
+
+            rc = frac_deg + omega
+            if rc > self.tol:
+                candidates.append((rc, f))
+
+        candidates.sort(reverse=True, key=lambda x: x[0])
+
+        dynamic_limit = int(len(self.V_active) * self.cg_batch_fraction)
+        batch_size = max(self.cg_min_batch, min(dynamic_limit, self.cg_max_batch))
+
+        return [f for rc, f in candidates[:batch_size]]
+
+    def _column_generation(self, v1, v0, lambda_val, t_start):
+        """
+        Solves the continuous RMP to optimality via delayed column generation.
+        Maintains scope-safe cache returns to gracefully handle time-limit interrupts.
+        """
+        local_x_bar = None
+        local_lp_obj = float("-inf")
 
         while True:
-            iteration += 1
-            logger.info(
-                f"\n=== DINKELBACH ITERATION {iteration} | Lambda = {lambda_val:.6f} ==="
-            )
+            if time.time() - t_start > self.bb_time_limit:
+                logger.warning("    [!] Column Generation loop hit global time limit.")
+                return local_x_bar, local_lp_obj
 
-            # Inner Loop: Exact Branch-and-Price
-            current_sol, param_obj = self._branch_and_price_tree(lambda_val)
+            self._sync_rmp_structure(lambda_val)
+            self._apply_node_bounds(v1, v0)
 
-            if not current_sol:
-                logger.info(
-                    ">>> CONVERGED: Subproblem yielded no strictly positive improvement."
-                )
-                break
+            eligible_count = len([v for v in self.V_active if v not in v0])
+            if eligible_count < self.k:
+                return None, float("-inf")
 
-            current_density = self.get_density(current_sol)
-            logger.info(
-                f"  [B&P] Tree Finished. Found Exact Integer Density: {current_density:.6f} | Size: {len(current_sol)}"
-            )
+            self.rmp.optimize()
 
-            if current_density <= lambda_val + self.tol:
-                logger.info(
-                    ">>> CONVERGED: No denser integer solution found globally. <<<"
-                )
-                break
+            if self.rmp.Status not in [GRB.OPTIMAL, GRB.SUBOPTIMAL, GRB.TIME_LIMIT]:
+                return None, float("-inf")
 
-            lambda_val = current_density
-            best_sol = current_sol
+            local_x_bar = {v: var.X for v, var in self.x_vars.items()}
+            pi = self.size_constr.Pi
+            local_lp_obj = self.rmp.ObjVal
 
-        return best_sol, lambda_val
+            top_f = self._price_frontier(local_x_bar, pi, v0, lambda_val)
 
-    def _branch_and_price_tree(self, lambda_val):
-        """Custom DFS Branch-and-Bound tree executing CG at every node."""
+            if top_f:
+                for f in top_f:
+                    self._expand_node(f)
+            else:
+                return local_x_bar, local_lp_obj
+
+    # ------------------------------------------
+    # Branch-and-Bound
+    # ------------------------------------------
+    def _branch_and_price(self, lambda_val):
+        """
+        Custom Depth-First Search executing Column Generation at every node.
+        Includes dynamic upper bounding to safely prune shared column pools.
+        """
         stack = [{"v1": {self.q}, "v0": set()}]
-        best_obj_global = 0.0  # Dinkelbach requires strictly positive improvement
-        best_sol_global = set()
+        best_int_obj = 0.0
+        best_int_sol = None
 
-        nodes_processed = 0
+        heuristic_global_ub = float("-inf")
+        nodes_explored = 0
+        t_start = time.time()
 
         while stack:
+            if nodes_explored >= self.bb_node_limit:
+                logger.info(f"    B&B node limit reached ({self.bb_node_limit})")
+                break
+
+            if time.time() - t_start > self.bb_time_limit:
+                logger.info(f"    B&B time limit reached ({self.bb_time_limit}s)")
+                break
+
+            if best_int_obj > self.tol and heuristic_global_ub > float("-inf"):
+                global_gap = (heuristic_global_ub - best_int_obj) / max(
+                    abs(best_int_obj), self.tol
+                )
+                if global_gap <= self.bb_gap_tol:
+                    logger.info(
+                        f"    B&B global gap tolerance reached (gap={global_gap:.6f})"
+                    )
+                    break
+
             node = stack.pop()
-            nodes_processed += 1
+            nodes_explored += 1
 
-            u_local = self._compute_lookahead_bound(node["v1"], lambda_val)
-            if u_local <= best_obj_global + self.tol:
+            x_bar, lp_obj = self._column_generation(
+                node["v1"], node["v0"], lambda_val, t_start
+            )
+
+            if x_bar is None or lp_obj <= best_int_obj + self.tol:
                 continue
 
-            # 1. Column Generation at current branch
-            x_bar, lp_obj = self._cg_loop(node["v1"], node["v0"], lambda_val)
+            if lp_obj > heuristic_global_ub:
+                heuristic_global_ub = lp_obj
 
-            # 2. Prune by LP Bound
-            if lp_obj <= best_obj_global + self.tol:
-                continue
+            if best_int_obj > self.tol:
+                local_gap = (lp_obj - best_int_obj) / max(abs(best_int_obj), self.tol)
+                if local_gap <= self.bb_gap_tol:
+                    continue
 
-            # 3. Integrality Check
-            fractional_vars = {
+            fractional = {
                 v: val for v, val in x_bar.items() if self.tol < val < 1.0 - self.tol
             }
 
-            if not fractional_vars:
-                # Exact integer found
-                s_nodes = [v for v, val in x_bar.items() if val > 0.5]
-                if len(s_nodes) >= self.k:
-                    # Calculate true parametric objective to avoid rounding drift
-                    edges = sum(
-                        1 for u, w in self.E_known if u in s_nodes and w in s_nodes
-                    )
-                    n_s = len(s_nodes)
-                    true_obj = edges - lambda_val * (n_s**2 - n_s)
-
-                    if true_obj > best_obj_global:
-                        best_obj_global = true_obj
-                        best_sol_global = set(s_nodes)
+            if not fractional:
+                sol_nodes = {v for v, val in x_bar.items() if val > 0.5}
+                if len(sol_nodes) >= self.k:
+                    obj = self._parametric_obj(sol_nodes, lambda_val)
+                    if obj > best_int_obj:
+                        best_int_obj = obj
+                        best_int_sol = sol_nodes
                         logger.info(
-                            f"    [*] B&B Node {nodes_processed}: New Integer Incumbent | Parametric Obj: {true_obj:.4f}"
+                            f"    B&B node {nodes_explored}: new incumbent "
+                            f"obj={obj:.4f}, size={len(sol_nodes)}"
                         )
                 continue
 
-            # 4. Branching: Select the most fractional variable (closest to 0.5)
-            branch_var = min(
-                fractional_vars, key=lambda v: abs(fractional_vars[v] - 0.5)
-            )
+            branch_var = min(fractional, key=lambda v: abs(fractional[v] - 0.5))
 
-            # Left Child (Exclude)
             child_0 = {"v1": node["v1"].copy(), "v0": node["v0"].copy()}
             child_0["v0"].add(branch_var)
             stack.append(child_0)
 
-            # Right Child (Include) - Explored first in DFS to find good lower bounds
             child_1 = {"v1": node["v1"].copy(), "v0": node["v0"].copy()}
             child_1["v1"].add(branch_var)
             stack.append(child_1)
 
-        return best_sol_global, best_obj_global
+        logger.info(f"    B&B finished: {nodes_explored} nodes explored")
+        return best_int_sol, best_int_obj
 
-    def _cg_loop(self, v1, v0, lambda_val):
-        """Solves the continuous RMP to optimality, generating columns as needed."""
-        while True:
-            # Solve Restricted Master Problem
-            model = gp.Model("RMP")
-            model.setParam("OutputFlag", 0)
+    # ------------------------------------------
+    # Main Outer Loop
+    # ------------------------------------------
+    def solve(self):
+        """Outer Dinkelbach sequence seeking the root of the parametric objective."""
+        best_sol = set(self.V_active)
+        lambda_val = self._density(best_sol)
+        logger.info(f"Initial density: {lambda_val:.6f} (size {len(best_sol)})")
 
-            x = {}
-            for v in self.V_active:
-                if v in v0:
-                    continue  # Hard exclusion from LP
-                lb = 1.0 if v in v1 else 0.0
-                x[v] = model.addVar(lb=lb, ub=1.0, name=f"x_{v}")
+        for t in range(1, self.dinkelbach_max_iter + 1):
+            logger.info(f"=== DINKELBACH ITERATION {t} | lambda = {lambda_val:.6f} ===")
 
-            if not x:
-                return {}, -float("inf")
+            sol, param_obj = self._branch_and_price(lambda_val)
 
-            obj_expr = gp.LinExpr()
+            if sol is None or param_obj <= self.tol:
+                logger.info(">>> CONVERGED: Z(lambda) <= 0, no improvement found. <<<")
+                break
 
-            for u, w in self.E_known:
-                if u in x and w in x:
-                    y = model.addVar(lb=0, ub=1)
-                    model.addConstr(y <= x[u])
-                    model.addConstr(y <= x[w])
-                    obj_expr += y
+            new_density = self._density(sol)
+            logger.info(f"  Found solution: density={new_density:.6f}, size={len(sol)}")
 
-            for u, w in combinations(x.keys(), 2):
-                w_var = model.addVar(lb=0, ub=1)
-                model.addConstr(w_var >= x[u] + x[w] - 1)
-                obj_expr -= 2 * lambda_val * w_var
+            if new_density <= lambda_val + self.tol:
+                logger.info(">>> CONVERGED: density did not increase. <<<")
+                break
 
-            sum_x = gp.quicksum(x.values())
+            lambda_val = new_density
+            best_sol = sol
 
-            # Phase-I Slack to prevent premature infeasibility during branching
-            slack = model.addVar(lb=0, ub=self.k)
-            size_constr = model.addConstr(sum_x + slack >= self.k)
-
-            BIG_M = 1e6
-            obj_expr -= BIG_M * slack
-
-            model.setObjective(obj_expr, GRB.MAXIMIZE)
-            model.optimize()
-
-            if model.Status == GRB.INFEASIBLE:
-                return {}, -float("inf")
-
-            lp_obj = model.ObjVal
-            true_lp_obj = lp_obj + BIG_M * slack.X
-
-            x_bar = {v: x[v].X for v in x}
-            pi = size_constr.Pi
-
-            # Pricing Oracle
-            sum_x_bar = sum(x_bar.values())
-            omega = -(2 * lambda_val * sum_x_bar) - pi
-
-            max_rc = self.tol
-            best_f = None
-
-            for f in self.F:
-                if f in v0:
-                    continue  # Do not generate forbidden nodes
-
-                frac_deg = sum(
-                    x_bar[v]
-                    for v in x
-                    if (f, v) in self.E_known or (v, f) in self.E_known
-                )
-                rc = frac_deg + omega
-
-                if rc > max_rc:
-                    max_rc = rc
-                    best_f = f
-
-            if best_f:
-                self.V_active.add(best_f)
-                self.F.discard(best_f)
-
-                # Expand frontier by querying the new node
-                in_n, out_n = self.oracle.query(best_f)
-                for u in in_n:
-                    self.E_known.add((u, best_f))
-                for w in out_n:
-                    self.E_known.add((best_f, w))
-
-                for u, w in self.E_known:
-                    if u in self.V_active and w not in self.V_active:
-                        self.F.add(w)
-                    if w in self.V_active and u not in self.V_active:
-                        self.F.add(u)
-            else:
-                return x_bar, true_lp_obj
+        self.rmp.dispose()
+        return best_sol, lambda_val
 
 
 # ==========================================
 # 3. EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    print("\n" + "=" * 50)
-    print("INITIALIZING EXACT FULL BRANCH-AND-PRICE")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    logging.getLogger("gurobipy").setLevel(logging.ERROR)
+
+    global_env = gp.Env(empty=True)
+    global_env.setParam("OutputFlag", 0)
+    global_env.setParam("Method", 1)
+    global_env.start()
+
+    print("=" * 50)
+    print("K-DENSEST NEIGHBORHOOD")
     print("=" * 50)
 
     t_start = time.time()
 
-    # 1. Graph Generation
+    # 1. Graph generation
     G_dag, q_node, true_community = generate_fast_scale_free_dag(
-        n_total=100_000, m_edges=100, n_community=20, p_community=0.8
+        n_total=1_000, m_edges=10, n_community=20, p_community=0.8
     )
     oracle = DAGOracle(G_dag)
     t_gen = time.time()
+
     logger.info(
-        f"Graph Generated in {t_gen - t_start:.4f}s. Nodes: {G_dag.number_of_nodes()}, Directed Edges: {G_dag.number_of_edges()}"
+        f"Graph generated in {t_gen - t_start:.4f}s. "
+        f"Nodes: {G_dag.number_of_nodes()}, Edges: {G_dag.number_of_edges()}"
     )
 
-    # 2. Initialization & Oracle Warm Start
-    solver = FullBranchAndPriceSolver(oracle, q=q_node, k=10)
+    # 2. Solver initialization
+    solver = FullBranchAndPriceSolver(
+        oracle,
+        q=q_node,
+        k=10,
+        gurobi_env=global_env,
+        bb_node_limit=100_000,
+        bb_time_limit=300.0,
+        bb_gap_tol=1e-4,
+    )
     t_init = time.time()
-    logger.info(
-        f"Oracle and Solver Initialized (Warm Start complete) in {t_init - t_gen:.4f}s."
-    )
+    logger.info(f"Solver initialized in {t_init - t_gen:.4f}s.")
 
-    # 3. Algorithm Execution
-    best_nodes, final_internal_density = solver.solve()
+    # 3. Solve
+    best_nodes, final_density = solver.solve()
     t_solve = time.time()
-    logger.info(f"Optimization Loop completed in {t_solve - t_init:.4f}s.")
+    logger.info(f"Optimization completed in {t_solve - t_init:.4f}s.")
 
-    # 4. Metric Evaluation
-    true_community_density = calculate_true_density(G_dag, true_community)
-    algorithm_true_density = calculate_true_density(G_dag, best_nodes)
-    intersection = len(true_community.intersection(best_nodes))
+    # 4. Evaluation
+    true_density = calculate_true_density(G_dag, true_community)
+    algo_true_density = calculate_true_density(G_dag, best_nodes)
+    intersection = len(true_community & best_nodes)
     precision = intersection / len(best_nodes) if best_nodes else 0
-    t_metrics = time.time()
 
-    # 5. Final Printout
+    # 5. Results
     print("\n" + "=" * 50)
-    print("TIMING BREAKDOWN")
+    print("TIMING")
     print("=" * 50)
-    print(f"Graph Generation Time  : {t_gen - t_start:.4f}s")
-    print(f"Warm Start & Init Time : {t_init - t_gen:.4f}s")
-    print(f"B&P Optimization Time  : {t_solve - t_init:.4f}s")
-    print(f"Metrics Eval Time      : {t_metrics - t_solve:.4f}s")
-    print(f"Total Pipeline Time    : {t_metrics - t_start:.4f}s")
+    print(f"Graph generation  : {t_gen - t_start:.4f}s")
+    print(f"Solver init       : {t_init - t_gen:.4f}s")
+    print(f"Optimization      : {t_solve - t_init:.4f}s")
+    print(f"Total             : {time.time() - t_start:.4f}s")
 
     print("\n" + "=" * 50)
-    print("FINAL RESULTS")
+    print("RESULTS")
     print("=" * 50)
-    print(
-        f"True Community Density : {true_community_density:.4f} (Size: {len(true_community)})"
-    )
-    print(
-        f"Algorithm Internal Dens: {final_internal_density:.4f} (Based on revealed edges)"
-    )
-    print(
-        f"Algorithm True Density : {algorithm_true_density:.4f} (Based on ground truth)"
-    )
-    print(f"Precision wrt Planted  : {precision:.2f} ({intersection} nodes matched)")
-    print(f"Oracle Queries Made    : {oracle.queries_made} / {G_dag.number_of_nodes()}")
+    print(f"True community    : density={true_density:.4f}, size={len(true_community)}")
+    print(f"Algorithm result  : density={final_density:.4f} (internal)")
+    print(f"                    density={algo_true_density:.4f} (ground truth)")
+    print(f"Precision         : {precision:.2f} ({intersection}/{len(best_nodes)})")
+    print(f"Oracle queries    : {oracle.queries_made} / {G_dag.number_of_nodes()}")
+
+    global_env.dispose()
