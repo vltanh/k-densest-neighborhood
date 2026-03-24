@@ -32,7 +32,7 @@ def generate_fast_scale_free_dag(
     community_start_idx = rng.randint(n_total // 4, n_total - n_community)
     community_nodes = range(community_start_idx, community_start_idx + n_community)
     community = set(community_nodes)
-    q_node = community_start_idx
+    q_node = rng.choice(list(community))
 
     G.add_edges_from(
         (u, v)
@@ -84,7 +84,7 @@ class FullBranchAndPriceSolver:
     """
     Exact solver for the Maximum Density Subgraph problem with a size constraint.
     Utilizes Dinkelbach's fractional programming algorithm wrapped around a
-    custom stateful Branch-and-Price (Column Generation) tree.
+    custom stateful Branch-and-Price-and-Cut (Column Generation) tree.
     """
 
     def __init__(
@@ -336,7 +336,7 @@ class FullBranchAndPriceSolver:
         self._bound_fixed = v1 | v0
 
     # ------------------------------------------
-    # Column Generation (Pricing)
+    # Column Generation & Cutting Planes
     # ------------------------------------------
     def _price_frontier(self, x_bar, pi, v0, lambda_val):
         """
@@ -364,10 +364,64 @@ class FullBranchAndPriceSolver:
 
         return [f for rc, f in heapq.nlargest(batch_size, candidates)]
 
+    def _separate_bqp_cuts(self, x_bar):
+        """
+        Heuristic separation of size-3 BQP clique inequalities.
+        Filters for fractional nodes to avoid O(|A|^3) bottlenecks.
+        """
+        fractional_nodes = [v for v, val in x_bar.items() if 0.1 < val < 0.9]
+
+        n = len(fractional_nodes)
+        if n < 3:
+            return 0
+
+        cuts_added = 0
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                for k in range(j + 1, n):
+                    u, v, w = (
+                        fractional_nodes[i],
+                        fractional_nodes[j],
+                        fractional_nodes[k],
+                    )
+
+                    u_v = (u, v) if u < v else (v, u)
+                    v_w = (v, w) if v < w else (w, v)
+                    u_w = (u, w) if u < w else (w, u)
+
+                    w_uv = self.w_vars.get(u_v)
+                    w_vw = self.w_vars.get(v_w)
+                    w_uw = self.w_vars.get(u_w)
+
+                    if w_uv is None or w_vw is None or w_uw is None:
+                        continue
+
+                    x_sum = x_bar[u] + x_bar[v] + x_bar[w]
+                    w_sum = w_uv.X + w_vw.X + w_uw.X
+
+                    if x_sum - w_sum > 1.0 + 1e-4:
+                        self.rmp.addConstr(
+                            self.x_vars[u]
+                            + self.x_vars[v]
+                            + self.x_vars[w]
+                            - w_uv
+                            - w_vw
+                            - w_uw
+                            <= 1.0
+                        )
+                        cuts_added += 1
+
+                        # Hard limit to prevent "cut avalanches" stalling node throughput
+                        if cuts_added >= 20:
+                            return cuts_added
+
+        return cuts_added
+
     def _column_generation(self, v1, v0, lambda_val, t_start):
         """
-        Solves the continuous RMP to optimality via delayed column generation.
-        Maintains scope-safe cache returns to gracefully handle time-limit interrupts.
+        Solves the continuous RMP to optimality via delayed column generation
+        and explicitly separates BQP cuts when pricing stalls.
         """
         local_x_bar = None
         local_lp_obj = float("-inf")
@@ -393,13 +447,23 @@ class FullBranchAndPriceSolver:
             pi = self.size_constr.Pi
             local_lp_obj = self.rmp.ObjVal
 
+            # 1. Price the frontier for new columns
             top_f = self._price_frontier(local_x_bar, pi, v0, lambda_val)
-
             if top_f:
                 for f in top_f:
                     self._expand_node(f)
-            else:
-                return local_x_bar, local_lp_obj
+                continue
+
+            # 2. Structural Guard: Only separate cutting planes if the LP is
+            # stuck in a massive fractional trap exploiting the McCormick bounds.
+            n_fractional = sum(1 for v in local_x_bar.values() if 0.1 < v < 0.9)
+            if n_fractional > self.k:
+                cuts = self._separate_bqp_cuts(local_x_bar)
+                if cuts > 0:
+                    continue
+
+            # 3. Solved: No columns or valid cuts found
+            return local_x_bar, local_lp_obj
 
     # ------------------------------------------
     # Branch-and-Bound
@@ -552,8 +616,8 @@ if __name__ == "__main__":
         q=q_node,
         k=10,
         gurobi_env=global_env,
-        bb_node_limit=1_000_000,
-        bb_time_limit=900.0,
+        bb_node_limit=100_000,
+        bb_time_limit=300.0,
         bb_gap_tol=1e-4,
     )
     t_init = time.time()
