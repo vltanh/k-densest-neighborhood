@@ -14,52 +14,41 @@ logger = logging.getLogger(__name__)
 # 1. GRAPH FACTORY & ORACLE
 # ==========================================
 def generate_fast_scale_free_dag(
-    n_total=100_000,
-    n_community=20,
-    p_community=0.8,
-    m_edges=100,
-    seed=42,
-    community_start_idx=None,
+    n_total=100_000, n_community=20, p_community=0.8, m_edges=100, seed=42
 ):
     """
     Generates a scale-free Directed Acyclic Graph (DAG) with a planted dense community.
+    Uses an isolated random state to prevent global seed contamination.
     """
-    # 1. Unify random state: Pass the instance directly to NetworkX
     rng = random.Random(seed)
 
     G_bg = nx.barabasi_albert_graph(n_total, m=m_edges, seed=rng)
-
     G = nx.DiGraph()
     G.add_nodes_from(range(n_total))
 
-    # Enforce DAG topology (Lower ID -> Higher ID)
-    directed_edges = [(min(u, v), max(u, v)) for u, v in G_bg.edges()]
-    G.add_edges_from(directed_edges)
+    # Enforce DAG topology by strictly directing edges from lower to higher IDs
+    G.add_edges_from((min(u, v), max(u, v)) for u, v in G_bg.edges())
 
-    # 2. Parameterize placement to avoid BA hub bias
-    if community_start_idx is None:
-        # Avoid the extreme hubs near 0; pick a random valid starting point
-        community_start_idx = rng.randint(n_total // 4, n_total - n_community)
-
-    # Keep as an ordered range to guarantee u < v
+    # Randomize planted community placement to avoid the extreme hubs near index 0
+    community_start_idx = rng.randint(n_total // 4, n_total - n_community)
     community_nodes = range(community_start_idx, community_start_idx + n_community)
     community = set(community_nodes)
     q_node = community_start_idx
 
-    # 3. Clean combinations (u < v is guaranteed by the range iterable)
-    edges_to_add = []
-    for u, v in combinations(community_nodes, 2):
-        if rng.random() < p_community:
-            edges_to_add.append((u, v))
-
-    G.add_edges_from(edges_to_add)
+    # Plant the dense target community
+    G.add_edges_from(
+        (u, v)
+        for u, v in combinations(community_nodes, 2)
+        if rng.random() < p_community
+    )
 
     return G, q_node, community
 
 
 class DAGOracle:
     """
-    Simulates a localized 1-hop query interface for massive or remote graphs.
+    Simulates a localized 1-hop query interface for massive or remote graphs,
+    caching responses to track exact query complexity.
     """
 
     def __init__(self, G: nx.DiGraph):
@@ -145,9 +134,11 @@ class FullBranchAndPriceSolver:
         """Executes a BFS to guarantee the initial active set strictly satisfies size k."""
         self.V_active.add(self.q)
         queue = deque([self.q])
+        bfs_queried = set()
 
         while len(self.V_active) < self.k and queue:
             curr = queue.popleft()
+            bfs_queried.add(curr)
             preds, succs = self.oracle.query(curr)
 
             for u in preds:
@@ -164,15 +155,16 @@ class FullBranchAndPriceSolver:
                     if len(self.V_active) >= self.k:
                         break
 
-        # Map internal topology of the initialized active set
+        # Map internal topology of the initialized active set, avoiding redundant queries
         for v in list(self.V_active):
-            preds, succs = self.oracle.query(v)
-            for u in preds:
-                self.E_known.add((u, v))
-                self.pending_edges.add((u, v))
-            for w in succs:
-                self.E_known.add((v, w))
-                self.pending_edges.add((v, w))
+            if v not in bfs_queried:
+                preds, succs = self.oracle.query(v)
+                for u in preds:
+                    self.E_known.add((u, v))
+                    self.pending_edges.add((u, v))
+                for w in succs:
+                    self.E_known.add((v, w))
+                    self.pending_edges.add((v, w))
 
         # Compile the initial 1-hop frontier
         for u, v in self.E_known:
@@ -184,7 +176,7 @@ class FullBranchAndPriceSolver:
     def _init_global_model(self):
         """
         Instantiates the persistent Gurobi Restricted Master Problem (RMP).
-        Variables and constraints are appended monotonically to prevent C-level memory leaks.
+        Variables and constraints are appended monotonically to prevent memory leaks.
         """
         self.rmp = gp.Model("Persistent_RMP", env=self.env)
         self.rmp.setParam("OutputFlag", 0)
@@ -192,7 +184,10 @@ class FullBranchAndPriceSolver:
         self.x_vars = {}
         self.y_vars = {}
         self.w_vars = {}
+
         self.synced_nodes = set()
+        self._y_obj_terms = []
+        self._w_obj_terms = []
 
         self.size_constr = self.rmp.addConstr(gp.LinExpr() >= self.k, name="size_k")
         self.last_lambda = -1.0
@@ -200,33 +195,28 @@ class FullBranchAndPriceSolver:
     # ------------------------------------------
     # Subgraph Combinatorics
     # ------------------------------------------
-    def _density(self, nodes):
-        """Exact O(|S|^2) directed density evaluation strictly restricted to known edges."""
+    def _count_edges_in(self, nodes):
+        """Exact O(|S|^2) directed edge count via O(1) hash lookups."""
         node_list = list(nodes)
         n = len(node_list)
+        edges = 0
+        for i in range(n):
+            for j in range(n):
+                if i != j and (node_list[i], node_list[j]) in self.E_known:
+                    edges += 1
+        return edges
+
+    def _density(self, nodes):
+        """Calculates subgraph density restricted to locally queried edges."""
+        n = len(nodes)
         if n < 2:
             return 0.0
-
-        edges = 0
-        for i in range(n):
-            for j in range(n):
-                if i != j and (node_list[i], node_list[j]) in self.E_known:
-                    edges += 1
-
-        return edges / (n * (n - 1))
+        return self._count_edges_in(nodes) / (n * (n - 1))
 
     def _parametric_obj(self, nodes, lambda_val):
-        """Evaluates the Dinkelbach exact quadratic objective: |E(S)| - lambda*(|S|^2 - |S|)."""
-        node_list = list(nodes)
-        n = len(node_list)
-
-        edges = 0
-        for i in range(n):
-            for j in range(n):
-                if i != j and (node_list[i], node_list[j]) in self.E_known:
-                    edges += 1
-
-        return edges - lambda_val * (n * n - n)
+        """Evaluates the Dinkelbach exact quadratic objective."""
+        n = len(nodes)
+        return self._count_edges_in(nodes) - lambda_val * (n * n - n)
 
     def _expand_node(self, f):
         """Absorbs a frontier node into the active set and updates the boundary."""
@@ -250,7 +240,7 @@ class FullBranchAndPriceSolver:
     # ------------------------------------------
     def _sync_rmp_structure(self, lambda_val):
         """
-        Executes a Delta-Sync, appending only newly discovered nodes, edges,
+        Executes a Delta-Sync, incrementally appending newly discovered nodes, edges,
         and McCormick envelopes to the Gurobi backend.
         """
         structural_changes = False
@@ -263,7 +253,7 @@ class FullBranchAndPriceSolver:
             self.rmp.chgCoeff(self.size_constr, var, 1.0)
             structural_changes = True
 
-        # 2. Delta-Sync Edges (y variables) via O(|pending|) scan
+        # 2. Delta-Sync Edges (y variables)
         processed_edges = set()
         for u, v in self.pending_edges:
             if u in self.x_vars and v in self.x_vars:
@@ -272,6 +262,7 @@ class FullBranchAndPriceSolver:
                     self.rmp.addConstr(yvar <= self.x_vars[u])
                     self.rmp.addConstr(yvar <= self.x_vars[v])
                     self.y_vars[(u, v)] = yvar
+                    self._y_obj_terms.append(yvar)
                     structural_changes = True
                 processed_edges.add((u, v))
 
@@ -280,11 +271,7 @@ class FullBranchAndPriceSolver:
         # 3. Delta-Sync McCormick Envelopes (w variables)
         if new_nodes:
             for u in new_nodes:
-                for v in self.V_active:
-                    if u == v:
-                        continue
-
-                    # Ensure alphabetical/ordinal keying to prevent envelope duplication
+                for v in self.synced_nodes:
                     u_key, v_key = (u, v) if u < v else (v, u)
                     if (u_key, v_key) not in self.w_vars:
                         wvar = self.rmp.addVar(
@@ -294,7 +281,16 @@ class FullBranchAndPriceSolver:
                             wvar >= self.x_vars[u_key] + self.x_vars[v_key] - 1
                         )
                         self.w_vars[(u_key, v_key)] = wvar
+                        self._w_obj_terms.append(wvar)
                         structural_changes = True
+
+            for u, v in combinations(sorted(new_nodes), 2):
+                if (u, v) not in self.w_vars:
+                    wvar = self.rmp.addVar(lb=0.0, ub=1.0, name=f"w_{u}_{v}")
+                    self.rmp.addConstr(wvar >= self.x_vars[u] + self.x_vars[v] - 1)
+                    self.w_vars[(u, v)] = wvar
+                    self._w_obj_terms.append(wvar)
+                    structural_changes = True
 
             self.synced_nodes.update(new_nodes)
 
@@ -303,11 +299,11 @@ class FullBranchAndPriceSolver:
             self.rmp.update()
 
             obj_expr = gp.LinExpr()
-            if self.y_vars:
-                obj_expr.addTerms([1.0] * len(self.y_vars), list(self.y_vars.values()))
-            if self.w_vars:
+            if self._y_obj_terms:
+                obj_expr.addTerms([1.0] * len(self._y_obj_terms), self._y_obj_terms)
+            if self._w_obj_terms:
                 obj_expr.addTerms(
-                    [-2.0 * lambda_val] * len(self.w_vars), list(self.w_vars.values())
+                    [-2.0 * lambda_val] * len(self._w_obj_terms), self._w_obj_terms
                 )
 
             self.rmp.setObjective(obj_expr, GRB.MAXIMIZE)
@@ -336,18 +332,18 @@ class FullBranchAndPriceSolver:
         """
         sum_x_bar = sum(x_bar.values())
         omega = -2 * lambda_val * sum_x_bar - pi
+
+        eligible_frontier = {f for f in self.F if f not in v0}
+        frac_degrees = {f: 0.0 for f in eligible_frontier}
+
+        for u, v in self.E_known:
+            if u in frac_degrees and v in self.V_active:
+                frac_degrees[u] += x_bar.get(v, 0.0)
+            if v in frac_degrees and u in self.V_active:
+                frac_degrees[v] += x_bar.get(u, 0.0)
+
         candidates = []
-
-        for f in self.F:
-            if f in v0:
-                continue
-
-            frac_deg = sum(
-                x_bar.get(v, 0.0)
-                for v in self.V_active
-                if (f, v) in self.E_known or (v, f) in self.E_known
-            )
-
+        for f, frac_deg in frac_degrees.items():
             rc = frac_deg + omega
             if rc > self.tol:
                 candidates.append((rc, f))
@@ -375,7 +371,7 @@ class FullBranchAndPriceSolver:
             self._sync_rmp_structure(lambda_val)
             self._apply_node_bounds(v1, v0)
 
-            eligible_count = len([v for v in self.V_active if v not in v0])
+            eligible_count = sum(1 for v in self.V_active if v not in v0)
             if eligible_count < self.k:
                 return None, float("-inf")
 
@@ -522,7 +518,7 @@ if __name__ == "__main__":
 
     global_env = gp.Env(empty=True)
     global_env.setParam("OutputFlag", 0)
-    global_env.setParam("Method", 1)
+    global_env.setParam("Method", 1)  # Dual Simplex for high numerical stability
     global_env.start()
 
     print("=" * 50)
@@ -531,9 +527,8 @@ if __name__ == "__main__":
 
     t_start = time.time()
 
-    # 1. Graph generation
     G_dag, q_node, true_community = generate_fast_scale_free_dag(
-        n_total=1_000, m_edges=10, n_community=20, p_community=0.8
+        n_total=100_000, m_edges=5, n_community=20, p_community=0.8
     )
     oracle = DAGOracle(G_dag)
     t_gen = time.time()
@@ -543,11 +538,10 @@ if __name__ == "__main__":
         f"Nodes: {G_dag.number_of_nodes()}, Edges: {G_dag.number_of_edges()}"
     )
 
-    # 2. Solver initialization
     solver = FullBranchAndPriceSolver(
         oracle,
         q=q_node,
-        k=10,
+        k=20,
         gurobi_env=global_env,
         bb_node_limit=100_000,
         bb_time_limit=300.0,
@@ -556,18 +550,15 @@ if __name__ == "__main__":
     t_init = time.time()
     logger.info(f"Solver initialized in {t_init - t_gen:.4f}s.")
 
-    # 3. Solve
     best_nodes, final_density = solver.solve()
     t_solve = time.time()
     logger.info(f"Optimization completed in {t_solve - t_init:.4f}s.")
 
-    # 4. Evaluation
     true_density = calculate_true_density(G_dag, true_community)
     algo_true_density = calculate_true_density(G_dag, best_nodes)
     intersection = len(true_community & best_nodes)
     precision = intersection / len(best_nodes) if best_nodes else 0
 
-    # 5. Results
     print("\n" + "=" * 50)
     print("TIMING")
     print("=" * 50)
