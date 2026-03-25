@@ -10,6 +10,7 @@
 #include <string>
 #include <iomanip>
 #include <ctime>
+#include <filesystem>
 #include "gurobi_c++.h"
 
 using namespace std;
@@ -508,7 +509,7 @@ private:
         return cuts_added;
     }
 
-    pair<unordered_map<int, double>, double> _column_generation(const vector<int>& v1, const vector<int>& v0, double lambda_val, auto t_start) {
+    pair<unordered_map<int, double>, double> _column_generation(const vector<int>& v1, const vector<int>& v0, double lambda_val, chrono::high_resolution_clock::time_point t_start) {
         unordered_map<int, double> local_x_bar;
         double local_lp_obj = -1e9;
 
@@ -731,15 +732,20 @@ public:
 // ==========================================
 // 7. MAIN EXECUTION
 // ==========================================
+// ==========================================
+// 7. MAIN EXECUTION
+// ==========================================
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        cerr << "Usage: " << argv[0] << " <edge.csv> <q_node_string_id> <k_target>" << endl;
+    // Output file is now an optional 4th argument
+    if (argc < 4 || argc > 5) {
+        cerr << "Usage: " << argv[0] << " <edge.csv> <q_node_string_id> <k_target> [output_file.csv]" << endl;
         return 1;
     }
 
     string filename = argv[1];
     string q_node_str = argv[2];
     int k_target = stoi(argv[3]);
+    string output_filename = (argc == 5) ? argv[4] : "";
 
     try {
         GRBEnv env = GRBEnv(true);
@@ -813,10 +819,37 @@ int main(int argc, char* argv[]) {
         cout << "==================================================" << endl;
         cout << left << setw(25) << "Density" << ": " << fixed << setprecision(6) << final_density << endl;
         cout << left << setw(25) << "Size" << ": " << best_nodes.size() << endl;
-        cout << "Nodes:" << endl;
-        
-        for (int node : best_nodes) {
-            cout << oracle.mapper.get_str(node) << endl;
+
+        // Execute Optional Output Logic
+        if (!output_filename.empty()) {
+            try {
+                filesystem::path out_path(output_filename);
+                // Create parent directories if they don't exist
+                if (out_path.has_parent_path() && !filesystem::exists(out_path.parent_path())) {
+                    filesystem::create_directories(out_path.parent_path());
+                }
+                
+                ofstream outfile(output_filename);
+                if (outfile.is_open()) {
+                    outfile << "node_id\n";
+                    for (int node : best_nodes) {
+                        outfile << oracle.mapper.get_str(node) << "\n";
+                    }
+                    outfile.close();
+                    cout << "[" << get_timestamp() << "] Solution saved to " << output_filename << endl;
+                } else {
+                    cerr << "[" << get_timestamp() << "] Error: Could not write to " << output_filename << endl;
+                }
+            } catch (const filesystem::filesystem_error& e) {
+                cerr << "[" << get_timestamp() << "] Filesystem error: " << e.what() << endl;
+            }
+        } else {
+            // If no file requested, print to console
+            cout << "Nodes:" << endl;
+            for (int node : best_nodes) {
+                cout << oracle.mapper.get_str(node) << " ";
+            }
+            cout << endl;
         }
 
     } catch(const GRBException& e) {

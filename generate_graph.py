@@ -9,7 +9,7 @@ from itertools import combinations
 
 
 def calculate_true_density(G_true: nx.DiGraph, nodes: set):
-    """Calculates the exact absolute density of a node set."""
+    """Calculates the exact absolute directed density of a node set."""
     n = len(nodes)
     if n < 2:
         return 0.0
@@ -22,55 +22,56 @@ def generate_general_directed_graph(
     n_community=20,
     p_community=0.8,
     m_edges=10,
-    p_reciprocal=0.05,
+    p_reciprocal=0.001,
     seed=42,
 ):
-    print(f"Generating {n_total}-node Directed Graph with cycles...")
+    print(f"Generating {n_total}-node Directed Graph skeleton...")
     rng = random.Random(seed)
 
+    # 1. Background Skeleton
     G_bg = nx.barabasi_albert_graph(n_total, m=m_edges, seed=rng)
     G = nx.DiGraph()
     G.add_nodes_from(range(n_total))
 
-    # 1. Break the DAG constraint and introduce random directions + reciprocal cycles
-    directed_edges = []
     for u, v in G_bg.edges():
-        # Randomize primary direction
         if rng.random() < 0.5:
-            directed_edges.append((u, v))
+            G.add_edge(u, v)
         else:
-            directed_edges.append((v, u))
+            G.add_edge(v, u)
 
-        # Introduce explicit 2-cycles (A <-> B)
-        if rng.random() < p_reciprocal:
-            directed_edges.append((v, u) if directed_edges[-1] == (u, v) else (u, v))
-
-    G.add_edges_from(directed_edges)
-
-    # 2. Plant the community with internal cycles
+    # 2. Planted Community Skeleton
     valid_pool = range(n_total // 4, n_total)
     community_nodes = rng.sample(valid_pool, n_community)
     community = set(community_nodes)
-    q_node = rng.choice(community_nodes)
 
-    print(f"Planting dense community of size {n_community} around node {q_node}...")
-    community_edges = []
+    print(f"Planting skeleton for community of size {n_community}...")
     for u, v in combinations(community_nodes, 2):
-        # Independent probability for forward edge
         if rng.random() < p_community:
-            community_edges.append((u, v))
-        # Independent probability for reverse edge (creates dense cycles)
-        if rng.random() < p_community:
-            community_edges.append((v, u))
+            # Assign base direction randomly
+            if rng.random() < 0.5:
+                G.add_edge(u, v)
+            else:
+                G.add_edge(v, u)
 
-    G.add_edges_from(community_edges)
+    # 3. Global Reciprocal Pass
+    # We iterate over a static snapshot of the edges so we don't evaluate newly added cycles
+    print(f"Applying uniform {p_reciprocal*100}% reciprocal cycle pass globally...")
+    current_edges = list(G.edges())
+    reciprocal_edges = []
 
-    return G, q_node, community
+    for u, v in current_edges:
+        if rng.random() < p_reciprocal:
+            if not G.has_edge(v, u):
+                reciprocal_edges.append((v, u))
+
+    G.add_edges_from(reciprocal_edges)
+
+    return G, community
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate Densest Subgraph Test Data (With Cycles)"
+        description="Generate Densest Subgraph Test Data (Uniform Cycles)"
     )
     parser.add_argument(
         "--out_dir", type=str, required=True, help="Target directory for output files"
@@ -91,13 +92,13 @@ if __name__ == "__main__":
         "--p_community",
         type=float,
         default=0.8,
-        help="Edge probability within the planted community",
+        help="Base edge probability within the planted community",
     )
     parser.add_argument(
         "--p_reciprocal",
         type=float,
-        default=0.05,
-        help="Probability of a background edge being reciprocal (a cycle)",
+        default=0.001,
+        help="Global probability of an edge being a 2-cycle",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     metadata_file = os.path.join(args.out_dir, "metadata.json")
 
     t_start = time.time()
-    G, q_node, true_community = generate_general_directed_graph(
+    G, true_community = generate_general_directed_graph(
         n_total=args.n_nodes,
         n_community=args.n_community,
         p_community=args.p_community,
@@ -128,8 +129,6 @@ if __name__ == "__main__":
     df_comm.to_csv(community_file, index=False)
 
     print(f"Writing run metadata to {metadata_file}...")
-
-    # Construct the metadata dictionary
     metadata = {
         "nodes": args.n_nodes,
         "edges": G.number_of_edges(),
@@ -142,7 +141,6 @@ if __name__ == "__main__":
         "planted_size": len(true_community),
     }
 
-    # Dump to JSON
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=4)
 
