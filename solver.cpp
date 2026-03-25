@@ -509,9 +509,12 @@ private:
         return cuts_added;
     }
 
-    pair<unordered_map<int, double>, double> _column_generation(const vector<int>& v1, const vector<int>& v0, double lambda_val, chrono::high_resolution_clock::time_point t_start) {
+    pair<unordered_map<int, double>, double> _column_generation(const vector<int>& v1, const vector<int>& v0, double lambda_val, double current_incumbent, chrono::high_resolution_clock::time_point t_start) {
         unordered_map<int, double> local_x_bar;
         double local_lp_obj = -1e9;
+
+        double prev_lp_bound = 1e9; 
+        int consecutive_stalls = 0;
 
         if (V_active.size() < (size_t)(k + v0.size())) {
             return {std::move(local_x_bar), -1e9};
@@ -561,10 +564,35 @@ private:
                 continue;
             }
 
+            // Check if our cuts/columns from the last pass actually improved the bound
+            if (prev_lp_bound < 1e8) {
+                // We are maximizing, so improvement means the upper bound dropped
+                double bound_improvement = prev_lp_bound - local_lp_obj;
+                if (bound_improvement < 1e-3) {
+                    consecutive_stalls++;
+                } else {
+                    consecutive_stalls = 0;
+                }
+            }
+            prev_lp_bound = local_lp_obj;
+
+            // Count highly fractional variables
             int n_fractional = 0;
-            for (const auto& [v, val] : local_x_bar) if (val > 0.1 && val < 0.9) n_fractional++;
+            for (const auto& [v, val] : local_x_bar) {
+                if (val > 0.1 && val < 0.9) n_fractional++;
+            }
             
-            if (n_fractional > k) {
+            // Calculate the relative gap to the incumbent
+            double gap = 1.0;
+            if (current_incumbent > tol) {
+                gap = (local_lp_obj - current_incumbent) / current_incumbent;
+            }
+
+            // DYNAMIC CUT GATE:
+            // 1. Only cut if we have enough fractional nodes (e.g., > 3)
+            // 2. Stop cutting if we've stalled out twice in a row
+            // 3. Stop cutting if the gap is already tiny (< 1%)
+            if (n_fractional >= 3 && consecutive_stalls < 2 && gap > 0.01) {
                 auto t5 = chrono::high_resolution_clock::now();
                 int cuts = _separate_bqp_cuts(local_x_bar);
                 auto t6 = chrono::high_resolution_clock::now();
@@ -609,7 +637,7 @@ private:
             stack.pop_back();
             stats.total_bb_nodes++;
 
-            auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, t_start);
+            auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start);
 
             if (x_bar.empty() || lp_obj <= best_int_obj + tol) continue;
             if (lp_obj > heuristic_global_ub) heuristic_global_ub = lp_obj;
@@ -617,13 +645,33 @@ private:
             vector<int> fractional;
             int branch_var = -1;
             double min_diff = 1.0;
+            int max_deg = -1;
 
             for (const auto& [v, val] : x_bar) {
                 if (val > tol && val < 1.0 - tol) {
                     fractional.push_back(v);
                     double diff = abs(val - 0.5);
-                    if (diff < min_diff || (diff == min_diff && v < branch_var)) {
+                    
+                    // Calculate local degree
+                    int deg = 0;
+                    if (adj_out.count(v)) deg += adj_out[v].size();
+                    if (adj_in.count(v)) deg += adj_in[v].size();
+
+                    // Prioritize x=0.5. If within 0.001, tie-break by highest degree.
+                    bool better = false;
+                    if (diff < min_diff - 1e-3) {
+                        better = true;
+                    } else if (abs(diff - min_diff) <= 1e-3) {
+                        if (deg > max_deg) {
+                            better = true;
+                        } else if (deg == max_deg && v < branch_var) {
+                            better = true; // Final fallback: lowest ID
+                        }
+                    }
+
+                    if (better) {
                         min_diff = diff;
+                        max_deg = deg;
                         branch_var = v;
                     }
                 }
@@ -648,6 +696,7 @@ private:
 
             BBNode child_0 = node;
             BBNode child_1 = std::move(node);
+            
             child_0.v0.push_back(branch_var);
             child_1.v1.push_back(branch_var);
             
