@@ -37,7 +37,6 @@ string get_timestamp() {
     return oss.str();
 }
 
-// Standard hash for std::pair of integers
 struct pair_hash {
     template <class T1, class T2>
     size_t operator () (const pair<T1, T2>& p) const {
@@ -104,31 +103,31 @@ public:
         db_adj_in[v].push_back(u);
     }
 
-    // Zero-copy const reference return for high-performance retrieval
     const pair<vector<int>, vector<int>>& query(int v_int) {
-        if (_cache.find(v_int) != _cache.end()) {
-            return _cache[v_int];
-        }
+        auto [it, inserted] = _cache.try_emplace(v_int);
+        if (!inserted) return it->second;
+
         queries_made++;
-        
         string v_str = mapper.get_str(v_int);
         
         vector<int> int_preds;
-        if (db_adj_in.find(v_str) != db_adj_in.end()) {
-            for (const string& u_str : db_adj_in[v_str]) {
+        auto in_it = db_adj_in.find(v_str);
+        if (in_it != db_adj_in.end()) {
+            for (const string& u_str : in_it->second) {
                 int_preds.push_back(mapper.get_or_create_id(u_str));
             }
         }
         
         vector<int> int_succs;
-        if (db_adj_out.find(v_str) != db_adj_out.end()) {
-            for (const string& w_str : db_adj_out[v_str]) {
+        auto out_it = db_adj_out.find(v_str);
+        if (out_it != db_adj_out.end()) {
+            for (const string& w_str : out_it->second) {
                 int_succs.push_back(mapper.get_or_create_id(w_str));
             }
         }
         
-        _cache[v_int] = {int_preds, int_succs};
-        return _cache[v_int];
+        it->second = {int_preds, int_succs};
+        return it->second;
     }
 };
 
@@ -159,11 +158,11 @@ private:
 
     unordered_set<int> V_active;
     unordered_set<int> F;
-    unordered_set<pair<int, int>, pair_hash> E_known;
     
+    // E_known eliminated. Edge uniqueness managed strictly by adj_out
     unordered_map<int, unordered_set<int>> adj_out;
     unordered_map<int, unordered_set<int>> adj_in;
-    unordered_set<pair<int, int>, pair_hash> pending_edges;
+    vector<pair<int, int>> pending_edges;
 
     GRBModel* rmp;
     unordered_map<int, GRBVar> x_vars;
@@ -179,12 +178,10 @@ private:
     double last_lambda = -1.0;
 
     void _add_edge(int u, int v) {
-        pair<int, int> edge = {u, v};
-        if (E_known.find(edge) == E_known.end()) {
-            E_known.insert(edge);
+        if (!adj_out[u].count(v)) {
             adj_out[u].insert(v);
             adj_in[v].insert(u);
-            pending_edges.insert(edge);
+            pending_edges.push_back({u, v});
         }
     }
 
@@ -256,8 +253,9 @@ private:
     int _count_edges_in(const unordered_set<int>& nodes) {
         int edges = 0;
         for (int u : nodes) {
-            if (adj_out.find(u) != adj_out.end()) {
-                for (int v : adj_out[u]) {
+            auto it = adj_out.find(u);
+            if (it != adj_out.end()) {
+                for (int v : it->second) {
                     if (nodes.find(v) != nodes.end()) {
                         edges++;
                     }
@@ -304,54 +302,46 @@ private:
         }
 
         for (int v : new_nodes) {
-            GRBVar var = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "x_" + to_string(v));
+            // Null strings prevent Gurobi from allocating internal char arrays
+            GRBVar var = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
             x_vars[v] = var;
             structural_changes = true;
         }
         
+        // Critical: Update required so size_constr can ingest new x_vars
         if (structural_changes) rmp->update(); 
 
         for (int v : new_nodes) {
             rmp->chgCoeff(size_constr, x_vars[v], 1.0);
         }
 
-        vector<pair<int, int>> edges_to_remove;
-        vector<pair<int, int>> new_y_pairs;
+        vector<pair<int, int>> remaining_pending;
         
         for (auto const& uv : pending_edges) {
             if (x_vars.find(uv.first) != x_vars.end() && x_vars.find(uv.second) != x_vars.end()) {
                 if (y_vars.find(uv) == y_vars.end()) {
-                    GRBVar yvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "y_" + to_string(uv.first) + "_" + to_string(uv.second));
+                    GRBVar yvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                    rmp->addConstr(yvar <= x_vars[uv.first]);
+                    rmp->addConstr(yvar <= x_vars[uv.second]);
                     y_vars[uv] = yvar;
                     y_obj_terms.push_back(yvar);
-                    new_y_pairs.push_back(uv);
                     structural_changes = true;
                 }
-                edges_to_remove.push_back(uv);
+            } else {
+                remaining_pending.push_back(uv);
             }
         }
-        
-        if (!new_y_pairs.empty()) {
-            rmp->update();
-            for (auto const& uv : new_y_pairs) {
-                rmp->addConstr(y_vars[uv] <= x_vars[uv.first]);
-                rmp->addConstr(y_vars[uv] <= x_vars[uv.second]);
-            }
-        }
-        
-        for (auto const& edge : edges_to_remove) pending_edges.erase(edge);
+        pending_edges = std::move(remaining_pending);
 
         if (!new_nodes.empty()) {
-            vector<pair<int, int>> new_w_pairs;
-            
             for (int u : new_nodes) {
                 for (int v : synced_nodes) {
                     pair<int, int> uv = (u < v) ? make_pair(u, v) : make_pair(v, u);
                     if (w_vars.find(uv) == w_vars.end()) {
-                        GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "w_" + to_string(uv.first) + "_" + to_string(uv.second));
+                        GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                        rmp->addConstr(wvar >= x_vars[uv.first] + x_vars[uv.second] - 1);
                         w_vars[uv] = wvar;
                         w_obj_terms.push_back(wvar);
-                        new_w_pairs.push_back(uv);
                         structural_changes = true;
                     }
                 }
@@ -363,25 +353,19 @@ private:
                     int v = max(new_nodes[i], new_nodes[j]);
                     pair<int, int> uv = {u, v};
                     if (w_vars.find(uv) == w_vars.end()) {
-                        GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "w_" + to_string(u) + "_" + to_string(v));
+                        GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                        rmp->addConstr(wvar >= x_vars[u] + x_vars[v] - 1);
                         w_vars[uv] = wvar;
                         w_obj_terms.push_back(wvar);
-                        new_w_pairs.push_back(uv);
                         structural_changes = true;
                     }
-                }
-            }
-            
-            if (!new_w_pairs.empty()) {
-                rmp->update();
-                for (auto const& uv : new_w_pairs) {
-                    rmp->addConstr(w_vars[uv] >= x_vars[uv.first] + x_vars[uv.second] - 1);
                 }
             }
             
             for (int v : new_nodes) synced_nodes.insert(v);
         }
 
+        // Final monolithic update batches the y and w additions
         if (structural_changes || lambda_val != last_lambda) {
             rmp->update();
             GRBLinExpr obj_expr = 0;
@@ -403,26 +387,29 @@ private:
 
     void _apply_node_bounds(const vector<int>& v1, const vector<int>& v0) {
         for (int v : bound_fixed) {
-            if (x_vars.find(v) != x_vars.end()) {
-                x_vars[v].set(GRB_DoubleAttr_LB, 0.0);
-                x_vars[v].set(GRB_DoubleAttr_UB, 1.0);
+            auto it = x_vars.find(v);
+            if (it != x_vars.end()) {
+                it->second.set(GRB_DoubleAttr_LB, 0.0);
+                it->second.set(GRB_DoubleAttr_UB, 1.0);
             }
         }
         
         bound_fixed.clear();
         
         for (int v : v1) {
-            if (x_vars.find(v) != x_vars.end()) {
-                x_vars[v].set(GRB_DoubleAttr_LB, 1.0);
-                x_vars[v].set(GRB_DoubleAttr_UB, 1.0);
+            auto it = x_vars.find(v);
+            if (it != x_vars.end()) {
+                it->second.set(GRB_DoubleAttr_LB, 1.0);
+                it->second.set(GRB_DoubleAttr_UB, 1.0);
                 bound_fixed.insert(v);
             }
         }
         
         for (int v : v0) {
-            if (x_vars.find(v) != x_vars.end()) {
-                x_vars[v].set(GRB_DoubleAttr_LB, 0.0);
-                x_vars[v].set(GRB_DoubleAttr_UB, 0.0);
+            auto it = x_vars.find(v);
+            if (it != x_vars.end()) {
+                it->second.set(GRB_DoubleAttr_LB, 0.0);
+                it->second.set(GRB_DoubleAttr_UB, 0.0);
                 bound_fixed.insert(v);
             }
         }
@@ -441,14 +428,20 @@ private:
             if (v0_set.find(f) != v0_set.end()) continue;
             
             double frac_deg = 0.0;
-            if (adj_out.find(f) != adj_out.end()) {
-                for (int v : adj_out[f]) {
-                    if (V_active.find(v) != V_active.end() && x_bar.find(v) != x_bar.end()) frac_deg += x_bar.at(v);
+            
+            auto out_it = adj_out.find(f);
+            if (out_it != adj_out.end()) {
+                for (int v : out_it->second) {
+                    auto x_it = x_bar.find(v);
+                    if (x_it != x_bar.end() && V_active.find(v) != V_active.end()) frac_deg += x_it->second;
                 }
             }
-            if (adj_in.find(f) != adj_in.end()) {
-                for (int u : adj_in[f]) {
-                    if (V_active.find(u) != V_active.end() && x_bar.find(u) != x_bar.end()) frac_deg += x_bar.at(u);
+            
+            auto in_it = adj_in.find(f);
+            if (in_it != adj_in.end()) {
+                for (int u : in_it->second) {
+                    auto x_it = x_bar.find(u);
+                    if (x_it != x_bar.end() && V_active.find(u) != V_active.end()) frac_deg += x_it->second;
                 }
             }
             
@@ -460,11 +453,17 @@ private:
         size_t batch_size = max((size_t)cg_min_batch, min((size_t)dynamic_limit, (size_t)cg_max_batch));
         batch_size = min(batch_size, candidates.size());
 
-        partial_sort(candidates.begin(), candidates.begin() + batch_size, candidates.end(), 
-                     [](const pair<double, int>& a, const pair<double, int>& b) { 
-                         if (abs(a.first - b.first) > 1e-6) return a.first > b.first;
-                         return a.second > b.second; 
-                     });
+        auto cmp = [](const pair<double, int>& a, const pair<double, int>& b) { 
+            if (abs(a.first - b.first) > 1e-6) return a.first > b.first;
+            return a.second > b.second; 
+        };
+
+        if (batch_size < candidates.size()) {
+            nth_element(candidates.begin(), candidates.begin() + batch_size, candidates.end(), cmp);
+            sort(candidates.begin(), candidates.begin() + batch_size, cmp);
+        } else {
+            sort(candidates.begin(), candidates.end(), cmp);
+        }
 
         vector<int> top_f;
         for (size_t i = 0; i < batch_size; i++) top_f.push_back(candidates[i].second);
@@ -477,11 +476,10 @@ private:
             if (val > 0.1 && val < 0.9) frac_nodes.push_back(v);
         }
         
-        int n = frac_nodes.size();
-        if (n < 3) return 0;
-
+        if (frac_nodes.size() < 3) return 0;
         sort(frac_nodes.begin(), frac_nodes.end());
         
+        int n = frac_nodes.size();
         int cuts_added = 0;
         
         for (int idx1 = 0; idx1 < n; idx1++) {
@@ -501,6 +499,7 @@ private:
                     if (x_sum - w_sum > 1.0 + 1e-4) {
                         rmp->addConstr(x_vars[u] + x_vars[v] + x_vars[w] - w_vars[uv] - w_vars[vw] - w_vars[uw] <= 1.0);
                         cuts_added++;
+                        // The O(1) early exit triggers fast because of the topological sort
                         if (cuts_added >= 20) return cuts_added;
                     }
                 }
@@ -513,21 +512,28 @@ private:
         unordered_map<int, double> local_x_bar;
         double local_lp_obj = -1e9;
 
-        // Hoist the hash set creation out of the while loop
+        if (V_active.size() < (size_t)(k + v0.size())) {
+            return {std::move(local_x_bar), -1e9};
+        }
+
         unordered_set<int> v0_set(v0.begin(), v0.end());
+        
         int eligible = 0;
         for (int v : V_active) if (v0_set.find(v) == v0_set.end()) eligible++;
-        
         if (eligible < k) return {std::move(local_x_bar), -1e9};
+
+        auto t0 = chrono::high_resolution_clock::now();
+        _apply_node_bounds(v1, v0);
+        auto t1 = chrono::high_resolution_clock::now();
+        stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
         while (true) {
             auto t_now = chrono::high_resolution_clock::now();
             if (chrono::duration<double>(t_now - t_start).count() > bb_time_limit) return {std::move(local_x_bar), local_lp_obj};
 
-            auto t0 = chrono::high_resolution_clock::now();
+            t0 = chrono::high_resolution_clock::now();
             _sync_rmp_structure(lambda_val);
-            _apply_node_bounds(v1, v0);
-            auto t1 = chrono::high_resolution_clock::now();
+            t1 = chrono::high_resolution_clock::now();
             stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
             rmp->optimize();
