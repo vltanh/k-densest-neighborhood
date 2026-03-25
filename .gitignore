@@ -207,7 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 # VSCode
-.vscode/
+.vscode
 
 # Data
 data
+output

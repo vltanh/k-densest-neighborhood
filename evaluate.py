@@ -1,68 +1,69 @@
+import os
 import pandas as pd
 import argparse
-import os
-
-
-def evaluate(gt_path, pred_path):
-    if not os.path.exists(gt_path):
-        print(f"Error: Ground truth file '{gt_path}' not found.")
-        return
-    if not os.path.exists(pred_path):
-        print(f"Error: Prediction file '{pred_path}' not found.")
-        return
-
-    # Read CSVs and cast to string to ensure safe matching
-    gt_df = pd.read_csv(gt_path)
-    pred_df = pd.read_csv(pred_path)
-
-    gt_set = set(gt_df["node_id"].astype(str))
-    pred_set = set(pred_df["node_id"].astype(str))
-
-    # Compute Set Intersections
-    intersection = gt_set.intersection(pred_set)
-    union = gt_set.union(pred_set)
-
-    tp = len(intersection)
-    fp = len(pred_set - gt_set)
-    fn = len(gt_set - pred_set)
-
-    # Compute Metrics safely
-    precision = tp / len(pred_set) if len(pred_set) > 0 else 0.0
-    recall = tp / len(gt_set) if len(gt_set) > 0 else 0.0
-    f1 = (
-        2 * (precision * recall) / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
-    )
-    jaccard = tp / len(union) if len(union) > 0 else 0.0
-
-    print("==================================================")
-    print("EVALUATION METRICS")
-    print("==================================================")
-    print(f"Ground Truth Size : {len(gt_set)}")
-    print(f"Prediction Size   : {len(pred_set)}")
-    print("--------------------------------------------------")
-    print(f"True Positives    : {tp}")
-    print(f"False Positives   : {fp}")
-    print(f"False Negatives   : {fn}")
-    print("--------------------------------------------------")
-    print(f"Precision         : {precision:.4f}")
-    print(f"Recall            : {recall:.4f}")
-    print(f"F1 Score          : {f1:.4f}")
-    print(f"Jaccard Similarity: {jaccard:.4f}")
-    print("==================================================")
-
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+)
+from solver_utils import evaluate_nodes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluate Densest Subgraph Predictions"
+        description="Evaluate K-Densest on a specific split."
     )
+    parser.add_argument("--dataset", type=str, default="Cora")
     parser.add_argument(
-        "--gt", type=str, required=True, help="Path to ground truth CSV (gt_comm.csv)"
+        "--split", type=str, required=True, choices=["train", "val", "test"]
     )
+    parser.add_argument("--k", type=int, required=True)
+    parser.add_argument("--bin_path", type=str, default="./bin/solver")
+    parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument(
-        "--pred", type=str, required=True, help="Path to predicted CSV (pred_comm.csv)"
+        "--weighting",
+        type=str,
+        default="uniform",
+        choices=["uniform", "distance"],
+        help="Voting weight strategy",
     )
     args = parser.parse_args()
 
-    evaluate(args.gt, args.pred)
+    edge_csv = os.path.join("data", args.dataset, "edge.csv")
+    node_csv = os.path.join("data", args.dataset, "nodes.csv")
+    tmp_dir = os.path.join("data", args.dataset, "tmp_outputs")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    df_nodes = pd.read_csv(node_csv)
+    target_nodes = df_nodes[df_nodes[args.split]]["node_id"].tolist()
+
+    print(f"--- Evaluating '{args.split}' split for {args.dataset} (k={args.k}) ---")
+
+    y_true, y_pred = evaluate_nodes(
+        target_nodes,
+        args.k,
+        edge_csv,
+        df_nodes,
+        args.bin_path,
+        tmp_dir,
+        args.workers,
+        weighting=args.weighting,
+    )
+
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+    print("\n==================================================")
+    print(f"{args.split.upper()} METRICS (k={args.k})")
+    print("==================================================")
+    print(f"Accuracy  : {acc:.4f}")
+    print(f"Precision : {prec:.4f} (Macro)")
+    print(f"Recall    : {rec:.4f} (Macro)")
+    print(f"F1 Score  : {f1:.4f} (Macro)")
+    print("--------------------------------------------------")
+    print("PER-CLASS REPORT:")
+    print(classification_report(y_true, y_pred, digits=4, zero_division=0))
+    print("==================================================")
