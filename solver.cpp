@@ -461,7 +461,10 @@ private:
         batch_size = min(batch_size, candidates.size());
 
         partial_sort(candidates.begin(), candidates.begin() + batch_size, candidates.end(), 
-                     [](const pair<double, int>& a, const pair<double, int>& b) { return a.first > b.first; });
+                     [](const pair<double, int>& a, const pair<double, int>& b) { 
+                         if (abs(a.first - b.first) > 1e-6) return a.first > b.first;
+                         return a.second > b.second; 
+                     });
 
         vector<int> top_f;
         for (size_t i = 0; i < batch_size; i++) top_f.push_back(candidates[i].second);
@@ -476,6 +479,8 @@ private:
         
         int n = frac_nodes.size();
         if (n < 3) return 0;
+
+        sort(frac_nodes.begin(), frac_nodes.end());
         
         int cuts_added = 0;
         
@@ -610,7 +615,7 @@ private:
                 if (val > tol && val < 1.0 - tol) {
                     fractional.push_back(v);
                     double diff = abs(val - 0.5);
-                    if (diff < min_diff) {
+                    if (diff < min_diff || (diff == min_diff && v < branch_var)) {
                         min_diff = diff;
                         branch_var = v;
                     }
@@ -650,7 +655,7 @@ public:
     SolverStats stats;
 
     FullBranchAndPriceSolver(DAGOracle& oracle, int q, int k, GRBEnv& env,
-                             double tol=1e-6, int bb_node_limit=100000, double bb_time_limit=300.0,
+                             double tol=1e-6, int bb_node_limit=100000, double bb_time_limit=600.0,
                              double bb_gap_tol=1e-4, int dinkelbach_max_iter=50,
                              double cg_batch_fraction=0.1, int cg_min_batch=5, int cg_max_batch=50)
         : oracle(oracle), q(q), k(k), env(env), tol(tol), bb_node_limit(bb_node_limit),
