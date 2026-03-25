@@ -29,13 +29,11 @@ def generate_fast_scale_free_dag(
 
     G.add_edges_from((min(u, v), max(u, v)) for u, v in G_bg.edges())
 
-    # Randomly sample non-contiguous nodes, strictly avoiding the massive hubs near index 0
-    valid_pool = range(n_total // 4, n_total)
-    community_nodes = rng.sample(valid_pool, n_community)
+    community_start_idx = rng.randint(n_total // 4, n_total - n_community)
+    community_nodes = range(community_start_idx, community_start_idx + n_community)
     community = set(community_nodes)
-    q_node = rng.choice(community_nodes)
+    q_node = community_start_idx
 
-    print(f"Planting dense community of size {n_community} around node {q_node}...")
     G.add_edges_from(
         (u, v)
         for u, v in combinations(community_nodes, 2)
@@ -86,7 +84,7 @@ class FullBranchAndPriceSolver:
     """
     Exact solver for the Maximum Density Subgraph problem with a size constraint.
     Utilizes Dinkelbach's fractional programming algorithm wrapped around a
-    custom stateful Branch-and-Price-and-Cut (Column Generation) tree.
+    custom stateful Branch-and-Price (Column Generation) tree.
     """
 
     def __init__(
@@ -98,8 +96,6 @@ class FullBranchAndPriceSolver:
         tol=1e-6,
         bb_node_limit=10_000,
         bb_time_limit=300.0,
-        bb_gap_tol=1e-4,
-        dinkelbach_max_iter=50,
         cg_batch_fraction=0.1,
         cg_min_batch=5,
         cg_max_batch=50,
@@ -112,8 +108,6 @@ class FullBranchAndPriceSolver:
 
         self.bb_node_limit = bb_node_limit
         self.bb_time_limit = bb_time_limit
-        self.bb_gap_tol = bb_gap_tol
-        self.dinkelbach_max_iter = dinkelbach_max_iter
 
         self.cg_batch_fraction = cg_batch_fraction
         self.cg_min_batch = cg_min_batch
@@ -338,7 +332,7 @@ class FullBranchAndPriceSolver:
         self._bound_fixed = v1 | v0
 
     # ------------------------------------------
-    # Column Generation & Cutting Planes
+    # Column Generation (Pricing)
     # ------------------------------------------
     def _price_frontier(self, x_bar, pi, v0, lambda_val):
         """
@@ -366,64 +360,10 @@ class FullBranchAndPriceSolver:
 
         return [f for rc, f in heapq.nlargest(batch_size, candidates)]
 
-    def _separate_bqp_cuts(self, x_bar):
-        """
-        Heuristic separation of size-3 BQP clique inequalities.
-        Filters for fractional nodes to avoid O(|A|^3) bottlenecks.
-        """
-        fractional_nodes = [v for v, val in x_bar.items() if 0.1 < val < 0.9]
-
-        n = len(fractional_nodes)
-        if n < 3:
-            return 0
-
-        cuts_added = 0
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                for k in range(j + 1, n):
-                    u, v, w = (
-                        fractional_nodes[i],
-                        fractional_nodes[j],
-                        fractional_nodes[k],
-                    )
-
-                    u_v = (u, v) if u < v else (v, u)
-                    v_w = (v, w) if v < w else (w, v)
-                    u_w = (u, w) if u < w else (w, u)
-
-                    w_uv = self.w_vars.get(u_v)
-                    w_vw = self.w_vars.get(v_w)
-                    w_uw = self.w_vars.get(u_w)
-
-                    if w_uv is None or w_vw is None or w_uw is None:
-                        continue
-
-                    x_sum = x_bar[u] + x_bar[v] + x_bar[w]
-                    w_sum = w_uv.X + w_vw.X + w_uw.X
-
-                    if x_sum - w_sum > 1.0 + 1e-4:
-                        self.rmp.addConstr(
-                            self.x_vars[u]
-                            + self.x_vars[v]
-                            + self.x_vars[w]
-                            - w_uv
-                            - w_vw
-                            - w_uw
-                            <= 1.0
-                        )
-                        cuts_added += 1
-
-                        # Hard limit to prevent "cut avalanches" stalling node throughput
-                        if cuts_added >= 20:
-                            return cuts_added
-
-        return cuts_added
-
     def _column_generation(self, v1, v0, lambda_val, t_start):
         """
-        Solves the continuous RMP to optimality via delayed column generation
-        and explicitly separates BQP cuts when pricing stalls.
+        Solves the continuous RMP to optimality via delayed column generation.
+        Maintains scope-safe cache returns to gracefully handle time-limit interrupts.
         """
         local_x_bar = None
         local_lp_obj = float("-inf")
@@ -449,37 +389,23 @@ class FullBranchAndPriceSolver:
             pi = self.size_constr.Pi
             local_lp_obj = self.rmp.ObjVal
 
-            # 1. Price the frontier for new columns
             top_f = self._price_frontier(local_x_bar, pi, v0, lambda_val)
+
             if top_f:
                 for f in top_f:
                     self._expand_node(f)
-                continue
-
-            # 2. Structural Guard: Only separate cutting planes if the LP is
-            # stuck in a massive fractional trap exploiting the McCormick bounds.
-            n_fractional = sum(1 for v in local_x_bar.values() if 0.1 < v < 0.9)
-            if n_fractional > self.k:
-                cuts = self._separate_bqp_cuts(local_x_bar)
-                if cuts > 0:
-                    continue
-
-            # 3. Solved: No columns or valid cuts found
-            return local_x_bar, local_lp_obj
+            else:
+                return local_x_bar, local_lp_obj
 
     # ------------------------------------------
-    # Branch-and-Bound
+    # Parametric Branch-and-Bound
     # ------------------------------------------
-    def _branch_and_price(self, lambda_val):
+    def _branch_and_price(self):
         """
-        Custom Depth-First Search executing Column Generation at every node.
-        Includes dynamic upper bounding to safely prune shared column pools.
+        Single-pass Depth-First Search with Parametric Objective Updates.
+        Dynamically lifts the global lambda prune-bar upon finding incumbents.
         """
         stack = [{"v1": {self.q}, "v0": set()}]
-        best_int_obj = 0.0
-        best_int_sol = None
-
-        heuristic_global_ub = float("-inf")
         nodes_explored = 0
         t_start = time.time()
 
@@ -492,33 +418,18 @@ class FullBranchAndPriceSolver:
                 logger.info(f"    B&B time limit reached ({self.bb_time_limit}s)")
                 break
 
-            if best_int_obj > self.tol and heuristic_global_ub > float("-inf"):
-                global_gap = (heuristic_global_ub - best_int_obj) / max(
-                    abs(best_int_obj), self.tol
-                )
-                if global_gap <= self.bb_gap_tol:
-                    logger.info(
-                        f"    B&B global gap tolerance reached (gap={global_gap:.6f})"
-                    )
-                    break
-
             node = stack.pop()
             nodes_explored += 1
 
+            # Evaluated against the strictly monotonically increasing self.best_lambda
             x_bar, lp_obj = self._column_generation(
-                node["v1"], node["v0"], lambda_val, t_start
+                node["v1"], node["v0"], self.best_lambda, t_start
             )
 
-            if x_bar is None or lp_obj <= best_int_obj + self.tol:
+            # Parametric Pruning: If it cannot achieve > 0 under current lambda,
+            # no completion in this subtree can beat the incumbent density.
+            if x_bar is None or lp_obj <= self.tol:
                 continue
-
-            if lp_obj > heuristic_global_ub:
-                heuristic_global_ub = lp_obj
-
-            if best_int_obj > self.tol:
-                local_gap = (lp_obj - best_int_obj) / max(abs(best_int_obj), self.tol)
-                if local_gap <= self.bb_gap_tol:
-                    continue
 
             fractional = {
                 v: val for v, val in x_bar.items() if self.tol < val < 1.0 - self.tol
@@ -527,16 +438,19 @@ class FullBranchAndPriceSolver:
             if not fractional:
                 sol_nodes = {v for v, val in x_bar.items() if val > 0.5}
                 if len(sol_nodes) >= self.k:
-                    obj = self._parametric_obj(sol_nodes, lambda_val)
-                    if obj > best_int_obj:
-                        best_int_obj = obj
-                        best_int_sol = sol_nodes
+                    # Integer Feasible! Evaluate true density natively
+                    current_density = self._density(sol_nodes)
+
+                    if current_density > self.best_lambda + self.tol:
+                        self.best_lambda = current_density
+                        self.best_sol = sol_nodes
                         logger.info(
-                            f"    B&B node {nodes_explored}: new incumbent "
-                            f"obj={obj:.4f}, size={len(sol_nodes)}"
+                            f"    [*] B&B Node {nodes_explored}: Parametric Update! "
+                            f"New density={self.best_lambda:.6f}, size={len(sol_nodes)}"
                         )
                 continue
 
+            # Standard maximum-uncertainty branching
             branch_var = min(fractional, key=lambda v: abs(fractional[v] - 0.5))
 
             child_0 = {"v1": node["v1"].copy(), "v0": node["v0"].copy()}
@@ -547,39 +461,28 @@ class FullBranchAndPriceSolver:
             child_1["v1"].add(branch_var)
             stack.append(child_1)
 
+        self._tree_exhausted = not bool(stack)
         logger.info(f"    B&B finished: {nodes_explored} nodes explored")
-        return best_int_sol, best_int_obj
 
     # ------------------------------------------
     # Main Outer Loop
     # ------------------------------------------
     def solve(self):
-        """Outer Dinkelbach sequence seeking the root of the parametric objective."""
-        best_sol = set(self.V_active)
-        lambda_val = self._density(best_sol)
-        logger.info(f"Initial density: {lambda_val:.6f} (size {len(best_sol)})")
+        self.best_sol = set(self.V_active)
+        self.best_lambda = self._density(self.best_sol)
+        logger.info(
+            f"=== INITIALIZING PARAMETRIC B&B | lambda = {self.best_lambda:.6f} ==="
+        )
 
-        for t in range(1, self.dinkelbach_max_iter + 1):
-            logger.info(f"=== DINKELBACH ITERATION {t} | lambda = {lambda_val:.6f} ===")
+        self._branch_and_price()
 
-            sol, param_obj = self._branch_and_price(lambda_val)
-
-            if sol is None or param_obj <= self.tol:
-                logger.info(">>> CONVERGED: Z(lambda) <= 0, no improvement found. <<<")
-                break
-
-            new_density = self._density(sol)
-            logger.info(f"  Found solution: density={new_density:.6f}, size={len(sol)}")
-
-            if new_density <= lambda_val + self.tol:
-                logger.info(">>> CONVERGED: density did not increase. <<<")
-                break
-
-            lambda_val = new_density
-            best_sol = sol
+        if self._tree_exhausted:
+            logger.info(">>> CONVERGED: tree fully explored (exact). <<<")
+        else:
+            logger.info(">>> TERMINATED: limit reached (heuristic). <<<")
 
         self.rmp.dispose()
-        return best_sol, lambda_val
+        return self.best_sol, self.best_lambda
 
 
 # ==========================================
@@ -603,7 +506,7 @@ if __name__ == "__main__":
     t_start = time.time()
 
     G_dag, q_node, true_community = generate_fast_scale_free_dag(
-        n_total=1_000_000, m_edges=10, n_community=20, p_community=0.8
+        n_total=1_000_000, m_edges=5, n_community=20, p_community=0.8
     )
     oracle = DAGOracle(G_dag)
     t_gen = time.time()
@@ -613,16 +516,13 @@ if __name__ == "__main__":
         f"Nodes: {G_dag.number_of_nodes()}, Edges: {G_dag.number_of_edges()}"
     )
 
-    q_node = 991884
-    print(f"Initial oracle query for q_node {q_node}...")
     solver = FullBranchAndPriceSolver(
         oracle,
         q=q_node,
         k=10,
         gurobi_env=global_env,
         bb_node_limit=1_000_000,
-        bb_time_limit=600.0,
-        bb_gap_tol=1e-4,
+        bb_time_limit=900.0,
     )
     t_init = time.time()
     logger.info(f"Solver initialized in {t_init - t_gen:.4f}s.")
