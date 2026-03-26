@@ -71,8 +71,9 @@ private:
         double current_incumbent,
         std::chrono::high_resolution_clock::time_point t_start_bb,
         double net_start_bb);
-    int _select_branch_var(const std::unordered_map<int, double> &x_bar);
+    std::pair<int, bool> _select_branch_var(const std::unordered_map<int, double> &x_bar, double lambda_val);
     std::pair<std::unordered_set<int>, double> _branch_and_price(double lambda_val);
+    void _prune_discrete_solution(std::unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density);
 
 public:
     SolverStats stats;

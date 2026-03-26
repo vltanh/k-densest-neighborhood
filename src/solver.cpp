@@ -7,6 +7,8 @@
 
 using namespace std;
 
+// ── Constructor & Destructor ──────────────────────────────────────────────────
+
 FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                                                    double tol, int bb_node_limit, double bb_time_limit,
                                                    double bb_gap_tol, int dinkelbach_max_iter,
@@ -25,6 +27,10 @@ FullBranchAndPriceSolver::~FullBranchAndPriceSolver()
         delete rmp;
 }
 
+// ── Graph Management ──────────────────────────────────────────────────────────
+
+// Inserts the directed edge u → v into the local adjacency lists and appends it
+// to pending_edges for deferred registration in the RMP. Self-loops are ignored.
 void FullBranchAndPriceSolver::_add_edge(int u, int v)
 {
     if (u == v)
@@ -38,6 +44,16 @@ void FullBranchAndPriceSolver::_add_edge(int u, int v)
     }
 }
 
+// Seeds V_active with an initial set of ≥ k nodes via BFS from the query node.
+//
+// Each visited node is queried from the oracle; its predecessors and successors
+// are recorded via _add_edge and added to the frontier F. Nodes whose oracle
+// call throws are blacklisted and skipped for the rest of the solver's lifetime.
+//
+// After the BFS, a second pass queries nodes that were added as neighbours but
+// never reached as BFS origins, ensuring their full adjacency lists are loaded.
+//
+// Throws std::runtime_error if the query node itself cannot be fetched.
 void FullBranchAndPriceSolver::_initialize_active_set()
 {
     queue<int> q_nodes;
@@ -80,16 +96,12 @@ void FullBranchAndPriceSolver::_initialize_active_set()
             for (int u : preds)
             {
                 if (V_active.find(u) == V_active.end() && !error_nodes.count(u))
-                {
                     q_nodes.push(u);
-                }
             }
             for (int w : succs)
             {
                 if (V_active.find(w) == V_active.end() && !error_nodes.count(w))
-                {
                     q_nodes.push(w);
-                }
             }
         }
         catch (const std::exception &e)
@@ -101,6 +113,8 @@ void FullBranchAndPriceSolver::_initialize_active_set()
         }
     }
 
+    // Second pass: query active nodes that were added as neighbours during BFS
+    // but never expanded themselves, so their own adjacency lists are complete.
     vector<int> active_copy(V_active.begin(), V_active.end());
     for (int v : active_copy)
     {
@@ -136,11 +150,14 @@ void FullBranchAndPriceSolver::_initialize_active_set()
     }
 
     if (error_nodes.count(q))
-    {
         throw std::runtime_error("Fatal: The query node itself failed to fetch!");
-    }
 }
 
+// ── Gurobi Model Initialisation ───────────────────────────────────────────────
+
+// Creates the initial (empty) restricted master problem. The only constraint
+// added upfront is Σ xᵥ ≥ k with no variables yet; node and edge variables are
+// registered lazily by _sync_rmp_structure as the active set grows.
 void FullBranchAndPriceSolver::_init_global_model()
 {
     rmp = new GRBModel(env);
@@ -150,6 +167,9 @@ void FullBranchAndPriceSolver::_init_global_model()
     size_constr = rmp->addConstr(expr >= k, "size_k");
 }
 
+// ── Density Utilities ─────────────────────────────────────────────────────────
+
+// Returns the number of directed edges with both endpoints in `nodes`.
 int FullBranchAndPriceSolver::_count_edges_in(const unordered_set<int> &nodes)
 {
     int edges = 0;
@@ -159,17 +179,15 @@ int FullBranchAndPriceSolver::_count_edges_in(const unordered_set<int> &nodes)
         if (it != adj_out.end())
         {
             for (int v : it->second)
-            {
                 if (nodes.find(v) != nodes.end())
-                {
                     edges++;
-                }
-            }
         }
     }
     return edges;
 }
 
+// Returns d(S) = |E(S)| / (|S|·(|S|−1)), the directed edge density of `nodes`.
+// Returns 0 for sets smaller than 2.
 double FullBranchAndPriceSolver::_density(const unordered_set<int> &nodes)
 {
     double n = nodes.size();
@@ -178,12 +196,95 @@ double FullBranchAndPriceSolver::_density(const unordered_set<int> &nodes)
     return (double)_count_edges_in(nodes) / (n * (n - 1));
 }
 
+// Returns the Dinkelbach parametric objective f(S, λ) = |E(S)| − λ·|S|·(|S|−1).
+// A positive value means S strictly improves on the current density estimate λ.
 double FullBranchAndPriceSolver::_parametric_obj(const unordered_set<int> &nodes, double lambda_val)
 {
     double n = nodes.size();
     return (double)_count_edges_in(nodes) - lambda_val * (n * n - n);
 }
 
+// ── Incumbent Refinement ──────────────────────────────────────────────────────
+
+// Greedily removes nodes from `sol_nodes` (stopping at exactly k) when doing so
+// strictly improves the target metric:
+//   maximize_density = true  → maximise d(S)      (used on the initial BFS seed
+//                                                   before Dinkelbach iteration 1)
+//   maximize_density = false → maximise f(S, λ)   (used after rounding a B&B
+//                                                   integer solution)
+//
+// At each step, every non-query node is tried for removal in O(1); the one that
+// yields the greatest improvement above 1e-7 is permanently removed. The loop
+// repeats until no strict improvement exists or the set reaches size k.
+void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density)
+{
+    if (sol_nodes.size() <= (size_t)k)
+        return;
+
+    bool changed = true;
+    int initial_size = sol_nodes.size();
+    double initial_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+    int nodes_removed = 0;
+
+    cout << "[" << get_timestamp() << "]     > Pruning discrete solution (Initial Size: " << initial_size
+         << " | " << (maximize_density ? "Density: " : "Param Obj: ") << fixed << setprecision(6) << initial_metric << ")" << endl;
+
+    while (changed && sol_nodes.size() > (size_t)k)
+    {
+        changed = false;
+        int worst_node = -1;
+        double best_improvement = 1e-7;
+
+        double current_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+
+        for (int u : sol_nodes)
+        {
+            if (u == q)
+                continue; // Never remove the query node
+
+            sol_nodes.erase(u);
+            double new_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+            sol_nodes.insert(u);
+
+            double improvement = new_metric - current_metric;
+            if (improvement > best_improvement)
+            {
+                best_improvement = improvement;
+                worst_node = u;
+            }
+        }
+
+        if (worst_node != -1)
+        {
+            sol_nodes.erase(worst_node);
+            changed = true;
+            nodes_removed++;
+
+            cout << "[" << get_timestamp() << "]       - Pruned node " << oracle.mapper.get_str(worst_node)
+                 << " (Improvement: +" << fixed << setprecision(6) << best_improvement
+                 << " | New Size: " << sol_nodes.size() << ")" << endl;
+        }
+    }
+
+    if (nodes_removed > 0)
+    {
+        double final_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+        cout << "[" << get_timestamp() << "]     > Pruning complete. Removed " << nodes_removed
+             << " nodes. (Final Size: " << sol_nodes.size()
+             << " | " << (maximize_density ? "Density: " : "Param Obj: ") << fixed << setprecision(6) << final_metric << ")" << endl;
+    }
+    else
+    {
+        cout << "[" << get_timestamp() << "]     > Pruning complete. No nodes removed (solution is already strictly minimal)." << endl;
+    }
+}
+
+// ── Dynamic Graph Expansion ───────────────────────────────────────────────────
+
+// Queries the oracle for frontier node f and promotes it to V_active. Newly
+// discovered neighbours are placed in F if not already active. Edges are
+// recorded via _add_edge, which appends them to pending_edges for deferred
+// RMP registration. On oracle failure, f is blacklisted and dropped from F.
 void FullBranchAndPriceSolver::_expand_node(int f)
 {
     if (error_nodes.count(f))
@@ -225,6 +326,11 @@ void FullBranchAndPriceSolver::_expand_node(int f)
     }
 }
 
+// ── RMP Structure Helpers ─────────────────────────────────────────────────────
+
+// Adds a continuous x_v ∈ [0,1] variable to the RMP for each node in V_active
+// not yet in synced_nodes, and registers it in the size constraint Σ xᵥ ≥ k.
+// Populates new_nodes with the added nodes. Returns true if any were added.
 bool FullBranchAndPriceSolver::_register_new_nodes(vector<int> &new_nodes)
 {
     for (int v : V_active)
@@ -242,6 +348,10 @@ bool FullBranchAndPriceSolver::_register_new_nodes(vector<int> &new_nodes)
     return true;
 }
 
+// Processes pending_edges: for each edge (u, v) where both endpoints already
+// have x_vars, adds y_{uv} ∈ [0,1] with y_{uv} ≤ x_u and y_{uv} ≤ x_v.
+// Edges whose endpoints are not yet in the RMP remain in pending_edges.
+// Returns true if any y_vars were added.
 bool FullBranchAndPriceSolver::_register_pending_edges()
 {
     bool changed = false;
@@ -269,12 +379,18 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
     return changed;
 }
 
+// Adds a w_{uv} ∈ [0,1] variable for every unordered pair {u, v} that involves
+// at least one node from new_nodes. w_{uv} linearises the product x_u · x_v via
+// the McCormick lower bound w_{uv} ≥ x_u + x_v − 1. Updates synced_nodes.
+// Returns true if any w_vars were added.
 bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
 {
     if (new_nodes.empty())
         return false;
 
     bool changed = false;
+
+    // Pairs between new nodes and already-synced nodes
     for (int u : new_nodes)
     {
         for (int v : synced_nodes)
@@ -290,6 +406,8 @@ bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
             }
         }
     }
+
+    // Pairs within the batch of new nodes
     for (size_t i = 0; i < new_nodes.size(); i++)
     {
         for (size_t j = i + 1; j < new_nodes.size(); j++)
@@ -307,11 +425,18 @@ bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
             }
         }
     }
+
     for (int v : new_nodes)
         synced_nodes.insert(v);
     return changed;
 }
 
+// Rebuilds and sets the Gurobi objective for the current density estimate λ:
+//   maximise  Σ y_{uv}  −  2λ · Σ w_{uv}
+//
+// The y-sum counts directed edges inside S; the w-sum approximates |S|·(|S|−1)
+// via the linearised product variables, so the objective tracks the parametric
+// problem f(S, λ) = |E(S)| − λ·|S|·(|S|−1).
 void FullBranchAndPriceSolver::_update_objective(double lambda_val)
 {
     rmp->update();
@@ -330,6 +455,9 @@ void FullBranchAndPriceSolver::_update_objective(double lambda_val)
     last_lambda = lambda_val;
 }
 
+// Synchronises the RMP structure with the current active set and lambda value.
+// Must be called before every LP solve inside column generation. The objective
+// is only rebuilt when the structure changed or lambda changed since the last call.
 void FullBranchAndPriceSolver::_sync_rmp_structure(double lambda_val)
 {
     vector<int> new_nodes;
@@ -340,6 +468,11 @@ void FullBranchAndPriceSolver::_sync_rmp_structure(double lambda_val)
         _update_objective(lambda_val);
 }
 
+// ── Branch-and-Bound Helpers ──────────────────────────────────────────────────
+
+// Applies variable bounds for the current B&B node. First resets all previously
+// fixed variables to their natural [0,1] bounds, then fixes each v ∈ v1 to 1
+// and each v ∈ v0 to 0.
 void FullBranchAndPriceSolver::_apply_node_bounds(const vector<int> &v1, const vector<int> &v0)
 {
     for (int v : bound_fixed)
@@ -379,6 +512,19 @@ void FullBranchAndPriceSolver::_apply_node_bounds(const vector<int> &v1, const v
     rmp->update();
 }
 
+// Scores all frontier nodes by reduced cost and returns the top batch for
+// column generation.
+//
+// The reduced cost of a frontier node f with respect to the current LP solution
+// x̄ and dual variable π of the size constraint is:
+//   rc(f) = frac_deg(f) + ω,   where ω = −2λ · Σ x̄_v − π
+//
+// frac_deg(f) is the fractional degree of f into the current LP solution: the
+// sum of x̄_u over all active in- and out-neighbours u of f. ω is a constant
+// shared by all frontier nodes. Only nodes with rc > tol are candidates.
+//
+// Batch size is clamped to [cg_min_batch, cg_max_batch]; the top-scoring
+// candidates are returned sorted by decreasing rc (ties broken by decreasing id).
 vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, double> &x_bar, double pi, const unordered_set<int> &v0_set, double lambda_val)
 {
     double sum_x_bar = 0.0;
@@ -449,6 +595,13 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
     return top_f;
 }
 
+// Separates violated BQP triangle inequalities from the current LP solution.
+//
+// For every triple {u, v, w} of fractional nodes (x̄ ∈ (0.1, 0.9)), checks the
+// triangle inequality:
+//   x̄_u + x̄_v + x̄_w − w̄_{uv} − w̄_{vw} − w̄_{uw} ≤ 1
+// and adds the corresponding cut to the RMP if it is violated by more than 1e-4.
+// Stops after 20 cuts. Returns the number of cuts added.
 int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double> &x_bar)
 {
     vector<int> frac_nodes;
@@ -496,6 +649,18 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
     return cuts_added;
 }
 
+// ── Column Generation ─────────────────────────────────────────────────────────
+
+// Solves the restricted master problem for one B&B node via column generation.
+//
+// Each iteration: syncs the RMP structure for the current active set, solves the
+// LP, then prices the frontier (adding frontier nodes with positive reduced cost
+// to the active set). If no improving columns are found, attempts to add BQP
+// triangle cuts. The loop exits when neither columns nor cuts can be added, or
+// when the remaining algorithmic time (wall time minus oracle network time) runs out.
+//
+// Returns the LP solution x̄ and objective value. Returns an empty map and −∞
+// if the node is infeasible or provably prunable before solving.
 pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_generation(
     const vector<int> &v1, const vector<int> &v0, double lambda_val, double current_incumbent,
     chrono::high_resolution_clock::time_point t_start_bb, double net_start_bb)
@@ -505,6 +670,7 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     double prev_lp_bound = 1e9;
     int consecutive_stalls = 0;
 
+    // Feasibility pre-check: enough active nodes remain after excluding v0
     if (V_active.size() < (size_t)(k + v0.size()))
         return {std::move(local_x_bar), -1e9};
 
@@ -523,7 +689,6 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
 
     while (true)
     {
-        // Calculate the per-iteration effective time
         auto t_now = chrono::high_resolution_clock::now();
         double wall = chrono::duration<double>(t_now - t_start_bb).count();
         double net = oracle.cumulative_network_time - net_start_bb;
@@ -537,7 +702,6 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         t1 = chrono::high_resolution_clock::now();
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
-        // Feed remaining budget to Gurobi
         double remaining_budget = max(1e-3, bb_time_limit - effective_time);
         rmp->set(GRB_DoubleParam_TimeLimit, remaining_budget);
 
@@ -569,6 +733,7 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
             continue;
         }
 
+        // Track consecutive LP bound stalls (no positive-RC columns were found)
         if (prev_lp_bound < 1e8)
         {
             double bound_improvement = prev_lp_bound - local_lp_obj;
@@ -581,15 +746,15 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
 
         int n_fractional = 0;
         for (const auto &[v, val] : local_x_bar)
-        {
             if (val > 0.1 && val < 0.9)
                 n_fractional++;
-        }
 
         double gap = 1.0;
         if (current_incumbent > tol)
             gap = (local_lp_obj - current_incumbent) / current_incumbent;
 
+        // Attempt BQP cuts only when the solution is fractional enough, the LP
+        // bound is still improving, and the gap warrants the separation effort
         if (n_fractional >= 3 && consecutive_stalls < 2 && gap > 0.01)
         {
             auto t5 = chrono::high_resolution_clock::now();
@@ -608,11 +773,35 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     }
 }
 
-int FullBranchAndPriceSolver::_select_branch_var(const unordered_map<int, double> &x_bar)
+// ── Branching ─────────────────────────────────────────────────────────────────
+
+// Selects a fractional variable to branch on using a domain-aware heuristic.
+//
+// Each fractional node v is classified based on its fractional internal degree:
+//   internal_deg(v) = Σ x̄_u   over all active in- and out-neighbours u of v
+//
+// A node is "hanging" if internal_deg(v) < 2λ, meaning it contributes less than
+// its density breakeven threshold — including it is unlikely to improve density.
+// A node is "core" if internal_deg(v) ≥ 2λ, meaning it is well-embedded in the
+// current LP solution.
+//
+// Selection priority:
+//   1. Hanging nodes exist → pick the weakest one (lowest internal_deg), tiebreak
+//      by closeness to 0.5. Branch zero-first: excluding a weak node is the more
+//      promising child.
+//   2. No hanging nodes → pick the most-fractional core node, tiebreak by highest
+//      internal_deg. Branch one-first: including a strongly-connected node is the
+//      more promising child.
+//
+// Returns {branch_var, branch_zero_first}. branch_var is -1 if the solution is
+// already integer.
+pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map<int, double> &x_bar, double lambda_val)
 {
     int branch_var = -1;
     double min_diff = 1.0;
-    int max_deg = -1;
+    double min_hanging_deg = 1e9;
+    double max_core_deg = -1.0;
+    bool found_hanging = false;
 
     for (const auto &[v, val] : x_bar)
     {
@@ -620,24 +809,73 @@ int FullBranchAndPriceSolver::_select_branch_var(const unordered_map<int, double
             continue;
 
         double diff = abs(val - 0.5);
-        int deg = 0;
-        if (adj_out.count(v)) deg += adj_out[v].size();
-        if (adj_in.count(v))  deg += adj_in[v].size();
+        double internal_deg = 0.0;
 
-        bool better = (diff < min_diff - 1e-3)
-                   || (abs(diff - min_diff) <= 1e-3 && deg > max_deg)
-                   || (abs(diff - min_diff) <= 1e-3 && deg == max_deg && v < branch_var);
+        if (adj_out.count(v))
+            for (int u : adj_out.at(v))
+                if (x_bar.count(u))
+                    internal_deg += x_bar.at(u);
 
-        if (better)
+        if (adj_in.count(v))
+            for (int u : adj_in.at(v))
+                if (x_bar.count(u))
+                    internal_deg += x_bar.at(u);
+
+        bool is_hanging = (internal_deg < 2.0 * lambda_val);
+
+        if (is_hanging)
         {
-            min_diff   = diff;
-            max_deg    = deg;
-            branch_var = v;
+            // Prioritize the weakest hanging node
+            if (!found_hanging || internal_deg < min_hanging_deg - 1e-3)
+            {
+                found_hanging = true;
+                min_hanging_deg = internal_deg;
+                min_diff = diff;
+                branch_var = v;
+            }
+            else if (abs(internal_deg - min_hanging_deg) <= 1e-3 && diff < min_diff)
+            {
+                min_diff = diff;
+                branch_var = v;
+            }
+        }
+        else if (!found_hanging)
+        {
+            // No hanging nodes found yet: prioritize the most-fractional core node
+            if (diff < min_diff - 1e-3)
+            {
+                min_diff = diff;
+                max_core_deg = internal_deg;
+                branch_var = v;
+            }
+            else if (abs(diff - min_diff) <= 1e-3 && internal_deg > max_core_deg)
+            {
+                max_core_deg = internal_deg;
+                branch_var = v;
+            }
         }
     }
-    return branch_var;
+
+    // Branch zero-first for hanging nodes (exclusion is more promising),
+    // one-first for core nodes (inclusion is more promising)
+    bool branch_zero_first = found_hanging;
+    return {branch_var, branch_zero_first};
 }
 
+// ── Branch-and-Price ──────────────────────────────────────────────────────────
+
+// Solves the parametric subproblem max f(S, λ) s.t. |S| ≥ k exactly via B&B.
+//
+// The tree is explored depth-first. At each node, column generation produces an
+// LP bound; if the bound does not exceed the incumbent, the node is pruned.
+// Branching order follows _select_branch_var: hanging nodes are explored
+// zero-first, core nodes one-first.
+//
+// The time limit (bb_time_limit) is measured as algorithmic wall time minus
+// oracle network I/O time, and resets whenever a new incumbent is found — so it
+// functions as a "time without improvement" budget rather than an absolute limit.
+//
+// Returns the best integer solution found and its parametric objective value.
 pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(double lambda_val)
 {
     vector<BBNode> stack = {{{q}, {}}};
@@ -645,7 +883,6 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
     unordered_set<int> best_int_sol;
     double heuristic_global_ub = -1e9;
 
-    // Reset the Iteration Stopwatch exactly here
     auto t_start_bb = chrono::high_resolution_clock::now();
     double net_start_bb = oracle.cumulative_network_time;
 
@@ -657,7 +894,6 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             break;
         }
 
-        // Check time limit for this specific iteration
         auto t_now = chrono::high_resolution_clock::now();
         double wall = chrono::duration<double>(t_now - t_start_bb).count();
         double net = oracle.cumulative_network_time - net_start_bb;
@@ -665,7 +901,8 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 
         if (effective_time > bb_time_limit)
         {
-            cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached (" << bb_time_limit << "s)." << endl;
+            cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached ("
+                 << bb_time_limit << "s without improvement)." << endl;
             break;
         }
 
@@ -680,7 +917,6 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         stack.pop_back();
         stats.total_bb_nodes++;
 
-        // Pass the local iteration timers down to column generation
         auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start_bb, net_start_bb);
 
         if (x_bar.empty() || lp_obj <= best_int_obj + tol)
@@ -688,14 +924,18 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         if (lp_obj > heuristic_global_ub)
             heuristic_global_ub = lp_obj;
 
-        int branch_var = _select_branch_var(x_bar);
+        auto [branch_var, branch_zero_first] = _select_branch_var(x_bar, lambda_val);
 
         if (branch_var == -1)
         {
+            // Integer solution — prune to improve the parametric objective before
+            // accepting as incumbent
             unordered_set<int> sol_nodes;
             for (const auto &[v, val] : x_bar)
                 if (val > 0.5)
                     sol_nodes.insert(v);
+
+            _prune_discrete_solution(sol_nodes, lambda_val, false);
 
             if (sol_nodes.size() >= (size_t)k)
             {
@@ -707,6 +947,11 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                     cout << "[" << get_timestamp() << "]     > Incumbent updated at Node " << stats.total_bb_nodes
                          << " | Obj: " << fixed << setprecision(4) << obj
                          << " | Size: " << sol_nodes.size() << endl;
+
+                    // Reset the stall clock so bb_time_limit measures time since
+                    // last improvement rather than total B&B time
+                    t_start_bb = chrono::high_resolution_clock::now();
+                    net_start_bb = oracle.cumulative_network_time;
                 }
             }
             continue;
@@ -714,22 +959,48 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 
         BBNode child_0 = node;
         BBNode child_1 = std::move(node);
-
         child_0.v0.push_back(branch_var);
         child_1.v1.push_back(branch_var);
 
-        stack.push_back(std::move(child_0));
-        stack.push_back(std::move(child_1));
+        if (branch_zero_first)
+        {
+            // Push the one-branch first so the zero-branch is explored next (DFS)
+            stack.push_back(std::move(child_1));
+            stack.push_back(std::move(child_0));
+        }
+        else
+        {
+            // Push the zero-branch first so the one-branch is explored next (DFS)
+            stack.push_back(std::move(child_0));
+            stack.push_back(std::move(child_1));
+        }
     }
 
     return {best_int_sol, best_int_obj};
 }
 
+// ── Dinkelbach Outer Loop ─────────────────────────────────────────────────────
+
+// Main entry point. Runs Dinkelbach's algorithm to find a maximum-density
+// subgraph with ≥ k nodes.
+//
+// Initialises λ from a pruned BFS seed, then iterates:
+//   1. Solve max f(S, λ) = |E(S)| − λ·|S|·(|S|−1) via _branch_and_price.
+//   2. If d(S) > λ, update λ = d(S) and repeat.
+//   3. Otherwise converge (parametric objective ≤ 0 means the current λ is
+//      a fixed point of Dinkelbach's update, so it equals the optimal density).
+//
+// Returns the best solution found and its density.
 pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 {
     auto t_start_global = chrono::high_resolution_clock::now();
 
     unordered_set<int> best_sol = V_active;
+
+    // Prune the BFS seed to a near-optimal starting point before the first
+    // Dinkelbach iteration, giving a tighter initial λ
+    _prune_discrete_solution(best_sol, 0.0, true);
+
     double lambda_val = _density(best_sol);
 
     cout << fixed << setprecision(6);

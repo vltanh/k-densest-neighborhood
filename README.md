@@ -94,7 +94,13 @@ The solver combines three nested algorithms:
 
 and updates λₜ₊₁ = d(Sₜ). Convergence is superlinear; the loop terminates when the parametric objective reaches zero.
 
-**Branch-and-Price (middle loop)** — solves each parametric subproblem to integer optimality. The LP relaxation is solved at each B&B node via column generation; branching follows a most-fractional, highest-degree variable selection rule. The B&B tree is explored depth-first with an early-exit gap tolerance.
+**Branch-and-Price (middle loop)** — solves each parametric subproblem to integer optimality. The LP relaxation is solved at each B&B node via column generation. The B&B tree is explored depth-first with an early-exit gap tolerance.
+
+Branching uses a domain-aware variable selection rule. Each fractional node v is classified by its *fractional internal degree* — the weighted sum of LP values of its neighbours in the current solution:
+- **Hanging node** (internal degree < 2λ): likely to reduce density if included. The weakest such node is branched *zero-first* (exclusion explored first).
+- **Core node** (internal degree ≥ 2λ): well-embedded in the current solution. The most-fractional such node is branched *one-first* (inclusion explored first).
+
+When a B&B integer solution is found, a greedy node-removal pass is applied before accepting it as incumbent: nodes are removed one at a time (never the query node) as long as removal strictly improves the parametric objective, stopping at size k. This can tighten the incumbent and prune more of the remaining tree.
 
 **Column generation (inner loop)** — instead of exposing all nodes to the LP at once, the solver maintains an *active set* and a *frontier*. At each CG iteration it solves the restricted master problem (RMP), then prices the frontier: a frontier node f enters the active set if its reduced cost
 
@@ -148,7 +154,7 @@ Required arguments:
 Optional arguments:
 
 - `--output <out.csv>`: Save resulting community node IDs to this file (`node_id` column).
-- `--time-limit <float>`: Max algorithmic time per Dinkelbach iteration in seconds, excluding network I/O (default: `600.0`).
+- `--time-limit <float>`: Algorithmic time budget in seconds, excluding network I/O (default: `600.0`). The clock resets each time a new incumbent is found, so this controls *time without improvement* rather than total B&B time.
 - `--node-limit <int>`: Max B&B nodes to explore per Dinkelbach iteration (default: `100000`).
 - `--max-in-edges <int>`: Max incoming edges to fetch per node (default: `1500`). Applies to both `sim` and `openalex` modes.
 - `--gap-tol <float>`: Early-stopping relative gap tolerance for B&B (default: `1e-4`).
