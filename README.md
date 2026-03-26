@@ -63,7 +63,7 @@ Optional arguments:
 ### Generate a Graph
 
 ```bash
-python generate_graph.py --out_dir <output_dir> [options]
+python scripts/generate_graph.py --out_dir <output_dir> [options]
 ```
 
 - `--out_dir`: Directory to write output files (`edge.csv`, `gt_comm.csv`, `metadata.json`).
@@ -82,7 +82,7 @@ Output files:
 ### Evaluate Solver Against Ground Truth
 
 ```bash
-python evaluate_solver.py --gt <gt_comm.csv> --pred <pred_comm.csv>
+python scripts/evaluate_solver.py --gt <gt_comm.csv> --pred <pred_comm.csv>
 ```
 
 - `--gt`: Path to the ground truth community CSV (`gt_comm.csv`).
@@ -94,14 +94,14 @@ Reports precision, recall, F1, and Jaccard similarity.
 
 ## Node Classification (CitationFull Datasets)
 
-Uses the K-Densest community around each query node as its neighborhood for label propagation (majority vote). The shared solver execution and voting logic lives in `solver_utils.py`.
+Uses the K-Densest community around each query node as its neighborhood for label propagation (majority vote). The shared solver execution and voting logic lives in `kdcs/solver_utils.py`.
 
 ### 1. Prepare Data
 
 Downloads a CitationFull dataset and exports edge and node split files to `data/<dataset>/`. The split is **temporal/inductive**: nodes that have been cited ("foundational" papers) form the training set, while purely-citing ("new") papers are evenly divided into validation and test sets.
 
 ```bash
-python prepare_data.py --dataset <dataset_name>
+python scripts/prepare_data.py --dataset <dataset_name>
 ```
 
 - `--dataset`: One of `Cora`, `Cora_ML`, `CiteSeer`, `DBLP`, or `PubMed` (default: `Cora_ML`).
@@ -115,7 +115,7 @@ Output files written to `data/<dataset>/`:
 Sweeps `k` over the validation split to find the best community size.
 
 ```bash
-python tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step <step_k> --optimize <metric> --weighting <weight_strategy>
+python scripts/tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step <step_k> --optimize <metric> --weighting <weight_strategy>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).
@@ -132,7 +132,7 @@ python tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step
 Evaluates classification on a specific dataset split.
 
 ```bash
-python evaluate.py --dataset <dataset_name> --split <split_name> --k <best_k> --weighting <weight_strategy>
+python scripts/evaluate.py --dataset <dataset_name> --split <split_name> --k <best_k> --weighting <weight_strategy>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).
@@ -149,7 +149,7 @@ Reports accuracy, macro precision, recall, F1, and a per-class classification re
 Classifies each node by majority voting over the nearest training-set ring reachable via BFS on the undirected graph.
 
 ```bash
-python baseline_bfs.py --dataset <dataset_name> --split <split_name> --max_hops <max_hops> --workers <num_workers>
+python scripts/baseline_bfs.py --dataset <dataset_name> --split <split_name> --max_hops <max_hops> --workers <num_workers>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).

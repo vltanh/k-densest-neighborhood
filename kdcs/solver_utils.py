@@ -10,7 +10,14 @@ from tqdm import tqdm
 def run_solver(q_node, k, edge_csv, bin_path, tmp_dir):
     """Executes the C++ Branch-and-Price solver for a single query node."""
     out_csv = os.path.join(tmp_dir, f"out_q{q_node}_k{k}.csv")
-    cmd = [bin_path, edge_csv, str(q_node), str(k), out_csv]
+    cmd = [
+        bin_path,
+        "--mode", "sim",
+        "--input", edge_csv,
+        "--query", str(q_node),
+        "--k", str(k),
+        "--output", out_csv,
+    ]
 
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
