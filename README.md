@@ -1,12 +1,114 @@
 ## Densest Community Search
 
+![Example of the Web GUI](imgs/example.png)
+
 This repository implements exact and heuristic solvers for the **K-Densest Subgraph** problem on directed graphs, along with a node classification application using the discovered dense communities as neighborhoods.
+
+---
+
+## Web GUI
+
+An interactive browser-based explorer powered by the C++ solver and the OpenAlex live citation API, built with React, D3.js, and Tailwind CSS.
+
+### Features
+
+- Configure the query paper (OpenAlex ID), target community size *k*, and all advanced solver parameters from the sidebar.
+- Live telemetry panel streams solver log output in real time so you can monitor convergence as it happens.
+- Interactive D3 force-directed graph showing **core** nodes (numbered circles) and **frontier** ghost nodes (their immediate citation neighbourhood).
+- Paper ledger table listing each core paper's title, authors, venue, year, and citation count.
+- **Details** modal with the full abstract; **Bib** button fetches BibTeX via DOI.
+- SVG export of the current graph viewport.
+- Stop button terminates the solver mid-run; each browser tab gets its own independent session.
+- Sidebar width and ledger height are continuously drag-resizable; double-click either divider to collapse or restore it.
+
+### Setup
+
+**1. Build the C++ solver** (see [C++ Solver](#c-solver) below for prerequisites):
+
+```bash
+bash build.sh
+```
+
+**2. Install backend dependencies:**
+
+```bash
+pip install fastapi uvicorn httpx pydantic
+```
+
+**3. Install frontend dependencies** (Node ≥ 18 required):
+
+```bash
+cd kdensest-gui
+npm install
+```
+
+### Running
+
+Start the API server (must be running before the frontend):
+
+```bash
+python server.py
+# Listening on http://0.0.0.0:8000
+```
+
+In a separate terminal, start the development server:
+
+```bash
+cd kdensest-gui
+npm run dev
+# Open http://localhost:5173
+```
+
+For a production build:
+
+```bash
+cd kdensest-gui
+npm run build   # output in kdensest-gui/dist/
+```
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/extract` | Run the solver; request body includes `session_id`, `query_node`, `k`, `max_in_edges`, and all solver tuning fields; streams NDJSON `log`/`result`/`error` packets |
+| `POST` | `/api/stop?session_id=<id>` | Terminate the solver process for the given session |
+| `GET` | `/api/bibtex?doi=<doi>` | Fetch BibTeX for a paper via its DOI |
+
+The `VITE_API_URL` environment variable overrides the default backend address (`http://127.0.0.1:8000`) for the frontend build.
 
 ---
 
 ## C++ Solver
 
 Source code lives in `src/` and is built with CMake. The executable is placed at `bin/solver`.
+
+### Algorithm
+
+Given a directed graph G = (V, E) and an integer k, the solver finds a subset S ⊆ V with |S| ≥ k that maximises the **edge density** d(S) = |E(S)| / (|S|·(|S|−1)), where E(S) are all directed edges with both endpoints in S.
+
+The solver combines three nested algorithms:
+
+**Dinkelbach's algorithm (outer loop)** — reduces the fractional-objective problem to a sequence of parametric subproblems. At each iteration t, given the current density estimate λₜ, it solves:
+
+> maximise  |E(S)| − λₜ · |S|·(|S|−1)  subject to  |S| ≥ k
+
+and updates λₜ₊₁ = d(Sₜ). Convergence is superlinear; the loop terminates when the parametric objective reaches zero.
+
+**Branch-and-Price (middle loop)** — solves each parametric subproblem to integer optimality. The LP relaxation is solved at each B&B node via column generation; branching follows a most-fractional, highest-degree variable selection rule. The B&B tree is explored depth-first with an early-exit gap tolerance.
+
+**Column generation (inner loop)** — instead of exposing all nodes to the LP at once, the solver maintains an *active set* and a *frontier*. At each CG iteration it solves the restricted master problem (RMP), then prices the frontier: a frontier node f enters the active set if its reduced cost
+
+> rc(f) = deg_frac(f) − 2λ · Σ xᵥ − π
+
+is positive, where deg_frac(f) is f's fractional degree into the current LP solution and π is the dual of the size constraint. Only the top-scoring batch of frontier nodes is added per round (controlled by `--cg-batch-frac`, `--cg-min-batch`, `--cg-max-batch`).
+
+**BQP triangle cuts** — when the LP solution is fractional, the solver separates violated triangle inequalities on the product-linearisation variables:
+
+> xᵤ + xᵥ + xw − wᵤᵥ − wᵥw − wᵤw ≤ 1
+
+up to 20 cuts per round, tightening the LP bound before branching.
+
+**Dynamic graph expansion** — nodes are fetched on demand from a pluggable oracle (local CSV or live OpenAlex API). Predecessor and successor lists are retrieved lazily as the active set grows, so the solver works on implicit graphs without loading the entire edge list into memory.
 
 ### Dependencies
 
@@ -46,126 +148,16 @@ Required arguments:
 Optional arguments:
 
 - `--output <out.csv>`: Save resulting community node IDs to this file (`node_id` column).
-- `--time-limit <float>`: Max Branch-and-Bound time in seconds (default: `600.0`).
-- `--node-limit <int>`: Max B&B nodes to explore (default: `100000`).
-- `--gap-tol <float>`: Early-stopping relative gap tolerance (default: `1e-4`).
+- `--time-limit <float>`: Max algorithmic time per Dinkelbach iteration in seconds, excluding network I/O (default: `600.0`).
+- `--node-limit <int>`: Max B&B nodes to explore per Dinkelbach iteration (default: `100000`).
+- `--max-in-edges <int>`: Max incoming edges to fetch per node (default: `1500`). Applies to both `sim` and `openalex` modes.
+- `--gap-tol <float>`: Early-stopping relative gap tolerance for B&B (default: `1e-4`).
 - `--dinkelbach-iter <int>`: Max Dinkelbach iterations (default: `50`).
-- `--cg-batch-frac <float>`: Fraction of active set priced per iteration (default: `0.1`).
+- `--cg-batch-frac <float>`: Fraction of the active-set size to add per pricing round (default: `0.1`).
 - `--cg-min-batch <int>`: Minimum columns added per pricing round (default: `5`).
 - `--cg-max-batch <int>`: Maximum columns added per pricing round (default: `50`).
 - `--tol <float>`: Numerical tolerance for zero-checks (default: `1e-6`).
 - `--help`, `-h`: Print the help menu and exit.
-
-### Example
-
-```bash
-./bin/solver --mode openalex --query w3182298045 --k 10 --time-limit 60
-```
-
-```
-==================================================
-K-DENSEST NEIGHBORHOOD (OPENALEX LIVE API)
-==================================================
-[2026-03-25 21:55:14,971] Init Active Set | Size: 10 | Density: 0.122222
---------------------------------------------------
-[2026-03-25 21:55:14,971] === DINKELBACH ITERATION 1 | Lambda = 0.122222 ===
-[2026-03-25 21:55:37,620] HTTP Request failed (Attempt 1/3) for https://api.openalex.org/works/W4285719527
-    -> cURL Error: No error | HTTP Code: 404
-    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
-[2026-03-25 21:55:38,728] HTTP Request failed (Attempt 2/3) for https://api.openalex.org/works/W4285719527
-    -> cURL Error: No error | HTTP Code: 404
-    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
-[2026-03-25 21:55:40,832] HTTP Request failed (Attempt 3/3) for https://api.openalex.org/works/W4285719527
-    -> cURL Error: No error | HTTP Code: 404
-    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
-[2026-03-25 21:55:40,833] Blacklisting node W4285719527 due to API error: HTTP fetch failed after max retries.
-[2026-03-25 21:55:55,617]     > Incumbent updated at Node 7 | Obj: 93.8667 | Size: 34
-[2026-03-25 21:55:56,314]     > Incumbent updated at Node 14 | Obj: 93.9333 | Size: 33
-[2026-03-25 21:56:02,997]   -> Iteration Finished in 48.026s
-[2026-03-25 21:56:02,997]   -> Nodes Explored : 45 (Total: 45)
-[2026-03-25 21:56:02,997]   -> LP Solves      : 414 (Total: 414)
-[2026-03-25 21:56:02,997]   Found Solution    : Size: 33 | New Density: 0.211
-[2026-03-25 21:56:02,997] === DINKELBACH ITERATION 2 | Lambda = 0.211 ===
-[2026-03-25 21:56:08,662]     > Incumbent updated at Node 81 | Obj: 1.4375 | Size: 22
-[2026-03-25 21:56:13,748]     > Incumbent updated at Node 155 | Obj: 1.7538 | Size: 20
-[2026-03-25 21:56:15,429]     > Incumbent updated at Node 182 | Obj: 1.7784 | Size: 19
-[2026-03-25 21:56:20,624]     > Incumbent updated at Node 260 | Obj: 3.4318 | Size: 24
-[2026-03-25 21:56:20,645]     > Incumbent updated at Node 263 | Obj: 4.4375 | Size: 22
-[2026-03-25 21:56:20,674]     > Incumbent updated at Node 265 | Obj: 5.1458 | Size: 23
-[2026-03-25 21:56:20,683]     > Incumbent updated at Node 267 | Obj: 5.4375 | Size: 22
-[2026-03-25 21:56:21,031]     > Incumbent updated at Node 278 | Obj: 6.3068 | Size: 21
-[2026-03-25 21:56:21,052]     > Incumbent updated at Node 281 | Obj: 6.4375 | Size: 22
-[2026-03-25 21:56:21,057]     > Incumbent updated at Node 283 | Obj: 6.7538 | Size: 20
-[2026-03-25 21:56:24,795]     > Incumbent updated at Node 336 | Obj: 6.7784 | Size: 19
-[2026-03-25 21:56:26,007]     > Incumbent updated at Node 356 | Obj: 7.3068 | Size: 21
-[2026-03-25 21:56:34,266]     > Incumbent updated at Node 464 | Obj: 7.4375 | Size: 22
-[2026-03-25 21:56:34,277]     > Incumbent updated at Node 466 | Obj: 7.7538 | Size: 20
-[2026-03-25 21:56:34,301]     > Incumbent updated at Node 467 | Obj: 9.3068 | Size: 21
-[2026-03-25 21:56:35,206]     > Incumbent updated at Node 478 | Obj: 9.7538 | Size: 20
-[2026-03-25 21:56:38,223]     > Incumbent updated at Node 515 | Obj: 9.7784 | Size: 19
-[2026-03-25 21:57:00,323]     > Incumbent updated at Node 769 | Obj: 10.1458 | Size: 23
-[2026-03-25 21:57:00,357]     > Incumbent updated at Node 772 | Obj: 10.4375 | Size: 22
-[2026-03-25 21:57:01,192]     > Incumbent updated at Node 786 | Obj: 11.3068 | Size: 21
-[2026-03-25 21:57:03,027]     [!] B&B time limit reached.
-[2026-03-25 21:57:03,027]   -> Iteration Finished in 60.029s
-[2026-03-25 21:57:03,027]   -> Nodes Explored : 765 (Total: 810)
-[2026-03-25 21:57:03,027]   -> LP Solves      : 842 (Total: 1256)
-[2026-03-25 21:57:03,027]   Found Solution    : Size: 21 | New Density: 0.238
-[2026-03-25 21:57:03,027] === DINKELBACH ITERATION 3 | Lambda = 0.238 ===
-[2026-03-25 21:57:08,361]     > Incumbent updated at Node 858 | Obj: 0.1429 | Size: 18
-[2026-03-25 21:57:09,264]     > Incumbent updated at Node 873 | Obj: 1.2381 | Size: 17
-[2026-03-25 21:57:16,965]     > Incumbent updated at Node 972 | Obj: 1.5714 | Size: 19
-[2026-03-25 21:57:16,968]     > Incumbent updated at Node 973 | Obj: 2.2381 | Size: 17
-[2026-03-25 21:57:19,384]     > Incumbent updated at Node 1009 | Obj: 3.1429 | Size: 18
-[2026-03-25 21:57:19,457]     > Incumbent updated at Node 1012 | Obj: 4.5714 | Size: 19
-[2026-03-25 21:57:20,303]     > Incumbent updated at Node 1027 | Obj: 5.1429 | Size: 18
-[2026-03-25 21:57:20,305]     > Incumbent updated at Node 1028 | Obj: 5.2381 | Size: 17
-[2026-03-25 21:57:34,555]     > Incumbent updated at Node 1204 | Obj: 6.2381 | Size: 17
-[2026-03-25 21:58:03,085]     [!] B&B time limit reached.
-[2026-03-25 21:58:03,085]   -> Iteration Finished in 60.059s
-[2026-03-25 21:58:03,085]   -> Nodes Explored : 764 (Total: 1574)
-[2026-03-25 21:58:03,085]   -> LP Solves      : 764 (Total: 2020)
-[2026-03-25 21:58:03,085]   Found Solution    : Size: 17 | New Density: 0.261
-[2026-03-25 21:58:03,085] === DINKELBACH ITERATION 4 | Lambda = 0.261 ===
-[2026-03-25 21:58:13,979]     > Incumbent updated at Node 1710 | Obj: 0.3529 | Size: 16
-[2026-03-25 21:58:14,322]     > Incumbent updated at Node 1718 | Obj: 1.1838 | Size: 15
-[2026-03-25 21:58:34,613]     > Incumbent updated at Node 1998 | Obj: 1.4926 | Size: 14
-[2026-03-25 21:59:03,114]     [!] B&B time limit reached.
-[2026-03-25 21:59:03,114]   -> Iteration Finished in 60.028s
-[2026-03-25 21:59:03,114]   -> Nodes Explored : 876 (Total: 2450)
-[2026-03-25 21:59:03,114]   -> LP Solves      : 877 (Total: 2897)
-[2026-03-25 21:59:03,114]   Found Solution    : Size: 14 | New Density: 0.269
-[2026-03-25 21:59:03,114] === DINKELBACH ITERATION 5 | Lambda = 0.269 ===
-[2026-03-25 22:00:03,163]     [!] B&B time limit reached.
-[2026-03-25 22:00:03,163]   -> Iteration Finished in 60.049s
-[2026-03-25 22:00:03,163]   -> Nodes Explored : 924 (Total: 3374)
-[2026-03-25 22:00:03,163]   -> LP Solves      : 924 (Total: 3821)
-[2026-03-25 22:00:03,163]   Status            : Converged (No improvement found)
-==================================================
-OPTIMIZATION STATISTICS
-==================================================
-B&B Nodes Explored       : 3374
-Total LP Solves          : 3821
-Columns Generated        : 39
-BQP Cuts Added           : 8613
-API Queries Made         : 49
-Unique Nodes Mapped      : 2636
---------------------------------------------------
-TIMING BREAKDOWN
-Model Sync Time          : 0.460s
-Gurobi LP Time           : 247.124s
-Pricing Time             : 0.657s
-Separation Time          : 0.785s
---------------------------------------------------
-Total Solver Time        : 288.191s
-==================================================
-FINAL SOLUTION
-==================================================
-Density                  : 0.269231
-Size                     : 14
-Nodes:
-W4294190884 W2950642167 W2093098337 W2587597110 W2066785331 W3137267085 w3182298045 W2038031975 W2194775991 W2112522387 W4280575696 W2906532173 W2012413612 W2155737223
-```
 
 ---
 

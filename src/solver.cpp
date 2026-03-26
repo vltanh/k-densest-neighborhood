@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <cmath>
+#include <chrono>
 
 using namespace std;
 
@@ -100,7 +101,6 @@ void FullBranchAndPriceSolver::_initialize_active_set()
         }
     }
 
-    // Pass 2: Fill out edges for remaining V_active
     vector<int> active_copy(V_active.begin(), V_active.end());
     for (int v : active_copy)
     {
@@ -186,7 +186,6 @@ double FullBranchAndPriceSolver::_parametric_obj(const unordered_set<int> &nodes
 
 void FullBranchAndPriceSolver::_expand_node(int f)
 {
-    // Abort immediately if this node was previously blacklisted
     if (error_nodes.count(f))
     {
         F.erase(f);
@@ -220,124 +219,125 @@ void FullBranchAndPriceSolver::_expand_node(int f)
     catch (const std::exception &e)
     {
         std::cerr << "[" << get_timestamp() << "] Blacklisting node " << oracle.mapper.get_str(f) << " due to API error: " << e.what() << "\n";
-        // Banish the node completely
         error_nodes.insert(f);
         F.erase(f);
         V_active.erase(f);
     }
 }
 
-void FullBranchAndPriceSolver::_sync_rmp_structure(double lambda_val)
+bool FullBranchAndPriceSolver::_register_new_nodes(vector<int> &new_nodes)
 {
-    bool structural_changes = false;
-    vector<int> new_nodes;
-
     for (int v : V_active)
-    {
-        if (synced_nodes.find(v) == synced_nodes.end())
-        {
+        if (!synced_nodes.count(v))
             new_nodes.push_back(v);
-        }
-    }
+
+    if (new_nodes.empty())
+        return false;
 
     for (int v : new_nodes)
-    {
-        GRBVar var = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
-        x_vars[v] = var;
-        structural_changes = true;
-    }
-
-    if (structural_changes)
-        rmp->update();
-
+        x_vars[v] = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+    rmp->update();
     for (int v : new_nodes)
-    {
         rmp->chgCoeff(size_constr, x_vars[v], 1.0);
-    }
+    return true;
+}
 
-    vector<pair<int, int>> remaining_pending;
-
+bool FullBranchAndPriceSolver::_register_pending_edges()
+{
+    bool changed = false;
+    vector<pair<int, int>> remaining;
     for (auto const &uv : pending_edges)
     {
-        if (x_vars.find(uv.first) != x_vars.end() && x_vars.find(uv.second) != x_vars.end())
+        if (x_vars.count(uv.first) && x_vars.count(uv.second))
         {
-            if (y_vars.find(uv) == y_vars.end())
+            if (!y_vars.count(uv))
             {
                 GRBVar yvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
                 rmp->addConstr(yvar <= x_vars[uv.first]);
                 rmp->addConstr(yvar <= x_vars[uv.second]);
                 y_vars[uv] = yvar;
                 y_obj_terms.push_back(yvar);
-                structural_changes = true;
+                changed = true;
             }
         }
         else
         {
-            remaining_pending.push_back(uv);
+            remaining.push_back(uv);
         }
     }
-    pending_edges = std::move(remaining_pending);
+    pending_edges = std::move(remaining);
+    return changed;
+}
 
-    if (!new_nodes.empty())
+bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
+{
+    if (new_nodes.empty())
+        return false;
+
+    bool changed = false;
+    for (int u : new_nodes)
     {
-        for (int u : new_nodes)
+        for (int v : synced_nodes)
         {
-            for (int v : synced_nodes)
+            pair<int, int> uv = (u < v) ? make_pair(u, v) : make_pair(v, u);
+            if (!w_vars.count(uv))
             {
-                pair<int, int> uv = (u < v) ? make_pair(u, v) : make_pair(v, u);
-                if (w_vars.find(uv) == w_vars.end())
-                {
-                    GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
-                    rmp->addConstr(wvar >= x_vars[uv.first] + x_vars[uv.second] - 1);
-                    w_vars[uv] = wvar;
-                    w_obj_terms.push_back(wvar);
-                    structural_changes = true;
-                }
+                GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                rmp->addConstr(wvar >= x_vars[uv.first] + x_vars[uv.second] - 1);
+                w_vars[uv] = wvar;
+                w_obj_terms.push_back(wvar);
+                changed = true;
             }
         }
-
-        for (size_t i = 0; i < new_nodes.size(); i++)
+    }
+    for (size_t i = 0; i < new_nodes.size(); i++)
+    {
+        for (size_t j = i + 1; j < new_nodes.size(); j++)
         {
-            for (size_t j = i + 1; j < new_nodes.size(); j++)
+            int u = min(new_nodes[i], new_nodes[j]);
+            int v = max(new_nodes[i], new_nodes[j]);
+            pair<int, int> uv = {u, v};
+            if (!w_vars.count(uv))
             {
-                int u = min(new_nodes[i], new_nodes[j]);
-                int v = max(new_nodes[i], new_nodes[j]);
-                pair<int, int> uv = {u, v};
-                if (w_vars.find(uv) == w_vars.end())
-                {
-                    GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
-                    rmp->addConstr(wvar >= x_vars[u] + x_vars[v] - 1);
-                    w_vars[uv] = wvar;
-                    w_obj_terms.push_back(wvar);
-                    structural_changes = true;
-                }
+                GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                rmp->addConstr(wvar >= x_vars[u] + x_vars[v] - 1);
+                w_vars[uv] = wvar;
+                w_obj_terms.push_back(wvar);
+                changed = true;
             }
         }
-
-        for (int v : new_nodes)
-            synced_nodes.insert(v);
     }
+    for (int v : new_nodes)
+        synced_nodes.insert(v);
+    return changed;
+}
 
-    if (structural_changes || lambda_val != last_lambda)
+void FullBranchAndPriceSolver::_update_objective(double lambda_val)
+{
+    rmp->update();
+    GRBLinExpr obj_expr = 0;
+    if (!y_obj_terms.empty())
     {
-        rmp->update();
-        GRBLinExpr obj_expr = 0;
-
-        if (!y_obj_terms.empty())
-        {
-            vector<double> coeffs(y_obj_terms.size(), 1.0);
-            obj_expr.addTerms(coeffs.data(), y_obj_terms.data(), y_obj_terms.size());
-        }
-
-        if (!w_obj_terms.empty())
-        {
-            vector<double> coeffs(w_obj_terms.size(), -2.0 * lambda_val);
-            obj_expr.addTerms(coeffs.data(), w_obj_terms.data(), w_obj_terms.size());
-        }
-
-        rmp->setObjective(obj_expr, GRB_MAXIMIZE);
-        last_lambda = lambda_val;
+        vector<double> coeffs(y_obj_terms.size(), 1.0);
+        obj_expr.addTerms(coeffs.data(), y_obj_terms.data(), y_obj_terms.size());
     }
+    if (!w_obj_terms.empty())
+    {
+        vector<double> coeffs(w_obj_terms.size(), -2.0 * lambda_val);
+        obj_expr.addTerms(coeffs.data(), w_obj_terms.data(), w_obj_terms.size());
+    }
+    rmp->setObjective(obj_expr, GRB_MAXIMIZE);
+    last_lambda = lambda_val;
+}
+
+void FullBranchAndPriceSolver::_sync_rmp_structure(double lambda_val)
+{
+    vector<int> new_nodes;
+    bool changed = _register_new_nodes(new_nodes);
+    changed |= _register_pending_edges();
+    changed |= _register_pair_vars(new_nodes);
+    if (changed || lambda_val != last_lambda)
+        _update_objective(lambda_val);
 }
 
 void FullBranchAndPriceSolver::_apply_node_bounds(const vector<int> &v1, const vector<int> &v0)
@@ -496,7 +496,9 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
     return cuts_added;
 }
 
-pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_generation(const vector<int> &v1, const vector<int> &v0, double lambda_val, double current_incumbent, chrono::high_resolution_clock::time_point t_start)
+pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_generation(
+    const vector<int> &v1, const vector<int> &v0, double lambda_val, double current_incumbent,
+    chrono::high_resolution_clock::time_point t_start_bb, double net_start_bb)
 {
     unordered_map<int, double> local_x_bar;
     double local_lp_obj = -1e9;
@@ -521,14 +523,23 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
 
     while (true)
     {
+        // Calculate the per-iteration effective time
         auto t_now = chrono::high_resolution_clock::now();
-        if (chrono::duration<double>(t_now - t_start).count() > bb_time_limit)
+        double wall = chrono::duration<double>(t_now - t_start_bb).count();
+        double net = oracle.cumulative_network_time - net_start_bb;
+        double effective_time = max(0.0, wall - net);
+
+        if (effective_time > bb_time_limit)
             return {std::move(local_x_bar), local_lp_obj};
 
         t0 = chrono::high_resolution_clock::now();
         _sync_rmp_structure(lambda_val);
         t1 = chrono::high_resolution_clock::now();
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
+
+        // Feed remaining budget to Gurobi
+        double remaining_budget = max(1e-3, bb_time_limit - effective_time);
+        rmp->set(GRB_DoubleParam_TimeLimit, remaining_budget);
 
         rmp->optimize();
         stats.total_lp_solves++;
@@ -597,6 +608,36 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     }
 }
 
+int FullBranchAndPriceSolver::_select_branch_var(const unordered_map<int, double> &x_bar)
+{
+    int branch_var = -1;
+    double min_diff = 1.0;
+    int max_deg = -1;
+
+    for (const auto &[v, val] : x_bar)
+    {
+        if (val <= tol || val >= 1.0 - tol)
+            continue;
+
+        double diff = abs(val - 0.5);
+        int deg = 0;
+        if (adj_out.count(v)) deg += adj_out[v].size();
+        if (adj_in.count(v))  deg += adj_in[v].size();
+
+        bool better = (diff < min_diff - 1e-3)
+                   || (abs(diff - min_diff) <= 1e-3 && deg > max_deg)
+                   || (abs(diff - min_diff) <= 1e-3 && deg == max_deg && v < branch_var);
+
+        if (better)
+        {
+            min_diff   = diff;
+            max_deg    = deg;
+            branch_var = v;
+        }
+    }
+    return branch_var;
+}
+
 pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(double lambda_val)
 {
     vector<BBNode> stack = {{{q}, {}}};
@@ -604,7 +645,9 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
     unordered_set<int> best_int_sol;
     double heuristic_global_ub = -1e9;
 
-    auto t_start = chrono::high_resolution_clock::now();
+    // Reset the Iteration Stopwatch exactly here
+    auto t_start_bb = chrono::high_resolution_clock::now();
+    double net_start_bb = oracle.cumulative_network_time;
 
     while (!stack.empty())
     {
@@ -614,10 +657,15 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             break;
         }
 
+        // Check time limit for this specific iteration
         auto t_now = chrono::high_resolution_clock::now();
-        if (chrono::duration<double>(t_now - t_start).count() > bb_time_limit)
+        double wall = chrono::duration<double>(t_now - t_start_bb).count();
+        double net = oracle.cumulative_network_time - net_start_bb;
+        double effective_time = max(0.0, wall - net);
+
+        if (effective_time > bb_time_limit)
         {
-            cout << "[" << get_timestamp() << "]     [!] B&B time limit reached." << endl;
+            cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached (" << bb_time_limit << "s)." << endl;
             break;
         }
 
@@ -632,58 +680,17 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         stack.pop_back();
         stats.total_bb_nodes++;
 
-        auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start);
+        // Pass the local iteration timers down to column generation
+        auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start_bb, net_start_bb);
 
         if (x_bar.empty() || lp_obj <= best_int_obj + tol)
             continue;
         if (lp_obj > heuristic_global_ub)
             heuristic_global_ub = lp_obj;
 
-        vector<int> fractional;
-        int branch_var = -1;
-        double min_diff = 1.0;
-        int max_deg = -1;
+        int branch_var = _select_branch_var(x_bar);
 
-        for (const auto &[v, val] : x_bar)
-        {
-            if (val > tol && val < 1.0 - tol)
-            {
-                fractional.push_back(v);
-                double diff = abs(val - 0.5);
-
-                int deg = 0;
-                if (adj_out.count(v))
-                    deg += adj_out[v].size();
-                if (adj_in.count(v))
-                    deg += adj_in[v].size();
-
-                bool better = false;
-                if (diff < min_diff - 1e-3)
-                {
-                    better = true;
-                }
-                else if (abs(diff - min_diff) <= 1e-3)
-                {
-                    if (deg > max_deg)
-                    {
-                        better = true;
-                    }
-                    else if (deg == max_deg && v < branch_var)
-                    {
-                        better = true;
-                    }
-                }
-
-                if (better)
-                {
-                    min_diff = diff;
-                    max_deg = deg;
-                    branch_var = v;
-                }
-            }
-        }
-
-        if (fractional.empty())
+        if (branch_var == -1)
         {
             unordered_set<int> sol_nodes;
             for (const auto &[v, val] : x_bar)

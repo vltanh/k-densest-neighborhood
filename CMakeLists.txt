@@ -3,6 +3,7 @@ project(KDensestSolver CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ==============================================================================
 # 1. External Dependencies
@@ -41,11 +42,8 @@ endif()
 add_executable(solver
     src/main.cpp
     src/solver.cpp
-    src/solver.hpp
-    src/common.hpp
-    src/oracle.hpp
-    src/simulation_oracle.hpp
-    src/openalex_oracle.hpp
+    src/simulation_oracle.cpp
+    src/openalex_oracle.cpp
 )
 
 # ==============================================================================

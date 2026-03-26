@@ -1,9 +1,4 @@
-rm -rf build
-mkdir build
-cd build
-cmake ..
-make -j$(nproc)
-cd ..
-
-mv build/solver bin/solver
+cmake -S . -B build
+cmake --build build -j$(nproc)
+cp build/solver bin/solver
 chmod +x bin/solver

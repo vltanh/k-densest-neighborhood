@@ -12,11 +12,16 @@ def run_solver(q_node, k, edge_csv, bin_path, tmp_dir):
     out_csv = os.path.join(tmp_dir, f"out_q{q_node}_k{k}.csv")
     cmd = [
         bin_path,
-        "--mode", "sim",
-        "--input", edge_csv,
-        "--query", str(q_node),
-        "--k", str(k),
-        "--output", out_csv,
+        "--mode",
+        "sim",
+        "--input",
+        edge_csv,
+        "--query",
+        str(q_node),
+        "--k",
+        str(k),
+        "--output",
+        out_csv,
     ]
 
     try:

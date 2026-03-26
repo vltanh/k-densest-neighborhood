@@ -23,8 +23,9 @@ void print_usage(const char *prog_name)
          << "Optional I/O:\n"
          << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
-         << "  --time-limit <float>      Max Branch-and-Bound time in seconds (default: 600.0)\n"
+         << "  --time-limit <float>      Max Branch-and-Bound time in seconds (default: 60.0)\n"
          << "  --node-limit <int>        Max Branch-and-Bound nodes to explore (default: 100000)\n"
+         << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 1500)\n"
          << "  --gap-tol <float>         Early stopping relative gap tolerance (default: 1e-4)\n"
          << "  --dinkelbach-iter <int>   Max Dinkelbach (fractional programming) iterations (default: 50)\n"
          << "  --cg-batch-frac <float>   Fraction of active set to price per iteration (default: 0.1)\n"
@@ -32,6 +33,32 @@ void print_usage(const char *prog_name)
          << "  --cg-max-batch <int>      Maximum columns to add per pricing round (default: 50)\n"
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
          << "  --help, -h                Print this help menu and exit\n";
+}
+
+// Loads a two-column (source,target) CSV into the oracle. Returns the edge count.
+static size_t load_edge_csv(SimulationOracle &oracle, const string &path)
+{
+    ifstream infile(path);
+    if (!infile.is_open())
+        throw runtime_error("Could not open file " + path);
+
+    string line;
+    size_t edge_count = 0;
+    getline(infile, line); // skip header
+    while (getline(infile, line))
+    {
+        size_t comma_pos = line.find(',');
+        if (comma_pos != string::npos)
+        {
+            string u = line.substr(0, comma_pos);
+            string v = line.substr(comma_pos + 1);
+            if (!v.empty() && v.back() == '\r')
+                v.pop_back();
+            oracle.add_db_edge(u, v);
+            ++edge_count;
+        }
+    }
+    return edge_count;
 }
 
 int main(int argc, char *argv[])
@@ -45,8 +72,9 @@ int main(int argc, char *argv[])
     int k = -1;
     string output_file = "";
 
-    double time_limit = 600.0;
+    double time_limit = 60.0;
     int node_limit = 100000;
+    int max_in_edges = 1500;
     double gap_tol = 1e-4;
     int dinkelbach_iter = 50;
     double cg_batch_frac = 0.1;
@@ -95,6 +123,8 @@ int main(int argc, char *argv[])
                 time_limit = stod(argv[++i]);
             else if (arg == "--node-limit")
                 node_limit = stoi(argv[++i]);
+            else if (arg == "--max-in-edges")
+                max_in_edges = stoi(argv[++i]);
             else if (arg == "--gap-tol")
                 gap_tol = stod(argv[++i]);
             else if (arg == "--dinkelbach-iter")
@@ -115,12 +145,12 @@ int main(int argc, char *argv[])
             }
         }
     }
-    catch (const invalid_argument &e)
+    catch (const invalid_argument &)
     {
         cerr << "Error: Invalid numeric type provided for one of the arguments.\n";
         return 1;
     }
-    catch (const out_of_range &e)
+    catch (const out_of_range &)
     {
         cerr << "Error: Numeric value provided is out of range.\n";
         return 1;
@@ -161,14 +191,13 @@ int main(int argc, char *argv[])
         env.start();
 
         unique_ptr<IGraphOracle> oracle_ptr;
-        auto t_io_start = chrono::high_resolution_clock::now();
 
         if (mode == "openalex")
         {
             cout << "==================================================" << endl;
             cout << "K-DENSEST NEIGHBORHOOD (OPENALEX LIVE API)" << endl;
             cout << "==================================================" << endl;
-            oracle_ptr = make_unique<OpenAlexOracle>();
+            oracle_ptr = make_unique<OpenAlexOracle>(max_in_edges);
         }
         else
         {
@@ -176,36 +205,14 @@ int main(int argc, char *argv[])
             cout << "K-DENSEST NEIGHBORHOOD (LAZY API SIMULATOR)" << endl;
             cout << "==================================================" << endl;
 
-            auto sim_oracle = make_unique<SimulationOracle>();
-            ifstream infile(input_file);
-            if (!infile.is_open())
-            {
-                cerr << "Error: Could not open file " << input_file << endl;
-                return 1;
-            }
-
-            string line;
-            size_t edge_count = 0;
-            if (getline(infile, line))
-            {
-                while (getline(infile, line))
-                {
-                    size_t comma_pos = line.find(',');
-                    if (comma_pos != string::npos)
-                    {
-                        string u_str = line.substr(0, comma_pos);
-                        string v_str = line.substr(comma_pos + 1);
-                        if (!v_str.empty() && v_str.back() == '\r')
-                            v_str.pop_back();
-                        sim_oracle->add_db_edge(u_str, v_str);
-                        edge_count++;
-                    }
-                }
-            }
-            infile.close();
+            auto sim_oracle = make_unique<SimulationOracle>(max_in_edges);
+            auto t_io_start = chrono::high_resolution_clock::now();
+            size_t edge_count = load_edge_csv(*sim_oracle, input_file);
             auto t_io_end = chrono::high_resolution_clock::now();
-            cout << "[" << get_timestamp() << "] Sim DB Loaded     | Edges: " << edge_count << " | IO Time: "
-                 << fixed << setprecision(2) << chrono::duration<double>(t_io_end - t_io_start).count() << "s" << endl;
+
+            cout << "[" << get_timestamp() << "] Sim DB Loaded     | Edges: " << edge_count
+                 << " | IO Time: " << fixed << setprecision(2)
+                 << chrono::duration<double>(t_io_end - t_io_start).count() << "s" << endl;
             cout << "--------------------------------------------------" << endl;
 
             oracle_ptr = std::move(sim_oracle);
@@ -213,7 +220,6 @@ int main(int argc, char *argv[])
 
         int q_node_int = oracle_ptr->mapper.get_or_create_id(query_node);
 
-        // Instantiate the solver with all the custom parameters!
         FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                         tol, node_limit, time_limit, gap_tol,
                                         dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch);
@@ -235,6 +241,7 @@ int main(int argc, char *argv[])
         cout << left << setw(25) << "Gurobi LP Time" << ": " << fixed << setprecision(3) << solver.stats.t_lp_solve << "s" << endl;
         cout << left << setw(25) << "Pricing Time" << ": " << fixed << setprecision(3) << solver.stats.t_pricing << "s" << endl;
         cout << left << setw(25) << "Separation Time" << ": " << fixed << setprecision(3) << solver.stats.t_separation << "s" << endl;
+        cout << left << setw(25) << "Network Wait Time" << ": " << fixed << setprecision(3) << oracle_ptr->cumulative_network_time << "s" << endl;
         cout << "--------------------------------------------------" << endl;
         cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << solver.stats.t_total << "s" << endl;
         cout << "==================================================" << endl;
@@ -247,9 +254,8 @@ int main(int argc, char *argv[])
         {
             filesystem::path out_path(output_file);
             if (out_path.has_parent_path() && !filesystem::exists(out_path.parent_path()))
-            {
                 filesystem::create_directories(out_path.parent_path());
-            }
+
             ofstream outfile(output_file);
             if (outfile.is_open())
             {
