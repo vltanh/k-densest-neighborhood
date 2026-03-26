@@ -6,26 +6,55 @@ This repository implements exact and heuristic solvers for the **K-Densest Subgr
 
 ## C++ Solver
 
+Source code lives in `src/` and is built with CMake. The executable is placed at `bin/solver`.
+
+### Dependencies
+
+- **Gurobi** — set the `GUROBI_HOME` environment variable to your Gurobi installation (e.g., `export GUROBI_HOME=/path/to/gurobi1301/linux64`).
+- **libcurl** — required for the OpenAlex live-API mode.
+- **nlohmann/json** — automatically downloaded by CMake during the first build.
+
 ### Build
 
 ```bash
-g++ -m64 -O3 -std=c++17 -I${GUROBI_HOME}/include/ solver.cpp -L${GUROBI_HOME}/lib/ -lgurobi_c++ -lgurobi130 -o bin/solver
+bash build.sh
 ```
-
-Make sure to:
-- set the `GUROBI_HOME` environment variable to the path where Gurobi is installed (e.g., `export GUROBI_HOME=/path/to/gurobi1301/linux64`), and
-- replace `130` with the actual version number of Gurobi you have installed.
 
 ### Usage
 
+The solver supports two operating modes selected with `--mode`.
+
+**Simulation mode** (local CSV graph):
+
 ```bash
-./bin/solver <input_file> <q_node> <k> <output_file>
+./bin/solver --mode sim --input <edge.csv> --query <node_id> --k <k> [--output <out.csv>]
 ```
 
-- `<input_file>`: Path to the input graph file in CSV format with columns `source` and `target` representing edges.
-- `<q_node>`: The query node ID for which to find the densest community.
-- `<k>`: Minimum community size to search for.
-- `<output_file>`: Path to the output CSV file where the predicted community (`node_id` column) will be saved.
+**OpenAlex mode** (live citation API):
+
+```bash
+./bin/solver --mode openalex --query <openalex_work_id> --k <k> [--output <out.csv>]
+```
+
+Required arguments:
+
+- `--mode <sim|openalex>`: Mode of operation.
+- `--query <node_id>`: String ID of the target query node.
+- `--k <int>`: Target subgraph size (k ≥ 2).
+- `--input <edge.csv>`: Path to the edge list CSV (`source`, `target` columns) — required for `sim` mode.
+
+Optional arguments:
+
+- `--output <out.csv>`: Save resulting community node IDs to this file (`node_id` column).
+- `--time-limit <float>`: Max Branch-and-Bound time in seconds (default: `600.0`).
+- `--node-limit <int>`: Max B&B nodes to explore (default: `100000`).
+- `--gap-tol <float>`: Early-stopping relative gap tolerance (default: `1e-4`).
+- `--dinkelbach-iter <int>`: Max Dinkelbach iterations (default: `50`).
+- `--cg-batch-frac <float>`: Fraction of active set priced per iteration (default: `0.1`).
+- `--cg-min-batch <int>`: Minimum columns added per pricing round (default: `5`).
+- `--cg-max-batch <int>`: Maximum columns added per pricing round (default: `50`).
+- `--tol <float>`: Numerical tolerance for zero-checks (default: `1e-6`).
+- `--help`, `-h`: Print the help menu and exit.
 
 ---
 
