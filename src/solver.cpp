@@ -26,6 +26,9 @@ FullBranchAndPriceSolver::~FullBranchAndPriceSolver()
 
 void FullBranchAndPriceSolver::_add_edge(int u, int v)
 {
+    if (u == v)
+        return;
+
     if (!adj_out[u].count(v))
     {
         adj_out[u].insert(v);
