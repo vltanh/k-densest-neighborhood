@@ -56,6 +56,117 @@ Optional arguments:
 - `--tol <float>`: Numerical tolerance for zero-checks (default: `1e-6`).
 - `--help`, `-h`: Print the help menu and exit.
 
+### Example
+
+```bash
+./bin/solver --mode openalex --query w3182298045 --k 10 --time-limit 60
+```
+
+```
+==================================================
+K-DENSEST NEIGHBORHOOD (OPENALEX LIVE API)
+==================================================
+[2026-03-25 21:55:14,971] Init Active Set | Size: 10 | Density: 0.122222
+--------------------------------------------------
+[2026-03-25 21:55:14,971] === DINKELBACH ITERATION 1 | Lambda = 0.122222 ===
+[2026-03-25 21:55:37,620] HTTP Request failed (Attempt 1/3) for https://api.openalex.org/works/W4285719527
+    -> cURL Error: No error | HTTP Code: 404
+    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
+[2026-03-25 21:55:38,728] HTTP Request failed (Attempt 2/3) for https://api.openalex.org/works/W4285719527
+    -> cURL Error: No error | HTTP Code: 404
+    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
+[2026-03-25 21:55:40,832] HTTP Request failed (Attempt 3/3) for https://api.openalex.org/works/W4285719527
+    -> cURL Error: No error | HTTP Code: 404
+    -> Server Msg: <!doctype html> <html lang=en> <title>404 Not Found</title> <h1>Not Found</h1> <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p> 
+[2026-03-25 21:55:40,833] Blacklisting node W4285719527 due to API error: HTTP fetch failed after max retries.
+[2026-03-25 21:55:55,617]     > Incumbent updated at Node 7 | Obj: 93.8667 | Size: 34
+[2026-03-25 21:55:56,314]     > Incumbent updated at Node 14 | Obj: 93.9333 | Size: 33
+[2026-03-25 21:56:02,997]   -> Iteration Finished in 48.026s
+[2026-03-25 21:56:02,997]   -> Nodes Explored : 45 (Total: 45)
+[2026-03-25 21:56:02,997]   -> LP Solves      : 414 (Total: 414)
+[2026-03-25 21:56:02,997]   Found Solution    : Size: 33 | New Density: 0.211
+[2026-03-25 21:56:02,997] === DINKELBACH ITERATION 2 | Lambda = 0.211 ===
+[2026-03-25 21:56:08,662]     > Incumbent updated at Node 81 | Obj: 1.4375 | Size: 22
+[2026-03-25 21:56:13,748]     > Incumbent updated at Node 155 | Obj: 1.7538 | Size: 20
+[2026-03-25 21:56:15,429]     > Incumbent updated at Node 182 | Obj: 1.7784 | Size: 19
+[2026-03-25 21:56:20,624]     > Incumbent updated at Node 260 | Obj: 3.4318 | Size: 24
+[2026-03-25 21:56:20,645]     > Incumbent updated at Node 263 | Obj: 4.4375 | Size: 22
+[2026-03-25 21:56:20,674]     > Incumbent updated at Node 265 | Obj: 5.1458 | Size: 23
+[2026-03-25 21:56:20,683]     > Incumbent updated at Node 267 | Obj: 5.4375 | Size: 22
+[2026-03-25 21:56:21,031]     > Incumbent updated at Node 278 | Obj: 6.3068 | Size: 21
+[2026-03-25 21:56:21,052]     > Incumbent updated at Node 281 | Obj: 6.4375 | Size: 22
+[2026-03-25 21:56:21,057]     > Incumbent updated at Node 283 | Obj: 6.7538 | Size: 20
+[2026-03-25 21:56:24,795]     > Incumbent updated at Node 336 | Obj: 6.7784 | Size: 19
+[2026-03-25 21:56:26,007]     > Incumbent updated at Node 356 | Obj: 7.3068 | Size: 21
+[2026-03-25 21:56:34,266]     > Incumbent updated at Node 464 | Obj: 7.4375 | Size: 22
+[2026-03-25 21:56:34,277]     > Incumbent updated at Node 466 | Obj: 7.7538 | Size: 20
+[2026-03-25 21:56:34,301]     > Incumbent updated at Node 467 | Obj: 9.3068 | Size: 21
+[2026-03-25 21:56:35,206]     > Incumbent updated at Node 478 | Obj: 9.7538 | Size: 20
+[2026-03-25 21:56:38,223]     > Incumbent updated at Node 515 | Obj: 9.7784 | Size: 19
+[2026-03-25 21:57:00,323]     > Incumbent updated at Node 769 | Obj: 10.1458 | Size: 23
+[2026-03-25 21:57:00,357]     > Incumbent updated at Node 772 | Obj: 10.4375 | Size: 22
+[2026-03-25 21:57:01,192]     > Incumbent updated at Node 786 | Obj: 11.3068 | Size: 21
+[2026-03-25 21:57:03,027]     [!] B&B time limit reached.
+[2026-03-25 21:57:03,027]   -> Iteration Finished in 60.029s
+[2026-03-25 21:57:03,027]   -> Nodes Explored : 765 (Total: 810)
+[2026-03-25 21:57:03,027]   -> LP Solves      : 842 (Total: 1256)
+[2026-03-25 21:57:03,027]   Found Solution    : Size: 21 | New Density: 0.238
+[2026-03-25 21:57:03,027] === DINKELBACH ITERATION 3 | Lambda = 0.238 ===
+[2026-03-25 21:57:08,361]     > Incumbent updated at Node 858 | Obj: 0.1429 | Size: 18
+[2026-03-25 21:57:09,264]     > Incumbent updated at Node 873 | Obj: 1.2381 | Size: 17
+[2026-03-25 21:57:16,965]     > Incumbent updated at Node 972 | Obj: 1.5714 | Size: 19
+[2026-03-25 21:57:16,968]     > Incumbent updated at Node 973 | Obj: 2.2381 | Size: 17
+[2026-03-25 21:57:19,384]     > Incumbent updated at Node 1009 | Obj: 3.1429 | Size: 18
+[2026-03-25 21:57:19,457]     > Incumbent updated at Node 1012 | Obj: 4.5714 | Size: 19
+[2026-03-25 21:57:20,303]     > Incumbent updated at Node 1027 | Obj: 5.1429 | Size: 18
+[2026-03-25 21:57:20,305]     > Incumbent updated at Node 1028 | Obj: 5.2381 | Size: 17
+[2026-03-25 21:57:34,555]     > Incumbent updated at Node 1204 | Obj: 6.2381 | Size: 17
+[2026-03-25 21:58:03,085]     [!] B&B time limit reached.
+[2026-03-25 21:58:03,085]   -> Iteration Finished in 60.059s
+[2026-03-25 21:58:03,085]   -> Nodes Explored : 764 (Total: 1574)
+[2026-03-25 21:58:03,085]   -> LP Solves      : 764 (Total: 2020)
+[2026-03-25 21:58:03,085]   Found Solution    : Size: 17 | New Density: 0.261
+[2026-03-25 21:58:03,085] === DINKELBACH ITERATION 4 | Lambda = 0.261 ===
+[2026-03-25 21:58:13,979]     > Incumbent updated at Node 1710 | Obj: 0.3529 | Size: 16
+[2026-03-25 21:58:14,322]     > Incumbent updated at Node 1718 | Obj: 1.1838 | Size: 15
+[2026-03-25 21:58:34,613]     > Incumbent updated at Node 1998 | Obj: 1.4926 | Size: 14
+[2026-03-25 21:59:03,114]     [!] B&B time limit reached.
+[2026-03-25 21:59:03,114]   -> Iteration Finished in 60.028s
+[2026-03-25 21:59:03,114]   -> Nodes Explored : 876 (Total: 2450)
+[2026-03-25 21:59:03,114]   -> LP Solves      : 877 (Total: 2897)
+[2026-03-25 21:59:03,114]   Found Solution    : Size: 14 | New Density: 0.269
+[2026-03-25 21:59:03,114] === DINKELBACH ITERATION 5 | Lambda = 0.269 ===
+[2026-03-25 22:00:03,163]     [!] B&B time limit reached.
+[2026-03-25 22:00:03,163]   -> Iteration Finished in 60.049s
+[2026-03-25 22:00:03,163]   -> Nodes Explored : 924 (Total: 3374)
+[2026-03-25 22:00:03,163]   -> LP Solves      : 924 (Total: 3821)
+[2026-03-25 22:00:03,163]   Status            : Converged (No improvement found)
+==================================================
+OPTIMIZATION STATISTICS
+==================================================
+B&B Nodes Explored       : 3374
+Total LP Solves          : 3821
+Columns Generated        : 39
+BQP Cuts Added           : 8613
+API Queries Made         : 49
+Unique Nodes Mapped      : 2636
+--------------------------------------------------
+TIMING BREAKDOWN
+Model Sync Time          : 0.460s
+Gurobi LP Time           : 247.124s
+Pricing Time             : 0.657s
+Separation Time          : 0.785s
+--------------------------------------------------
+Total Solver Time        : 288.191s
+==================================================
+FINAL SOLUTION
+==================================================
+Density                  : 0.269231
+Size                     : 14
+Nodes:
+W4294190884 W2950642167 W2093098337 W2587597110 W2066785331 W3137267085 w3182298045 W2038031975 W2194775991 W2112522387 W4280575696 W2906532173 W2012413612 W2155737223
+```
+
 ---
 
 ## Synthetic Graph Generation
