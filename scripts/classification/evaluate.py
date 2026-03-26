@@ -8,7 +8,7 @@ from sklearn.metrics import (
     f1_score,
     classification_report,
 )
-from kdcs.solver_utils import evaluate_nodes
+from solver_utils import evaluate_nodes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

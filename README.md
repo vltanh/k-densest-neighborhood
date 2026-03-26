@@ -205,14 +205,16 @@ Reports precision, recall, F1, and Jaccard similarity.
 
 ## Node Classification (CitationFull Datasets)
 
-Uses the K-Densest community around each query node as its neighborhood for label propagation (majority vote). The shared solver execution and voting logic lives in `kdcs/solver_utils.py`.
+Uses the K-Densest community around each query node as its neighborhood for label propagation (majority vote). The shared solver execution and voting logic lives in `scripts/classification/solver_utils.py`.
+
+All scripts below live in `scripts/classification/` and should be run from the project root.
 
 ### 1. Prepare Data
 
 Downloads a CitationFull dataset and exports edge and node split files to `data/<dataset>/`. The split is **temporal/inductive**: nodes that have been cited ("foundational" papers) form the training set, while purely-citing ("new") papers are evenly divided into validation and test sets.
 
 ```bash
-python scripts/prepare_data.py --dataset <dataset_name>
+python scripts/classification/prepare_data.py --dataset <dataset_name>
 ```
 
 - `--dataset`: One of `Cora`, `Cora_ML`, `CiteSeer`, `DBLP`, or `PubMed` (default: `Cora_ML`).
@@ -226,7 +228,7 @@ Output files written to `data/<dataset>/`:
 Sweeps `k` over the validation split to find the best community size.
 
 ```bash
-python scripts/tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step <step_k> --optimize <metric> --weighting <weight_strategy>
+python scripts/classification/tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step <step_k> --optimize <metric> --weighting <weight_strategy>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).
@@ -243,7 +245,7 @@ python scripts/tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> 
 Evaluates classification on a specific dataset split.
 
 ```bash
-python scripts/evaluate.py --dataset <dataset_name> --split <split_name> --k <best_k> --weighting <weight_strategy>
+python scripts/classification/evaluate.py --dataset <dataset_name> --split <split_name> --k <best_k> --weighting <weight_strategy>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).
@@ -260,7 +262,7 @@ Reports accuracy, macro precision, recall, F1, and a per-class classification re
 Classifies each node by majority voting over the nearest training-set ring reachable via BFS on the undirected graph.
 
 ```bash
-python scripts/baseline_bfs.py --dataset <dataset_name> --split <split_name> --max_hops <max_hops> --workers <num_workers>
+python scripts/classification/baseline_bfs.py --dataset <dataset_name> --split <split_name> --max_hops <max_hops> --workers <num_workers>
 ```
 
 - `--dataset`: Dataset name matching a prepared `data/<dataset>/` directory (default: `Cora`).

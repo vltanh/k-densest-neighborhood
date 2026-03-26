@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import argparse
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from kdcs.solver_utils import evaluate_nodes
+from solver_utils import evaluate_nodes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
