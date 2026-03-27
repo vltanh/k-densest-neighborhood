@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
 
 inline std::string get_timestamp()
 {
@@ -46,12 +47,16 @@ struct SolverStats
 
 class IDMapper
 {
+private:
+    mutable std::mutex mtx;
+
 public:
     std::unordered_map<std::string, int> str_to_id;
     std::vector<std::string> id_to_str;
 
     int get_or_create_id(const std::string &s)
     {
+        std::lock_guard<std::mutex> lock(mtx);
         auto it = str_to_id.find(s);
         if (it != str_to_id.end())
             return it->second;
@@ -60,8 +65,16 @@ public:
         id_to_str.push_back(s);
         return id;
     }
-    std::string get_str(int id) const { return id_to_str[id]; }
-    int size() const { return id_to_str.size(); }
+    std::string get_str(int id) const
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        return id_to_str[id];
+    }
+    int size() const
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        return id_to_str.size();
+    }
 };
 
 struct BBNode

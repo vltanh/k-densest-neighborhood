@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <cmath>
 #include <chrono>
+#include <future>
+#include <omp.h>
 
 using namespace std;
 
@@ -260,51 +262,6 @@ void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_
     }
 }
 
-// ── Dynamic Graph Expansion ───────────────────────────────────────────────────
-
-// Promotes frontier node f to V_active, loading its edges via the oracle.
-// On failure, f is blacklisted and dropped from F.
-void FullBranchAndPriceSolver::_expand_node(int f)
-{
-    if (error_nodes.count(f))
-    {
-        F.erase(f);
-        return;
-    }
-
-    try
-    {
-        const auto &[preds, succs] = oracle.query(f);
-
-        V_active.insert(f);
-        F.erase(f);
-
-        for (int u : preds)
-        {
-            if (error_nodes.count(u))
-                continue;
-            _add_edge(u, f);
-            if (V_active.find(u) == V_active.end())
-                F.insert(u);
-        }
-        for (int w : succs)
-        {
-            if (error_nodes.count(w))
-                continue;
-            _add_edge(f, w);
-            if (V_active.find(w) == V_active.end())
-                F.insert(w);
-        }
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "[" << get_timestamp() << "] Blacklisting node " << oracle.mapper.get_str(f) << " due to API error: " << e.what() << "\n";
-        error_nodes.insert(f);
-        F.erase(f);
-        V_active.erase(f);
-    }
-}
-
 // ── RMP Structure Helpers ─────────────────────────────────────────────────────
 
 // Adds a continuous x_v ∈ [0,1] variable to the RMP for each node in V_active
@@ -501,10 +458,15 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
         sum_x_bar += val;
 
     double omega = -2.0 * lambda_val * sum_x_bar - pi;
-    vector<pair<double, int>> candidates;
 
-    for (int f : F)
+    std::vector<int> F_vec(F.begin(), F.end());
+    int max_threads = omp_get_max_threads();
+    std::vector<std::vector<std::pair<double, int>>> local_candidates(max_threads);
+
+#pragma omp parallel for schedule(static, 1024)
+    for (size_t i = 0; i < F_vec.size(); i++)
     {
+        int f = F_vec[i];
         if (v0_set.find(f) != v0_set.end())
             continue;
 
@@ -534,7 +496,16 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
 
         double rc = frac_deg + omega;
         if (rc > tol)
-            candidates.push_back({rc, f});
+        {
+            int tid = omp_get_thread_num();
+            local_candidates[tid].push_back({rc, f});
+        }
+    }
+
+    std::vector<std::pair<double, int>> candidates;
+    for (int i = 0; i < max_threads; i++)
+    {
+        candidates.insert(candidates.end(), local_candidates[i].begin(), local_candidates[i].end());
     }
 
     int dynamic_limit = V_active.size() * cg_batch_fraction;
@@ -689,8 +660,57 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         if (!top_f.empty())
         {
             stats.total_columns_added += top_f.size();
+
+            std::vector<std::future<std::pair<int, std::pair<std::vector<int>, std::vector<int>>>>> futures;
+
             for (int f : top_f)
-                _expand_node(f);
+            {
+                if (error_nodes.count(f))
+                    continue;
+
+                futures.push_back(std::async(std::launch::async, [this, f]()
+                                             {
+                    try {
+                        auto edges = oracle.query(f);
+                        return std::make_pair(f, edges);
+                    } catch (...) {
+                        return std::make_pair(f, std::pair<std::vector<int>, std::vector<int>>{}); 
+                    } }));
+            }
+
+            for (auto &fut : futures)
+            {
+                auto result = fut.get();
+                int f = result.first;
+                auto edges = result.second;
+
+                if (edges.first.empty() && edges.second.empty())
+                {
+                    error_nodes.insert(f);
+                    F.erase(f);
+                    continue;
+                }
+
+                V_active.insert(f);
+                F.erase(f);
+
+                for (int u : edges.first)
+                {
+                    if (error_nodes.count(u))
+                        continue;
+                    _add_edge(u, f);
+                    if (V_active.find(u) == V_active.end())
+                        F.insert(u);
+                }
+                for (int w : edges.second)
+                {
+                    if (error_nodes.count(w))
+                        continue;
+                    _add_edge(f, w);
+                    if (V_active.find(w) == V_active.end())
+                        F.insert(w);
+                }
+            }
             continue;
         }
 

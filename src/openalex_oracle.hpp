@@ -9,6 +9,7 @@
 class OpenAlexOracle : public IGraphOracle
 {
     std::unordered_map<int, std::pair<std::vector<int>, std::vector<int>>> _cache;
+    std::mutex cache_mtx;
 
     static std::size_t WriteCallback(void *contents, std::size_t size, std::size_t nmemb, void *userp);
     std::string fetch_url(const std::string &url, int max_retries = 3);
@@ -17,5 +18,5 @@ class OpenAlexOracle : public IGraphOracle
 
 public:
     explicit OpenAlexOracle(int max_in = 1500);
-    const std::pair<std::vector<int>, std::vector<int>> &query(int v_int) override;
+    std::pair<std::vector<int>, std::vector<int>> query(int v_int) override;
 };

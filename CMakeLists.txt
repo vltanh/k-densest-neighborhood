@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(KDensestSolver CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -9,8 +9,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 1. External Dependencies
 # ==============================================================================
 find_package(CURL REQUIRED)
+find_package(Threads REQUIRED)
+find_package(OpenMP REQUIRED)
 
-# B. nlohmann/json (Fetched directly as a single header to bypass CMake 4.0+ errors)
+# B. nlohmann/json
 set(JSON_INCLUDE_DIR ${CMAKE_BINARY_DIR}/external/json/include)
 set(JSON_HEADER_FILE ${JSON_INCLUDE_DIR}/nlohmann/json.hpp)
 if(NOT EXISTS ${JSON_HEADER_FILE})
@@ -37,7 +39,7 @@ if(NOT GUROBI_CXX_LIB OR NOT GUROBI_C_LIB)
 endif()
 
 # ==============================================================================
-# 2. Target Definition (Pointing strictly to src/)
+# 2. Target Definition
 # ==============================================================================
 add_executable(solver
     src/main.cpp
@@ -54,6 +56,8 @@ target_include_directories(solver PRIVATE src ${GUROBI_INCLUDE_DIRS} ${JSON_INCL
 target_link_libraries(solver
     PRIVATE
     CURL::libcurl
+    Threads::Threads
+    OpenMP::OpenMP_CXX
     ${GUROBI_CXX_LIB}
     ${GUROBI_C_LIB}
 )

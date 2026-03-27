@@ -11,8 +11,9 @@ void SimulationOracle::add_db_edge(const std::string &u, const std::string &v)
     db_adj_in[v].push_back(u);
 }
 
-const std::pair<std::vector<int>, std::vector<int>> &SimulationOracle::query(int v_int)
+std::pair<std::vector<int>, std::vector<int>> SimulationOracle::query(int v_int)
 {
+    std::lock_guard<std::mutex> lock(cache_mtx);
     auto [it, inserted] = _cache.try_emplace(v_int);
     if (!inserted)
         return it->second;

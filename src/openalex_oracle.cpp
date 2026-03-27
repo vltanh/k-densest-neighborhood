@@ -100,11 +100,14 @@ std::string OpenAlexOracle::url_encode(const std::string &value)
     return escaped.str();
 }
 
-const std::pair<std::vector<int>, std::vector<int>> &OpenAlexOracle::query(int v_int)
+std::pair<std::vector<int>, std::vector<int>> OpenAlexOracle::query(int v_int)
 {
-    auto [it, inserted] = _cache.try_emplace(v_int);
-    if (!inserted)
-        return it->second;
+    {
+        std::lock_guard<std::mutex> lock(cache_mtx);
+        auto it = _cache.find(v_int);
+        if (it != _cache.end())
+            return it->second;
+    }
 
     queries_made++;
     std::string v_str = mapper.get_str(v_int);
@@ -175,6 +178,6 @@ const std::pair<std::vector<int>, std::vector<int>> &OpenAlexOracle::query(int v
                                    std::chrono::high_resolution_clock::now() - io_start)
                                    .count();
 
-    it->second = {int_preds, int_succs};
-    return it->second;
+    std::lock_guard<std::mutex> lock(cache_mtx);
+    return _cache.emplace(v_int, std::make_pair(int_preds, int_succs)).first->second;
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include <stdexcept>
 #include "gurobi_c++.h"
+#include <curl/curl.h>
 
 using namespace std;
 
@@ -63,6 +64,8 @@ static size_t load_edge_csv(SimulationOracle &oracle, const string &path)
 
 int main(int argc, char *argv[])
 {
+    curl_global_init(CURL_GLOBAL_ALL);
+
     // ---------------------------------------------------------
     // 1. Default Parameter Initialization
     // ---------------------------------------------------------
@@ -288,5 +291,6 @@ int main(int argc, char *argv[])
         cerr << "[" << get_timestamp() << "] Exception: " << e.what() << endl;
     }
 
+    curl_global_cleanup();
     return 0;
 }

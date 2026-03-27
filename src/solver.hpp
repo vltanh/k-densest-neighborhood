@@ -52,8 +52,6 @@ private:
     int _count_edges_in(const std::unordered_set<int> &nodes);
     double _density(const std::unordered_set<int> &nodes);
     double _parametric_obj(const std::unordered_set<int> &nodes, double lambda_val);
-    void _expand_node(int f);
-
     // _sync_rmp_structure helpers
     bool _register_new_nodes(std::vector<int> &new_nodes);
     bool _register_pending_edges();
