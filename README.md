@@ -1,6 +1,6 @@
 ## Densest Community Search
 
-![Example of the Web GUI](imgs/example.jpeg)
+![Example of the Web GUI](imgs/example.jpg)
 
 This repository implements exact and heuristic solvers for the **K-Densest Subgraph** problem on directed graphs, along with a node classification application using the discovered dense communities as neighborhoods.
 
