@@ -113,8 +113,6 @@ std::pair<std::vector<int>, std::vector<int>> OpenAlexOracle::query(int v_int)
     std::string v_str = mapper.get_str(v_int);
     std::vector<int> int_preds, int_succs;
 
-    auto io_start = std::chrono::high_resolution_clock::now();
-
     // Outgoing edges
     std::string out_response = fetch_url("https://api.openalex.org/works/" + v_str);
     try
@@ -173,10 +171,6 @@ std::pair<std::vector<int>, std::vector<int>> OpenAlexOracle::query(int v_int)
             throw std::runtime_error("JSON Parse Error (In-Edges Paginated): " + std::string(e.what()));
         }
     }
-
-    cumulative_network_time += std::chrono::duration<double>(
-                                   std::chrono::high_resolution_clock::now() - io_start)
-                                   .count();
 
     std::lock_guard<std::mutex> lock(cache_mtx);
     return _cache.emplace(v_int, std::make_pair(int_preds, int_succs)).first->second;

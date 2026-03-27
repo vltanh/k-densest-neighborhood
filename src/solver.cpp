@@ -458,20 +458,14 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
         sum_x_bar += val;
 
     double omega = -2.0 * lambda_val * sum_x_bar - pi;
+    vector<pair<double, int>> candidates;
 
-    std::vector<int> F_vec(F.begin(), F.end());
-    int max_threads = omp_get_max_threads();
-    std::vector<std::vector<std::pair<double, int>>> local_candidates(max_threads);
-
-#pragma omp parallel for schedule(static, 1024)
-    for (size_t i = 0; i < F_vec.size(); i++)
+    for (int f : F)
     {
-        int f = F_vec[i];
         if (v0_set.find(f) != v0_set.end())
             continue;
 
         double frac_deg = 0.0;
-
         auto out_it = adj_out.find(f);
         if (out_it != adj_out.end())
         {
@@ -482,7 +476,6 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
                     frac_deg += x_it->second;
             }
         }
-
         auto in_it = adj_in.find(f);
         if (in_it != adj_in.end())
         {
@@ -496,16 +489,7 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
 
         double rc = frac_deg + omega;
         if (rc > tol)
-        {
-            int tid = omp_get_thread_num();
-            local_candidates[tid].push_back({rc, f});
-        }
-    }
-
-    std::vector<std::pair<double, int>> candidates;
-    for (int i = 0; i < max_threads; i++)
-    {
-        candidates.insert(candidates.end(), local_candidates[i].begin(), local_candidates[i].end());
+            candidates.push_back({rc, f});
     }
 
     int dynamic_limit = V_active.size() * cg_batch_fraction;
@@ -661,35 +645,53 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         {
             stats.total_columns_added += top_f.size();
 
-            std::vector<std::future<std::pair<int, std::pair<std::vector<int>, std::vector<int>>>>> futures;
+            // 1. Define a clean return structure for the threads
+            struct AsyncResult
+            {
+                int node_id;
+                std::pair<std::vector<int>, std::vector<int>> edges;
+                bool has_error;
+                std::string error_msg;
+            };
+
+            std::vector<std::future<AsyncResult>> futures;
 
             for (int f : top_f)
             {
                 if (error_nodes.count(f))
                     continue;
 
-                futures.push_back(std::async(std::launch::async, [this, f]()
+                futures.push_back(std::async(std::launch::async, [this, f]() -> AsyncResult
                                              {
                     try {
                         auto edges = oracle.query(f);
-                        return std::make_pair(f, edges);
+                        return {f, edges, false, ""};
+                    } catch (const std::exception& e) {
+                        return {f, {}, true, e.what()}; 
                     } catch (...) {
-                        return std::make_pair(f, std::pair<std::vector<int>, std::vector<int>>{}); 
+                        return {f, {}, true, "Unknown API error."}; 
                     } }));
             }
 
+            auto t_net_start = std::chrono::high_resolution_clock::now();
+
+            // 2. Await threads and safely process errors on the main thread
             for (auto &fut : futures)
             {
                 auto result = fut.get();
-                int f = result.first;
-                auto edges = result.second;
+                int f = result.node_id;
 
-                if (edges.first.empty() && edges.second.empty())
+                if (result.has_error)
                 {
+                    std::cout << "[" << get_timestamp() << "] Blacklisting node "
+                              << oracle.mapper.get_str(f) << " due to API error: "
+                              << result.error_msg << std::endl;
                     error_nodes.insert(f);
                     F.erase(f);
                     continue;
                 }
+
+                auto edges = result.edges;
 
                 V_active.insert(f);
                 F.erase(f);
@@ -711,6 +713,11 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
                         F.insert(w);
                 }
             }
+
+            oracle.cumulative_network_time += std::chrono::duration<double>(
+                                                  std::chrono::high_resolution_clock::now() - t_net_start)
+                                                  .count();
+
             continue;
         }
 
