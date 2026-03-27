@@ -25,6 +25,7 @@ export default function App() {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [params, setParams] = useState(DEFAULT_PARAMS);
   const [hoveredNode, setHoveredNode] = useState(null);
+  const [clickedNode, setClickedNode] = useState(null);
   const [modalContent, setModalContent] = useState(null);
 
   const { sidebarWidth, setSidebarWidth, setIsDraggingSidebar,
@@ -71,7 +72,9 @@ export default function App() {
           graphData={graphData}
           queryNode={params.queryNode}
           error={error}
+          hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
+          setClickedNode={setClickedNode}
           heightPct={100 - ledgerHeightPct}
         />
 
@@ -90,6 +93,7 @@ export default function App() {
           error={error}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
+          clickedNode={clickedNode}
           onDetails={(node) => setModalContent({ type: 'abstract', paper: node })}
           onBib={fetchBibtex}
           heightPct={ledgerHeightPct}

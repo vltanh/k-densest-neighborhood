@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import * as d3 from 'd3';
 import { ZoomIn, ZoomOut, Maximize, Download, BarChart2 } from 'lucide-react';
 
-export default function GraphView({ graphData, queryNode, error, setHoveredNode, heightPct }) {
+export default function GraphView({ graphData, queryNode, error, hoveredNode, setHoveredNode, setClickedNode, heightPct }) {
   const svgRef = useRef();
   const zoomBehaviorRef = useRef(null);
 
@@ -39,23 +39,67 @@ export default function GraphView({ graphData, queryNode, error, setHoveredNode,
 
     const { width, height } = svg.node().getBoundingClientRect();
 
+    // 1. Precise Date Parsing for Sub-Day sorting
+    const getEpoch = (n) => {
+      if (n.date && n.date !== 'N/A') return new Date(n.date).getTime();
+      if (n.year && n.year !== 'N/A') return new Date(n.year, 0, 1).getTime();
+      return new Date(2000, 0, 1).getTime();
+    };
+
+    // 2. Rank Spreading Algorithm (Prevents cramping & spilling)
+    const coreNodes = graphData.nodes.filter(n => n.type === 'core');
+    coreNodes.sort((a, b) => getEpoch(a) - getEpoch(b));
+    
+    const rankMap = new Map();
+    coreNodes.forEach((n, i) => rankMap.set(n.id, i));
+
+    // Guarantee enough space so collision radius (35) doesn't cause immediate overlap
+    const xSpacing = Math.max(70, (width * 0.8) / Math.max(1, coreNodes.length - 1));
+    const totalWidth = xSpacing * (coreNodes.length - 1);
+    const startX = (width - totalWidth) / 2;
+
+    const nodes = graphData.nodes.map(d => {
+      const copy = Object.create(d);
+      if (copy.type === 'core') {
+        const rank = rankMap.get(copy.id);
+        copy.targetX = startX + rank * xSpacing;
+        copy.x = copy.targetX;
+        // Stagger above/below to seed charge-driven vertical spread deterministically
+        copy.y = height / 2 + (rank % 2 === 0 ? 1 : -1) * (100 + Math.random() * 60);
+      } else {
+        copy.y = height / 2;
+        copy.targetX = width / 2;
+      }
+      return copy;
+    });
+
+    const links = graphData.edges.filter(d => d.source !== d.target).map(d => Object.create(d));
+
     const defs = svg.append('defs');
     defs.append('marker').attr('id', 'arrow-core').attr('viewBox', '0 -5 10 10').attr('refX', 10).attr('refY', 0).attr('orient', 'auto').attr('markerWidth', 6).attr('markerHeight', 6).append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#6b7280');
     defs.append('marker').attr('id', 'arrow-ghost').attr('viewBox', '0 -5 10 10').attr('refX', 10).attr('refY', 0).attr('orient', 'auto').attr('markerWidth', 5).attr('markerHeight', 5).append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#d1d5db');
 
     const g = svg.append('g');
-    const zoom = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (e) => g.attr('transform', e.transform));
+    
+    // Auto-frame the widened graph on load
+    const initialScale = totalWidth > width ? width / (totalWidth + 200) : 1;
+    const initialTransform = d3.zoomIdentity.translate(width/2 - (width/2 * initialScale), height/2 - (height/2 * initialScale)).scale(initialScale);
+    
+    const zoom = d3.zoom().scaleExtent([0.05, 4]).on('zoom', (e) => g.attr('transform', e.transform));
     svg.call(zoom);
+    svg.call(zoom.transform, initialTransform);
     zoomBehaviorRef.current = zoom;
 
-    const nodes = graphData.nodes.map(d => Object.create(d));
-    const links = graphData.edges.filter(d => d.source !== d.target).map(d => Object.create(d));
-
+    // 3. Physics tuned for vertical blooming
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'core' ? 140 : 50))
-      .force('charge', d3.forceManyBody().strength(d => d.type === 'core' ? -800 : -20))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 30 : 6));
+      .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'core' ? 120 : 40))
+      // Stronger charge forces them out vertically
+      .force('charge', d3.forceManyBody().strength(d => d.type === 'core' ? -1200 : -20))
+      // Ultra-weak Y gravity allows the charge to push them tall
+      .force('y', d3.forceY(height / 2).strength(0.02))
+      // Strong X locks chronological order, but 0.8 allows a tiny bit of horizontal sliding to relieve pressure
+      .force('x', d3.forceX(d => d.type === 'core' ? d.targetX : width/2).strength(d => d.type === 'core' ? 0.8 : 0.01))
+      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 35 : 8));
 
     const link = g.append('g').selectAll('line').data(links).join('line')
       .attr('stroke', d => d.type === 'core' ? '#9ca3af' : '#d1d5db')
@@ -65,6 +109,7 @@ export default function GraphView({ graphData, queryNode, error, setHoveredNode,
       .attr('marker-end', d => d.type === 'core' ? 'url(#arrow-core)' : 'url(#arrow-ghost)');
 
     const node = g.append('g').selectAll('circle').data(nodes).join('circle')
+      .attr('class', 'graph-node')
       .attr('r', d => d.type === 'core' ? 24 : 4)
       .attr('fill', d => d.type === 'core' ? (d.id === queryNode ? '#ef4444' : '#4f46e5') : '#e5e7eb')
       .attr('stroke', d => d.type === 'core' ? '#fff' : 'none')
@@ -81,7 +126,10 @@ export default function GraphView({ graphData, queryNode, error, setHoveredNode,
       .attr('fill', '#ffffff').attr('font-size', '14px').attr('font-weight', 'bold')
       .style('pointer-events', 'none');
 
-    node.on('mouseover', (_, d) => setHoveredNode(d.id)).on('mouseout', () => setHoveredNode(null));
+    // Link hover to Ledger, and Click to scroll the Ledger
+    node.on('mouseover', (_, d) => setHoveredNode(d.id))
+        .on('mouseout', () => setHoveredNode(null))
+        .on('click', (_, d) => { if (d.type === 'core') setClickedNode(d.id); });
 
     simulation.on('tick', () => {
       link.each(function(d) {
@@ -101,10 +149,20 @@ export default function GraphView({ graphData, queryNode, error, setHoveredNode,
     });
 
     return () => simulation.stop();
-  }, [graphData, queryNode]);
+  }, [graphData, queryNode, setHoveredNode, setClickedNode]);
+
+  // Isolate visual updates for hover
+  useEffect(() => {
+    if (!svgRef.current) return;
+    d3.select(svgRef.current).selectAll('.graph-node')
+      .transition().duration(200)
+      .attr('stroke', d => d.id === hoveredNode ? '#f59e0b' : (d.type === 'core' ? '#fff' : 'none'))
+      .attr('stroke-width', d => d.id === hoveredNode ? 4 : 2)
+      .attr('r', d => d.type === 'core' ? (d.id === hoveredNode ? 28 : 24) : 4);
+  }, [hoveredNode]);
 
   return (
-    <div style={{ height: `${heightPct}%` }} className="w-full relative">
+    <div style={{ height: `${heightPct}%` }} className="w-full relative overflow-hidden">
       {graphData.nodes.length > 0 && (
         <div className="absolute top-4 left-4 z-10 flex gap-4 pointer-events-none">
           <div className="bg-white/90 backdrop-blur px-4 py-2 rounded shadow-sm border border-gray-200 pointer-events-auto flex items-center gap-3">
