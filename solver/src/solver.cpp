@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <cmath>
 #include <chrono>
+#include <climits>
+#include <limits>
 
 using namespace std;
 
@@ -151,6 +153,11 @@ void FullBranchAndPriceSolver::_init_global_model()
 
     GRBLinExpr expr = 0;
     size_constr = rmp->addConstr(expr >= k, "size_k");
+
+    // Fix the optimisation sense once. Per-variable Obj coefficients are set
+    // at addVar time (y = 1, w = −2λ) and adjusted only when λ changes, so we
+    // never need to rebuild the full objective expression afterwards.
+    rmp->setObjective(GRBLinExpr(0.0), GRB_MAXIMIZE);
 }
 
 // ── Density Utilities ─────────────────────────────────────────────────────────
@@ -195,61 +202,112 @@ double FullBranchAndPriceSolver::_parametric_obj(const unordered_set<int> &nodes
 // removal strictly improves the metric. The query node is never removed.
 // maximize_density=true uses d(S) (for the BFS seed); false uses f(S, λ) (for
 // B&B integer solutions).
+//
+// Implementation: maintains an internal-degree cache so the greedy step is O(|S|)
+// per removal instead of O(|S|²·E). For both metrics, the node that maximises
+// improvement when removed is exactly the node with the smallest internal degree
+// (i.e. the fewest intra-set incident directed edges), since for fixed (E, n):
+//   Δ density = 2E·(n-1)/(n(n-1)²(n-2)) − d_u/((n-1)(n-2))   (decreasing in d_u)
+//   Δ f(S,λ)  = 2λ(n-1) − d_u                                 (decreasing in d_u)
 void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density)
 {
     if (sol_nodes.size() <= (size_t)k)
         return;
 
-    bool changed = true;
-    int initial_size = sol_nodes.size();
-    double initial_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+    // Precompute internal degree per node and the directed edge count E once.
+    // For each directed edge u→v inside S, we bump both internal_deg[u] and
+    // internal_deg[v], so the sum over all nodes equals 2·E. When a node is
+    // removed, it loses exactly internal_deg[u] directed edges.
+    unordered_map<int, int> internal_deg;
+    internal_deg.reserve(sol_nodes.size() * 2);
+    for (int u : sol_nodes)
+        internal_deg[u] = 0;
+
+    int E = 0;
+    for (int u : sol_nodes)
+    {
+        auto it = adj_out.find(u);
+        if (it == adj_out.end())
+            continue;
+        for (int v : it->second)
+        {
+            if (sol_nodes.find(v) != sol_nodes.end())
+            {
+                ++E;
+                ++internal_deg[u];
+                ++internal_deg[v];
+            }
+        }
+    }
+
+    auto metric_for = [&](int n, int e) -> double
+    {
+        if (maximize_density)
+            return (n < 2) ? 0.0 : (double)e / ((double)n * (n - 1));
+        return (double)e - lambda_val * ((double)n * (n - 1));
+    };
+
+    int initial_size = (int)sol_nodes.size();
+    double initial_metric = metric_for(initial_size, E);
     int nodes_removed = 0;
 
     cout << "[" << get_timestamp() << "]     > Pruning discrete solution (Initial Size: " << initial_size
          << " | " << (maximize_density ? "Density: " : "Param Obj: ") << fixed << setprecision(6) << initial_metric << ")" << endl;
 
-    while (changed && sol_nodes.size() > (size_t)k)
+    while (sol_nodes.size() > (size_t)k)
     {
-        changed = false;
+        int n = (int)sol_nodes.size();
+
+        // Argmin internal_deg (over candidates ≠ q) is the node whose removal
+        // maximises improvement for both metrics.
         int worst_node = -1;
-        double best_improvement = 1e-7;
-
-        double current_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
-
-        vector<int> candidate_nodes(sol_nodes.begin(), sol_nodes.end());
-
-        for (int u : candidate_nodes)
+        int worst_deg = INT_MAX;
+        for (int u : sol_nodes)
         {
             if (u == q)
                 continue;
-
-            sol_nodes.erase(u);
-            double new_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
-            sol_nodes.insert(u);
-
-            double improvement = new_metric - current_metric;
-            if (improvement > best_improvement)
+            int d = internal_deg[u];
+            if (d < worst_deg)
             {
-                best_improvement = improvement;
+                worst_deg = d;
                 worst_node = u;
             }
         }
+        if (worst_node == -1)
+            break;
 
-        if (worst_node != -1)
-        {
-            sol_nodes.erase(worst_node);
-            changed = true;
-            nodes_removed++;
+        double cur_metric = metric_for(n, E);
+        double new_metric = metric_for(n - 1, E - worst_deg);
+        double improvement = new_metric - cur_metric;
+        if (improvement <= 1e-7)
+            break;
 
-            cout << "[" << get_timestamp() << "]       - Pruned node " << oracle.mapper.get_str(worst_node)
-                 << " (Improvement: +" << fixed << setprecision(6) << best_improvement
-                 << " | New Size: " << sol_nodes.size() << ")" << endl;
-        }
+        // Commit the removal: delete the node, shrink E, and decrement the
+        // internal degree of every neighbour (once per incident directed edge).
+        sol_nodes.erase(worst_node);
+        E -= worst_deg;
+
+        auto out_it = adj_out.find(worst_node);
+        if (out_it != adj_out.end())
+            for (int v : out_it->second)
+                if (sol_nodes.find(v) != sol_nodes.end())
+                    --internal_deg[v];
+        auto in_it = adj_in.find(worst_node);
+        if (in_it != adj_in.end())
+            for (int v : in_it->second)
+                if (sol_nodes.find(v) != sol_nodes.end())
+                    --internal_deg[v];
+        internal_deg.erase(worst_node);
+
+        ++nodes_removed;
+        cout << "[" << get_timestamp() << "]       - Pruned node " << oracle.mapper.get_str(worst_node)
+             << " (Improvement: +" << fixed << setprecision(6) << improvement
+             << " | New Size: " << sol_nodes.size() << ")" << endl;
     }
 
     if (nodes_removed > 0)
     {
-        double final_metric = maximize_density ? _density(sol_nodes) : _parametric_obj(sol_nodes, lambda_val);
+        double final_metric = metric_for((int)sol_nodes.size(), E);
         cout << "[" << get_timestamp() << "]     > Pruning complete. Removed " << nodes_removed
              << " nodes. (Final Size: " << sol_nodes.size()
              << " | " << (maximize_density ? "Density: " : "Param Obj: ") << fixed << setprecision(6) << final_metric << ")" << endl;
@@ -329,6 +387,8 @@ bool FullBranchAndPriceSolver::_register_new_nodes(vector<int> &new_nodes)
 
 // Processes pending_edges: for each edge (u, v) where both endpoints already
 // have x_vars, adds y_{uv} ∈ [0,1] with y_{uv} ≤ x_u and y_{uv} ≤ x_v.
+// Each y contributes +1 to the objective, so we set its Obj coefficient at
+// addVar time rather than rebuilding the objective later.
 // Edges whose endpoints are not yet in the RMP remain in pending_edges.
 // Returns true if any y_vars were added.
 bool FullBranchAndPriceSolver::_register_pending_edges()
@@ -341,7 +401,7 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
         {
             if (!y_vars.count(uv))
             {
-                GRBVar yvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                GRBVar yvar = rmp->addVar(0.0, 1.0, 1.0, GRB_CONTINUOUS, "");
                 rmp->addConstr(yvar <= x_vars[uv.first]);
                 rmp->addConstr(yvar <= x_vars[uv.second]);
                 y_vars[uv] = yvar;
@@ -360,13 +420,17 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
 
 // Adds a w_{uv} ∈ [0,1] variable for every unordered pair {u, v} that involves
 // at least one node from new_nodes. w_{uv} linearises the product x_u · x_v via
-// the McCormick lower bound w_{uv} ≥ x_u + x_v − 1. Updates synced_nodes.
-// Returns true if any w_vars were added.
-bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
+// the McCormick lower bound w_{uv} ≥ x_u + x_v − 1. Each w contributes
+// −2λ to the objective, so we set its Obj coefficient at addVar time using
+// the current λ; _update_objective only has to bulk-adjust existing w vars
+// when λ changes between Dinkelbach iterations.
+// Updates synced_nodes. Returns true if any w_vars were added.
+bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes, double lambda_val)
 {
     if (new_nodes.empty())
         return false;
 
+    const double w_obj_coeff = -2.0 * lambda_val;
     bool changed = false;
 
     // Pairs between new nodes and already-synced nodes
@@ -377,7 +441,7 @@ bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
             pair<int, int> uv = (u < v) ? make_pair(u, v) : make_pair(v, u);
             if (!w_vars.count(uv))
             {
-                GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                GRBVar wvar = rmp->addVar(0.0, 1.0, w_obj_coeff, GRB_CONTINUOUS, "");
                 rmp->addConstr(wvar >= x_vars[uv.first] + x_vars[uv.second] - 1);
                 w_vars[uv] = wvar;
                 w_obj_terms.push_back(wvar);
@@ -396,7 +460,7 @@ bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
             pair<int, int> uv = {u, v};
             if (!w_vars.count(uv))
             {
-                GRBVar wvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                GRBVar wvar = rmp->addVar(0.0, 1.0, w_obj_coeff, GRB_CONTINUOUS, "");
                 rmp->addConstr(wvar >= x_vars[u] + x_vars[v] - 1);
                 w_vars[uv] = wvar;
                 w_obj_terms.push_back(wvar);
@@ -410,40 +474,41 @@ bool FullBranchAndPriceSolver::_register_pair_vars(const vector<int> &new_nodes)
     return changed;
 }
 
-// Rebuilds and sets the Gurobi objective for the current density estimate λ:
+// Adjusts the objective for a new density estimate λ. The target objective is:
 //   maximise  Σ y_{uv}  −  2λ · Σ w_{uv}
 //
-// The y-sum counts directed edges inside S; the w-sum approximates |S|·(|S|−1)
-// via the linearised product variables, so the objective tracks the parametric
-// problem f(S, λ) = |E(S)| − λ·|S|·(|S|−1).
+// y-coefficients are fixed at 1 and set when each y is created, so we only
+// need to touch the w-coefficients. New w vars are already registered with the
+// right coefficient in _register_pair_vars, so when λ is unchanged this is a
+// no-op; when λ changed between Dinkelbach iterations, we bulk-reset every
+// existing w var's Obj attribute via per-var .set() (still O(|w|) Gurobi calls
+// but O(1) expression construction — vs. the previous O(|y| + |w|) rebuild
+// through a full GRBLinExpr on every BB node).
 void FullBranchAndPriceSolver::_update_objective(double lambda_val)
 {
-    rmp->update();
-    GRBLinExpr obj_expr = 0;
-    if (!y_obj_terms.empty())
-    {
-        vector<double> coeffs(y_obj_terms.size(), 1.0);
-        obj_expr.addTerms(coeffs.data(), y_obj_terms.data(), y_obj_terms.size());
-    }
+    if (lambda_val == last_lambda)
+        return;
+
     if (!w_obj_terms.empty())
     {
-        vector<double> coeffs(w_obj_terms.size(), -2.0 * lambda_val);
-        obj_expr.addTerms(coeffs.data(), w_obj_terms.data(), w_obj_terms.size());
+        rmp->update();
+        const double new_coeff = -2.0 * lambda_val;
+        for (GRBVar &wvar : w_obj_terms)
+            wvar.set(GRB_DoubleAttr_Obj, new_coeff);
     }
-    rmp->setObjective(obj_expr, GRB_MAXIMIZE);
     last_lambda = lambda_val;
 }
 
-// Syncs RMP structure with the current active set; rebuilds the objective only
-// when structure or lambda changed since the last call.
+// Syncs RMP structure with the current active set. Newly created y/w vars
+// receive their objective coefficient at addVar time, so the only remaining
+// work is a cheap λ-delta check inside _update_objective.
 void FullBranchAndPriceSolver::_sync_rmp_structure(double lambda_val)
 {
     vector<int> new_nodes;
-    bool changed = _register_new_nodes(new_nodes);
-    changed |= _register_pending_edges();
-    changed |= _register_pair_vars(new_nodes);
-    if (changed || lambda_val != last_lambda)
-        _update_objective(lambda_val);
+    _register_new_nodes(new_nodes);
+    _register_pending_edges();
+    _register_pair_vars(new_nodes, lambda_val);
+    _update_objective(lambda_val);
 }
 
 // ── Branch-and-Bound Helpers ──────────────────────────────────────────────────
@@ -571,9 +636,19 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
 //   x̄_u + x̄_v + x̄_w − w̄_{uv} − w̄_{vw} − w̄_{uw} ≤ 1
 // and adds the corresponding cut to the RMP if it is violated by more than 1e-4.
 // Stops after 20 cuts. Returns the number of cuts added.
+//
+// Implementation notes:
+//   * frac_nodes is sorted so we can index pairs by position (i < j) and store
+//     w values in a dense n×n matrix, avoiding repeated unordered_map lookups
+//     deep in the triple loop.
+//   * Each w̄ is fetched from Gurobi exactly once (in the O(n²) prep stage)
+//     instead of O(n³) times as before.
+//   * x_sum ≤ 1 + ε cannot yield a violated cut (since w̄ ≥ 0), so we prune
+//     the j- and k-loops as early as possible.
 int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double> &x_bar)
 {
     vector<int> frac_nodes;
+    frac_nodes.reserve(x_bar.size());
     for (const auto &[v, val] : x_bar)
     {
         if (val > 0.1 && val < 0.9)
@@ -584,32 +659,70 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
         return 0;
     sort(frac_nodes.begin(), frac_nodes.end());
 
-    int n = frac_nodes.size();
+    const int n = (int)frac_nodes.size();
+    constexpr double kMissing = std::numeric_limits<double>::quiet_NaN();
+
+    // Position-indexed cache of x̄_i and w̄_{i,j}. w_mat entries are only filled
+    // for i < j; the diagonal and lower triangle are left as NaN and never read.
+    vector<double> x_vals(n);
+    for (int i = 0; i < n; ++i)
+        x_vals[i] = x_bar.at(frac_nodes[i]);
+
+    vector<double> w_mat((size_t)n * n, kMissing);
+    for (int i = 0; i < n; ++i)
+    {
+        for (int j = i + 1; j < n; ++j)
+        {
+            pair<int, int> uv = {frac_nodes[i], frac_nodes[j]}; // already sorted (i<j → id_i<id_j)
+            auto it = w_vars.find(uv);
+            if (it != w_vars.end())
+                w_mat[(size_t)i * n + j] = it->second.get(GRB_DoubleAttr_X);
+        }
+    }
+
     int cuts_added = 0;
 
-    for (int idx1 = 0; idx1 < n; idx1++)
+    for (int i = 0; i < n; ++i)
     {
-        for (int idx2 = idx1 + 1; idx2 < n; idx2++)
+        const double xi = x_vals[i];
+        for (int j = i + 1; j < n; ++j)
         {
-            for (int idx3 = idx2 + 1; idx3 < n; idx3++)
+            const double xj = x_vals[j];
+            // Tightest upper bound on x_sum: xi + xj + (max remaining x̄).
+            // Since all frac_nodes satisfy x̄ < 0.9, if xi + xj + 0.9 ≤ 1 + 1e-4
+            // no k-choice can produce a violated cut.
+            if (xi + xj + 0.9 <= 1.0 + 1e-4)
+                continue;
+
+            const double wij = w_mat[(size_t)i * n + j];
+            if (std::isnan(wij))
+                continue;
+
+            const double xij = xi + xj;
+
+            for (int kk = j + 1; kk < n; ++kk)
             {
-                int u = frac_nodes[idx1], v = frac_nodes[idx2], w = frac_nodes[idx3];
+                const double xk = x_vals[kk];
+                const double x_sum = xij + xk;
+                if (x_sum <= 1.0 + 1e-4)
+                    continue; // cut would not be violated regardless of w̄
 
-                pair<int, int> uv = (u < v) ? make_pair(u, v) : make_pair(v, u);
-                pair<int, int> vw = (v < w) ? make_pair(v, w) : make_pair(w, v);
-                pair<int, int> uw = (u < w) ? make_pair(u, w) : make_pair(w, u);
-
-                if (w_vars.find(uv) == w_vars.end() || w_vars.find(vw) == w_vars.end() || w_vars.find(uw) == w_vars.end())
+                const double wjk = w_mat[(size_t)j * n + kk];
+                if (std::isnan(wjk))
+                    continue;
+                const double wik = w_mat[(size_t)i * n + kk];
+                if (std::isnan(wik))
                     continue;
 
-                double x_sum = x_bar.at(u) + x_bar.at(v) + x_bar.at(w);
-                double w_sum = w_vars[uv].get(GRB_DoubleAttr_X) + w_vars[vw].get(GRB_DoubleAttr_X) + w_vars[uw].get(GRB_DoubleAttr_X);
-
+                const double w_sum = wij + wjk + wik;
                 if (x_sum - w_sum > 1.0 + 1e-4)
                 {
+                    int u = frac_nodes[i], v = frac_nodes[j], w = frac_nodes[kk];
+                    pair<int, int> uv = {u, v};
+                    pair<int, int> vw = {v, w};
+                    pair<int, int> uw = {u, w};
                     rmp->addConstr(x_vars[u] + x_vars[v] + x_vars[w] - w_vars[uv] - w_vars[vw] - w_vars[uw] <= 1.0);
-                    cuts_added++;
-                    if (cuts_added >= 20)
+                    if (++cuts_added >= 20)
                         return cuts_added;
                 }
             }
@@ -756,15 +869,27 @@ pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map
         double diff = abs(val - 0.5);
         double internal_deg = 0.0;
 
-        if (adj_out.count(v))
-            for (int u : adj_out.at(v))
-                if (x_bar.count(u))
-                    internal_deg += x_bar.at(u);
+        auto out_it = adj_out.find(v);
+        if (out_it != adj_out.end())
+        {
+            for (int u : out_it->second)
+            {
+                auto x_it = x_bar.find(u);
+                if (x_it != x_bar.end())
+                    internal_deg += x_it->second;
+            }
+        }
 
-        if (adj_in.count(v))
-            for (int u : adj_in.at(v))
-                if (x_bar.count(u))
-                    internal_deg += x_bar.at(u);
+        auto in_it = adj_in.find(v);
+        if (in_it != adj_in.end())
+        {
+            for (int u : in_it->second)
+            {
+                auto x_it = x_bar.find(u);
+                if (x_it != x_bar.end())
+                    internal_deg += x_it->second;
+            }
+        }
 
         bool is_hanging = (internal_deg < 2.0 * lambda_val);
 

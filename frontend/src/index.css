@@ -1,1 +1,26 @@
 @import "tailwindcss";
+
+/* Thin dark scrollbar for the telemetry log pane and paper-modal body.
+   Referenced as `class="custom-scrollbar"` from Sidebar/TelemetryPanel/PaperModal. */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.45) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(99, 102, 241, 0.35);
+  border-radius: 999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(99, 102, 241, 0.6);
+}

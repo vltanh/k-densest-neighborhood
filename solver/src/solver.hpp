@@ -57,7 +57,7 @@ private:
     // _sync_rmp_structure helpers
     bool _register_new_nodes(std::vector<int> &new_nodes);
     bool _register_pending_edges();
-    bool _register_pair_vars(const std::vector<int> &new_nodes);
+    bool _register_pair_vars(const std::vector<int> &new_nodes, double lambda_val);
     void _update_objective(double lambda_val);
 
     void _sync_rmp_structure(double lambda_val);

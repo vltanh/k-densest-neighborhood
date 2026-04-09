@@ -1,25 +1,45 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { API_BASE_URL } from '../constants';
+import { parseLogLine, TELEMETRY_INITIAL } from '../utils/telemetryParser';
+
+// Cap the in-memory log buffer so a long Dinkelbach run doesn't balloon
+// React state and re-render thousands of <div>s per streamed line. The last
+// MAX_LOG_LINES are kept; older ones scroll out of history silently.
+const MAX_LOG_LINES = 2000;
 
 export function useSubgraphExtractor(sessionId) {
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [logs, setLogs] = useState([]);
+  const [telemetry, setTelemetry] = useState(TELEMETRY_INITIAL);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const abortControllerRef = useRef(null);
 
-  const processPacket = (line) => {
+  const processPacket = useCallback((line) => {
     if (!line.trim()) return;
     try {
       const packet = JSON.parse(line);
-      if (packet.type === 'log') setLogs(prev => [...prev, packet.content]);
-      else if (packet.type === 'result') setGraphData(packet.content);
-      else if (packet.type === 'error') setError(packet.content);
+      if (packet.type === 'log') {
+        setLogs(prev => {
+          const next = [...prev, packet.content];
+          return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
+        });
+        setTelemetry(prev => parseLogLine(prev, packet.content));
+      } else if (packet.type === 'result') {
+        setGraphData(packet.content);
+      } else if (packet.type === 'error') {
+        setError(packet.content);
+        setTelemetry(prev => ({ ...prev, status: 'error', finishedAt: Date.now() }));
+      }
     } catch (e) { console.error('Parse error:', e); }
-  };
+  }, []);
 
   const extractSubgraph = async ({ queryNode, k, timeLimit, nodeLimit, maxInEdges, gapTol, dinkelbachIter, cgBatchFrac, cgMinBatch, cgMaxBatch, tol }) => {
-    setLoading(true); setError(null); setLogs([]); setGraphData({ nodes: [], edges: [] });
+    setLoading(true);
+    setError(null);
+    setLogs([]);
+    setGraphData({ nodes: [], edges: [] });
+    setTelemetry({ ...TELEMETRY_INITIAL, status: 'running', startedAt: Date.now() });
     abortControllerRef.current = new AbortController();
 
     const pi = (v, def) => { const n = parseInt(v);   return isNaN(n) ? def : n; };
@@ -65,9 +85,22 @@ export function useSubgraphExtractor(sessionId) {
       }
       if (buffer.trim()) processPacket(buffer);
 
+      // Normal end of stream. Leave telemetry.status intact if the parser
+      // already set it to 'converged' via a "Status: Converged" log line;
+      // otherwise mark it as finished-but-unknown by stamping finishedAt.
+      setTelemetry(prev => ({
+        ...prev,
+        status: prev.status === 'running' ? 'converged' : prev.status,
+        finishedAt: prev.finishedAt ?? Date.now(),
+      }));
     } catch (err) {
-      if (err.name === 'AbortError') setLogs(prev => [...prev, '\n[!] Connection closed by user.']);
-      else setError(err.message);
+      if (err.name === 'AbortError') {
+        setLogs(prev => [...prev, '\n[!] Connection closed by user.']);
+        setTelemetry(prev => ({ ...prev, status: 'stopped', finishedAt: Date.now() }));
+      } else {
+        setError(err.message);
+        setTelemetry(prev => ({ ...prev, status: 'error', finishedAt: Date.now() }));
+      }
     } finally {
       setLoading(false);
     }
@@ -80,5 +113,5 @@ export function useSubgraphExtractor(sessionId) {
     setLoading(false);
   };
 
-  return { graphData, logs, loading, error, extractSubgraph, stopExtraction };
+  return { graphData, logs, telemetry, loading, error, extractSubgraph, stopExtraction };
 }

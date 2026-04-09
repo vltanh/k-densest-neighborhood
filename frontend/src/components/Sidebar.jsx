@@ -1,18 +1,12 @@
-import React, { useEffect, useRef } from 'react';
-import { Activity, Terminal, Settings2, Square } from 'lucide-react';
+import { Activity, Settings2, Square } from 'lucide-react';
+import TelemetryPanel from './TelemetryPanel';
 
-export default function Sidebar({ width, params, setParams, logs, loading, onExtract, onStop }) {
-  const logsEndRef = useRef(null);
-  
-  useEffect(() => {
-    if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
-
+export default function Sidebar({ width, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
   const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
 
   return (
     <div style={{ width: `${width}px` }} className="bg-gray-900 text-white flex flex-col h-full overflow-hidden shrink-0 shadow-xl z-20">
-      
+
       {/* 1. FIXED HEADER */}
       <div className="px-5 pt-5 pb-4 shrink-0 border-b border-gray-800/80">
         <h1 className="text-xl font-bold flex items-center gap-2 truncate">
@@ -70,19 +64,10 @@ export default function Sidebar({ width, params, setParams, logs, loading, onExt
         </details>
       </div>
 
-      {/* 3. HIGHLY COMPRESSIBLE TERMINAL */}
-      {/* min-h-0 allows the container to compress infinitely when pushed by the options above */}
+      {/* 3. HIGHLY COMPRESSIBLE TELEMETRY */}
+      {/* min-h-0 lets the flex child shrink so the options above can claim space */}
       <div className="px-5 py-4 flex flex-col flex-grow overflow-hidden min-h-0">
-        <div className="flex flex-col flex-grow border border-gray-700 rounded bg-black shadow-inner overflow-hidden min-h-0">
-          <div className="bg-gray-800 px-3 py-1.5 text-[10px] text-gray-400 uppercase tracking-wider flex items-center gap-2 border-b border-gray-700 shrink-0">
-            <Terminal size={12}/> Live Telemetry
-          </div>
-          <div className="p-3 overflow-y-auto custom-scrollbar font-mono text-[10px] text-green-400 leading-relaxed flex-grow whitespace-nowrap min-h-0">
-            {logs.map((log, idx) => <div key={idx} className="whitespace-pre-wrap">{log}</div>)}
-            {loading && <span className="animate-pulse text-green-500">_</span>}
-            <div ref={logsEndRef} />
-          </div>
-        </div>
+        <TelemetryPanel telemetry={telemetry} logs={logs} loading={loading} />
       </div>
 
       {/* 4. FIXED FOOTER */}
