@@ -9,7 +9,7 @@ if __name__ == "__main__":
         description="Hyperparameter sweep for k on validation set."
     )
     parser.add_argument("--dataset", type=str, default="Cora")
-    parser.add_argument("--bin_path", type=str, default="./bin/solver")
+    parser.add_argument("--bin_path", type=str, default="./solver/bin/solver")
     parser.add_argument("--k_min", type=int, default=5)
     parser.add_argument("--k_max", type=int, default=25)
     parser.add_argument("--k_step", type=int, default=5)
