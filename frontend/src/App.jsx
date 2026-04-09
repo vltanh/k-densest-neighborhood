@@ -31,7 +31,7 @@ export default function App() {
   const { sidebarWidth, setSidebarWidth, setIsDraggingSidebar,
           ledgerHeightPct, setLedgerHeightPct, setIsDraggingLedger } = useDragResize();
 
-  const { graphData, logs, loading, error, extractSubgraph, stopExtraction } = useSubgraphExtractor(sessionId);
+  const { graphData, logs, telemetry, loading, error, extractSubgraph, stopExtraction } = useSubgraphExtractor(sessionId);
 
   const fetchBibtex = async (doi) => {
     setModalContent({ type: 'loading_bib' });
@@ -54,6 +54,7 @@ export default function App() {
         params={params}
         setParams={setParams}
         logs={logs}
+        telemetry={telemetry}
         loading={loading}
         onExtract={() => extractSubgraph(params)}
         onStop={stopExtraction}
