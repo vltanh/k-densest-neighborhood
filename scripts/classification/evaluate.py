@@ -19,7 +19,7 @@ if __name__ == "__main__":
         "--split", type=str, required=True, choices=["train", "val", "test"]
     )
     parser.add_argument("--k", type=int, required=True)
-    parser.add_argument("--bin_path", type=str, default="./bin/solver")
+    parser.add_argument("--bin_path", type=str, default="./solver/bin/solver")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument(
         "--weighting",

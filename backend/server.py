@@ -173,9 +173,15 @@ async def fetch_paper_metadata(
     return data_dict
 
 
+# Resolve the compiled C++ solver relative to this file, so the backend can be
+# launched from any working directory (e.g. `python backend/server.py`).
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOLVER_BIN = os.path.join(PROJECT_ROOT, "solver", "bin", "solver")
+
+
 @app.post("/api/extract")
 async def extract_subgraph(req: SolverRequest):
-    bin_path = os.path.join(os.getcwd(), "bin", "solver")
+    bin_path = SOLVER_BIN
     if not os.path.exists(bin_path):
         raise HTTPException(status_code=500, detail="Solver missing.")
     with tempfile.NamedTemporaryFile(

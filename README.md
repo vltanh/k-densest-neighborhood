@@ -1,8 +1,27 @@
 ## Densest Community Search
 
-![Example of the Web GUI](imgs/example.jpg)
+![Example of the Web GUI](docs/imgs/example.jpg)
 
 This repository implements exact and heuristic solvers for the **K-Densest Subgraph** problem on directed graphs, along with a node classification application using the discovered dense communities as neighborhoods.
+
+### Project Layout
+
+```
+k-densest-neighborhood/
+├── solver/                 # C++ branch-and-price solver (CMake)
+│   ├── src/                # C++ sources and headers
+│   ├── CMakeLists.txt
+│   ├── build.sh            # One-shot build script
+│   └── bin/solver          # Compiled executable (after build)
+├── backend/                # FastAPI service wrapping the solver
+│   └── server.py
+├── frontend/               # React + Vite + D3 web GUI
+├── scripts/
+│   ├── classification/     # Node-classification pipeline on CitationFull datasets
+│   └── synthetic/          # Synthetic graph generation and ground-truth evaluation
+└── docs/
+    └── imgs/               # README and documentation assets
+```
 
 ---
 
@@ -26,7 +45,7 @@ An interactive browser-based explorer powered by the C++ solver and the OpenAlex
 **1. Build the C++ solver** (see [C++ Solver](#c-solver) below for prerequisites):
 
 ```bash
-bash build.sh
+bash solver/build.sh
 ```
 
 **2. Install backend dependencies:**
@@ -38,7 +57,7 @@ pip install fastapi uvicorn httpx pydantic
 **3. Install frontend dependencies** (Node ≥ 18 required):
 
 ```bash
-cd kdensest-gui
+cd frontend
 npm install
 ```
 
@@ -47,14 +66,14 @@ npm install
 Start the API server (must be running before the frontend):
 
 ```bash
-python server.py
+python backend/server.py
 # Listening on http://0.0.0.0:8000
 ```
 
 In a separate terminal, start the development server:
 
 ```bash
-cd kdensest-gui
+cd frontend
 npm run dev
 # Open http://localhost:5173
 ```
@@ -62,8 +81,8 @@ npm run dev
 For a production build:
 
 ```bash
-cd kdensest-gui
-npm run build   # output in kdensest-gui/dist/
+cd frontend
+npm run build   # output in frontend/dist/
 ```
 
 ### API Endpoints
@@ -80,7 +99,7 @@ The `VITE_API_URL` environment variable overrides the default backend address (`
 
 ## C++ Solver
 
-Source code lives in `src/` and is built with CMake. The executable is placed at `bin/solver`.
+Source code lives in `solver/src/` and is built with CMake. The executable is placed at `solver/bin/solver`.
 
 ### Algorithm
 
@@ -125,8 +144,10 @@ up to 20 cuts per round, tightening the LP bound before branching.
 ### Build
 
 ```bash
-bash build.sh
+bash solver/build.sh
 ```
+
+The script is location-independent: it `cd`s into its own directory, so it works from the repo root or from `solver/`.
 
 ### Usage
 
@@ -135,13 +156,13 @@ The solver supports two operating modes selected with `--mode`.
 **Simulation mode** (local CSV graph):
 
 ```bash
-./bin/solver --mode sim --input <edge.csv> --query <node_id> --k <k> [--output <out.csv>]
+./solver/bin/solver --mode sim --input <edge.csv> --query <node_id> --k <k> [--output <out.csv>]
 ```
 
 **OpenAlex mode** (live citation API):
 
 ```bash
-./bin/solver --mode openalex --query <openalex_work_id> --k <k> [--output <out.csv>]
+./solver/bin/solver --mode openalex --query <openalex_work_id> --k <k> [--output <out.csv>]
 ```
 
 Required arguments:
@@ -172,7 +193,7 @@ Optional arguments:
 ### Generate a Graph
 
 ```bash
-python scripts/generate_graph.py --out_dir <output_dir> [options]
+python scripts/synthetic/generate_graph.py --out_dir <output_dir> [options]
 ```
 
 - `--out_dir`: Directory to write output files (`edge.csv`, `gt_comm.csv`, `metadata.json`).
@@ -191,7 +212,7 @@ Output files:
 ### Evaluate Solver Against Ground Truth
 
 ```bash
-python scripts/evaluate_solver.py --gt <gt_comm.csv> --pred <pred_comm.csv>
+python scripts/synthetic/evaluate_solver.py --gt <gt_comm.csv> --pred <pred_comm.csv>
 ```
 
 - `--gt`: Path to the ground truth community CSV (`gt_comm.csv`).
@@ -235,7 +256,7 @@ python scripts/classification/tune.py --dataset <dataset_name> --k_min <min_k> -
 - `--k_step`: Step size for k sweep (default: `5`).
 - `--optimize`: Metric to maximize when selecting the best k (`accuracy`, `f1`, `precision`, `recall`; default: `accuracy`).
 - `--weighting`: Voting weight strategy (`uniform` or `distance`; default: `uniform`).
-- `--bin_path`: Path to the compiled solver binary (default: `./bin/solver`).
+- `--bin_path`: Path to the compiled solver binary (default: `./solver/bin/solver`).
 - `--workers`: Number of parallel workers (default: number of CPU cores).
 
 ### 3. Final Evaluation
@@ -250,7 +271,7 @@ python scripts/classification/evaluate.py --dataset <dataset_name> --split <spli
 - `--split`: One of `train`, `val`, or `test`.
 - `--k`: The optimal k found from tuning.
 - `--weighting`: Voting weight strategy (`uniform` or `distance`; default: `uniform`).
-- `--bin_path`: Path to the compiled solver binary (default: `./bin/solver`).
+- `--bin_path`: Path to the compiled solver binary (default: `./solver/bin/solver`).
 - `--workers`: Number of parallel workers (default: number of CPU cores).
 
 Reports accuracy, macro precision, recall, F1, and a per-class classification report. When the solver returns a neighborhood with no training nodes (label starvation), a concentric BFS fallback is triggered automatically; the fallback rate is printed at the end of each run.

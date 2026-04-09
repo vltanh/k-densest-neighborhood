@@ -212,12 +212,13 @@ __marimo__/
 !.vscode/settings.json
 
 # C++ build artifacts
-bin/solver
+solver/bin/solver
+solver/build/
 
 # Node / Vite
-kdensest-gui/node_modules/
-kdensest-gui/dist/
-kdensest-gui/.vite/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
 # Data
 data

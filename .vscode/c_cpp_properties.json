@@ -2,7 +2,7 @@
   "configurations": [
     {
       "name": "Linux",
-      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "compileCommands": "${workspaceFolder}/solver/build/compile_commands.json",
       "compilerPath": "/usr/bin/g++",
       "cppStandard": "c++17",
       "intelliSenseMode": "linux-gcc-x64"
