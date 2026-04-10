@@ -25,7 +25,7 @@ void print_usage(const char *prog_name)
          << "Solver Hyperparameters (Defaults shown):\n"
          << "  --time-limit <float>      Max Branch-and-Bound time in seconds (default: 60.0)\n"
          << "  --node-limit <int>        Max Branch-and-Bound nodes to explore (default: 100000)\n"
-         << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 1500)\n"
+         << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 0)\n"
          << "  --gap-tol <float>         Early stopping relative gap tolerance (default: 1e-4)\n"
          << "  --dinkelbach-iter <int>   Max Dinkelbach (fractional programming) iterations (default: 50)\n"
          << "  --cg-batch-frac <float>   Fraction of active set to price per iteration (default: 0.1)\n"
@@ -74,7 +74,7 @@ int main(int argc, char *argv[])
 
     double time_limit = 60.0;
     int node_limit = 100000;
-    int max_in_edges = 1500;
+    int max_in_edges = 0;
     double gap_tol = 1e-4;
     int dinkelbach_iter = 50;
     double cg_batch_frac = 0.1;

@@ -56,7 +56,7 @@ export function useSubgraphExtractor(sessionId) {
           k:               pi(k,              5),
           time_limit:      pf(timeLimit,       60.0),
           node_limit:      pi(nodeLimit,       100000),
-          max_in_edges:    pi(maxInEdges,      1500),
+          max_in_edges:    pi(maxInEdges,      0),
           gap_tol:         pf(gapTol,          0.0001),
           dinkelbach_iter: pi(dinkelbachIter,  50),
           cg_batch_frac:   pf(cgBatchFrac,     0.1),

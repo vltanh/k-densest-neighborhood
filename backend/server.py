@@ -23,7 +23,7 @@ class SolverRequest(BaseModel):
     k: int = Field(..., ge=2, description="Target subgraph size")
     time_limit: Optional[float] = 60.0
     node_limit: Optional[int] = 100000
-    max_in_edges: Optional[int] = 1500
+    max_in_edges: Optional[int] = 0
     gap_tol: Optional[float] = 1e-4
     dinkelbach_iter: Optional[int] = 50
     cg_batch_frac: Optional[float] = 0.1

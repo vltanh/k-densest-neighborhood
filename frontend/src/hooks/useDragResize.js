@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 export function useDragResize() {
-  const [sidebarWidth, setSidebarWidth] = useState(380);
+  const [sidebarWidth, setSidebarWidth] = useState(460);
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
   const [ledgerHeightPct, setLedgerHeightPct] = useState(40);
   const [isDraggingLedger, setIsDraggingLedger] = useState(false);

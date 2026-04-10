@@ -4,7 +4,6 @@ import { ArrowUp, ArrowDown } from 'lucide-react';
 export default function PaperLedger({ nodes, queryNode, loading, error, hoveredNode, setHoveredNode, clickedNode, onDetails, onBib, heightPct }) {
   const [sortConfig, setSortConfig] = useState({ key: 'displayNum', direction: 'asc' });
 
-  // Auto-scroll when a node is clicked in the graph
   useEffect(() => {
     if (clickedNode) {
       const row = document.getElementById(`ledger-row-${clickedNode}`);
@@ -39,16 +38,16 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
   }, [nodes, sortConfig]);
 
   const SortIcon = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) return <span className="w-4 inline-block" />;
-    return sortConfig.direction === 'asc' 
-      ? <ArrowUp size={12} className="inline ml-1 text-indigo-500" /> 
-      : <ArrowDown size={12} className="inline ml-1 text-indigo-500" />;
+    if (sortConfig.key !== columnKey) return <span className="w-3 inline-block" />;
+    return sortConfig.direction === 'asc'
+      ? <ArrowUp size={11} className="inline ml-1 text-[var(--vermillion)]" />
+      : <ArrowDown size={11} className="inline ml-1 text-[var(--vermillion)]" />;
   };
 
   const Th = ({ columnKey, title, className = "" }) => (
-    <th 
-      onClick={() => requestSort(columnKey)} 
-      className={`px-4 py-3 font-semibold cursor-pointer hover:bg-gray-100 hover:text-gray-700 transition-colors select-none ${className}`}
+    <th
+      onClick={() => requestSort(columnKey)}
+      className={`px-5 py-4 eyebrow text-left text-[var(--ink-dim)] hover:text-[var(--ink)] cursor-pointer select-none transition-colors ${className}`}
     >
       <div className="flex items-center">
         {title} <SortIcon columnKey={columnKey} />
@@ -57,56 +56,128 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
   );
 
   return (
-    <div style={{ height: `${heightPct}%` }} className="bg-white overflow-y-auto">
-      <table className="w-full text-left text-sm text-gray-600 border-collapse">
-        <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10 text-xs uppercase tracking-wider text-gray-500 shadow-sm">
-          <tr>
-            <Th columnKey="displayNum" title="#" className="w-16" />
-            <Th columnKey="id" title="ID" className="w-32" />
-            <Th columnKey="year" title="Year" className="w-24" />
-            <Th columnKey="title" title="Title & Authors" />
-            <Th columnKey="journal" title="Journal" className="w-48" />
-            <Th columnKey="citations" title="Cites" className="w-28 text-right" />
-            <th className="px-4 py-3 font-semibold w-32 text-center">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {sortedNodes.map(node => {
+    <div
+      style={{ height: `${heightPct}%` }}
+      className="overflow-y-auto scrollbar-paper relative bg-[var(--paper)] border-t border-[var(--rule-paper-2)]"
+    >
+      {/* Ledger masthead */}
+      {sortedNodes.length > 0 && (
+        <div className="px-7 pt-7 pb-4 flex items-end justify-between border-b border-[var(--rule-paper)]">
+          <div>
+            <div className="eyebrow text-[var(--ink-dim)] flex items-center">
+              <span>Plate II</span><span className="rule-dot" /><span>The Register</span>
+            </div>
+            <h2 className="font-display text-[36px] leading-none mt-1.5 text-[var(--ink)]">
+              Table of Contents
+            </h2>
+            <p className="text-[14px] text-[var(--ink-soft)] mt-1.5 italic">
+              {sortedNodes.length} {sortedNodes.length === 1 ? 'paper' : 'papers'} in the densest block
+            </p>
+          </div>
+          <div className="eyebrow text-[var(--ink-faint)]">— click column to sort —</div>
+        </div>
+      )}
+
+      <table className="w-full text-left border-collapse">
+        {sortedNodes.length > 0 && (
+          <thead className="sticky top-0 z-10 bg-[var(--paper)]/95 backdrop-blur border-b border-[var(--rule-paper-2)]">
+            <tr>
+              <Th columnKey="displayNum" title="№" className="w-16" />
+              <Th columnKey="year" title="Year" className="w-20" />
+              <Th columnKey="title" title="Title · Authors" />
+              <Th columnKey="journal" title="Venue" className="w-52" />
+              <Th columnKey="citations" title="Cites" className="w-20" />
+              <th className="px-5 py-4 w-36" />
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {sortedNodes.map((node, idx) => {
             const isTarget = hoveredNode === node.id || clickedNode === node.id;
+            const isSeed = node.id === queryNode;
             return (
               <tr
                 id={`ledger-row-${node.id}`}
                 key={node.id}
                 onMouseEnter={() => setHoveredNode(node.id)}
                 onMouseLeave={() => setHoveredNode(null)}
-                className={`transition-colors ${isTarget ? 'bg-indigo-50/80 ring-1 ring-inset ring-indigo-200' : 'hover:bg-gray-50'}`}
+                className={`group border-b border-[var(--rule-paper)] transition-colors ${
+                  isTarget ? 'bg-[var(--paper-2)]' : 'hover:bg-[var(--paper-2)]/60'
+                }`}
               >
-                <td className="px-4 py-4">
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white mx-auto ${node.id === queryNode ? 'bg-red-500' : 'bg-indigo-600'}`}>
-                    {node.displayNum}
+                <td className="px-5 py-5 align-top">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`font-display text-[26px] leading-none tnum ${
+                        isSeed ? 'text-[var(--vermillion)]' : 'text-[var(--ink)]'
+                      }`}
+                    >
+                      {node.displayNum}
+                    </span>
+                    {isSeed && (
+                      <span
+                        className="eyebrow text-[var(--vermillion)] writing-mode-vertical"
+                        style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                      >
+                        seed
+                      </span>
+                    )}
                   </div>
                 </td>
-                <td className="px-4 py-4 font-mono text-xs">{node.id}</td>
-                <td className="px-4 py-4">{node.year}</td>
-                <td className="px-4 py-4">
-                  <div className="font-semibold text-gray-900 mb-1 leading-snug">{node.title}</div>
-                  <div className="text-xs text-gray-500">{node.author}</div>
+                <td className="px-5 py-5 align-top">
+                  <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.year}</span>
                 </td>
-                <td className="px-4 py-4 text-xs italic">{node.journal}</td>
-                <td className="px-4 py-4 text-right font-mono text-xs text-gray-500">{node.citations ? node.citations.toLocaleString() : '-'}</td>
-                <td className="px-4 py-4">
-                  <div className="flex gap-2 justify-center">
-                    <button onClick={() => onDetails(node)} className="px-2 py-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded text-xs font-medium transition-colors shadow-sm">Details</button>
-                    <button onClick={() => onBib(node.doi)}  className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-xs font-medium transition-colors shadow-sm">Bib</button>
+                <td className="px-5 py-5 align-top max-w-0">
+                  <div className="text-[16px] font-semibold leading-[1.3] text-[var(--ink)] mb-1.5">
+                    {node.title}
+                  </div>
+                  <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                    {node.author}
+                  </div>
+                </td>
+                <td className="px-5 py-5 align-top">
+                  <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                    {node.journal}
+                  </div>
+                </td>
+                <td className="px-5 py-5 align-top">
+                  <span className="font-mono tnum text-[14px] text-[var(--ink)]">
+                    {node.citations ? node.citations.toLocaleString() : '—'}
+                  </span>
+                </td>
+                <td className="px-5 py-5 align-top">
+                  <div className="flex items-center gap-3 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => onDetails(node)}
+                      className="eyebrow text-[var(--ink)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--ink)] hover:border-[var(--vermillion)] pb-0.5"
+                    >
+                      Read
+                    </button>
+                    <button
+                      onClick={() => onBib(node.doi)}
+                      className="eyebrow text-[var(--ink-dim)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--rule-paper-2)] hover:border-[var(--vermillion)] pb-0.5"
+                    >
+                      .bib
+                    </button>
                   </div>
                 </td>
               </tr>
-            )
+            );
           })}
         </tbody>
       </table>
+
       {nodes.length === 0 && !loading && !error && (
-        <div className="text-center py-16 text-gray-400 italic bg-gray-50/50 h-full">Configure parameters and Extract Subgraph.</div>
+        <div className="h-full flex items-center justify-center py-16 px-8">
+          <div className="text-center max-w-xl">
+            <div className="eyebrow text-[var(--ink-dim)]">Colophon</div>
+            <p className="text-[18px] text-[var(--ink-soft)] leading-relaxed mt-4 italic">
+              The register is empty. Once the solver finishes its round,
+              the papers of the densest block will be typeset here — numbered,
+              sorted, and ready to read.
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

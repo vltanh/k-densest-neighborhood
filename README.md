@@ -177,7 +177,7 @@ Optional arguments:
 - `--output <out.csv>`: Save resulting community node IDs to this file (`node_id` column).
 - `--time-limit <float>`: Algorithmic time budget in seconds, excluding network I/O (default: `600.0`). The clock resets each time a new incumbent is found, so this controls *time without improvement* rather than total B&B time.
 - `--node-limit <int>`: Max B&B nodes to explore per Dinkelbach iteration (default: `100000`).
-- `--max-in-edges <int>`: Max incoming edges to fetch per node (default: `1500`). Applies to both `sim` and `openalex` modes.
+- `--max-in-edges <int>`: Max incoming edges to fetch per node (default: `0`). Applies to both `sim` and `openalex` modes.
 - `--gap-tol <float>`: Early-stopping relative gap tolerance for B&B (default: `1e-4`).
 - `--dinkelbach-iter <int>`: Max Dinkelbach iterations (default: `50`).
 - `--cg-batch-frac <float>`: Fraction of the active-set size to add per pricing round (default: `0.1`).

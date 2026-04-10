@@ -12,7 +12,7 @@ const DEFAULT_PARAMS = {
   k: 5,
   timeLimit: 60.0,
   nodeLimit: 100000,
-  maxInEdges: 1500,
+  maxInEdges: 0,
   gapTol: 0.0001,
   dinkelbachIter: 50,
   cgBatchFrac: 0.1,
@@ -24,6 +24,10 @@ const DEFAULT_PARAMS = {
 export default function App() {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [params, setParams] = useState(DEFAULT_PARAMS);
+  // The seed ID that the currently-displayed graph was extracted with. This
+  // is decoupled from params.queryNode so that typing a new ID in the input
+  // field does not strip the seed highlight from the graph on screen.
+  const [extractedSeed, setExtractedSeed] = useState(DEFAULT_PARAMS.queryNode);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [clickedNode, setClickedNode] = useState(null);
   const [modalContent, setModalContent] = useState(null);
@@ -46,7 +50,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-full bg-gray-50 overflow-hidden font-sans text-sm relative">
+    <div className="flex h-screen w-full overflow-hidden relative texture-paper">
       <PaperModal content={modalContent} onClose={() => setModalContent(null)} />
 
       <Sidebar
@@ -56,22 +60,21 @@ export default function App() {
         logs={logs}
         telemetry={telemetry}
         loading={loading}
-        onExtract={() => extractSubgraph(params)}
+        onExtract={() => { setExtractedSeed(params.queryNode); extractSubgraph(params); }}
         onStop={stopExtraction}
       />
 
       <div
-        className="w-2 bg-gray-200 hover:bg-indigo-300 cursor-col-resize z-10 flex flex-col items-center justify-center transition-colors border-r border-gray-300"
+        className="divider-v"
         onMouseDown={(e) => { e.preventDefault(); setIsDraggingSidebar(true); }}
-        onDoubleClick={() => setSidebarWidth(sidebarWidth > 0 ? 0 : 380)}
-      >
-        <div className="h-8 w-1 bg-gray-400 rounded-full" />
-      </div>
+        onDoubleClick={() => setSidebarWidth(sidebarWidth > 0 ? 0 : 460)}
+        title="Drag to resize — double-click to collapse"
+      />
 
-      <div className="flex-grow flex flex-col relative min-w-0 bg-white">
+      <div className="flex-grow flex flex-col relative min-w-0">
         <GraphView
           graphData={graphData}
-          queryNode={params.queryNode}
+          queryNode={extractedSeed}
           error={error}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
@@ -80,16 +83,15 @@ export default function App() {
         />
 
         <div
-          className="h-2 bg-gray-200 hover:bg-indigo-300 cursor-row-resize z-10 flex items-center justify-center border-y border-gray-300 shadow-sm transition-colors"
+          className="divider-h"
           onMouseDown={(e) => { e.preventDefault(); setIsDraggingLedger(true); }}
-          onDoubleClick={() => setLedgerHeightPct(ledgerHeightPct > 0 ? 0 : 40)}
-        >
-          <div className="w-8 h-1 bg-gray-400 rounded-full" />
-        </div>
+          onDoubleClick={() => setLedgerHeightPct(ledgerHeightPct > 0 ? 0 : 42)}
+          title="Drag to resize — double-click to collapse"
+        />
 
         <PaperLedger
           nodes={graphData.nodes}
-          queryNode={params.queryNode}
+          queryNode={extractedSeed}
           loading={loading}
           error={error}
           hoveredNode={hoveredNode}

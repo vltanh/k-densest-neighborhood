@@ -1,86 +1,191 @@
-import { Activity, Settings2, Square } from 'lucide-react';
-import TelemetryPanel from './TelemetryPanel';
+import { useState } from 'react';
+import { Square, Play } from 'lucide-react';
+import { DispatchView, LogView, StatusBadge } from './TelemetryPanel';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab — a minimal underline tab for the night-side chrome.
+// Active: gold baseline + high-contrast label. Inactive: faint label.
+// ─────────────────────────────────────────────────────────────────────────────
+function Tab({ label, active, onClick, badge = null }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative pb-2 pt-1 eyebrow transition-colors flex items-center gap-2 ${
+        active ? 'text-[var(--on-night)]' : 'text-[var(--on-night-faint)] hover:text-[var(--on-night-dim)]'
+      }`}
+    >
+      <span>{label}</span>
+      {badge}
+      <span
+        className={`absolute left-0 right-0 -bottom-px h-[2px] transition-colors ${
+          active ? 'bg-[var(--gold)]' : 'bg-transparent'
+        }`}
+      />
+    </button>
+  );
+}
+
+function TabBar({ children }) {
+  return (
+    <div className="flex items-center gap-7 border-b border-[var(--rule-night)]">
+      {children}
+    </div>
+  );
+}
 
 export default function Sidebar({ width, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
   const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
+  const [configTab, setConfigTab] = useState('query');   // 'query' | 'advanced'
+  const [feedTab, setFeedTab] = useState('dispatch');    // 'dispatch' | 'log'
 
   return (
-    <div style={{ width: `${width}px` }} className="bg-gray-900 text-white flex flex-col h-full overflow-hidden shrink-0 shadow-xl z-20">
+    <div
+      style={{ width: `${width}px` }}
+      className="texture-night text-[var(--on-night)] flex flex-col h-full overflow-hidden shrink-0 z-20 relative"
+    >
+      {/* Hairline outer frame */}
+      <div className="absolute inset-0 pointer-events-none border-r border-[var(--rule-night)]" />
 
-      {/* 1. FIXED HEADER */}
-      <div className="px-5 pt-5 pb-4 shrink-0 border-b border-gray-800/80">
-        <h1 className="text-xl font-bold flex items-center gap-2 truncate">
-          <Activity size={20} className="text-indigo-400 shrink-0"/> KDensest Explorer
+      {/* ═══ HEADER ══════════════════════════════════════════════════ */}
+      <header className="px-7 pt-8 pb-6 shrink-0 relative">
+        <h1 className="font-display text-[26px] leading-tight text-[var(--on-night)] lowercase">
+          k-densest subgraph explorer
         </h1>
-      </div>
+      </header>
 
-      {/* 2. FULLY EXPANDING OPTIONS (No Scrollbar) */}
-      <div className="px-5 py-4 shrink-0 flex flex-col gap-4 border-b border-gray-800/50">
-        <div className="space-y-4 shrink-0 bg-gray-800 p-4 rounded-lg border border-gray-700">
-          <div>
-            <label className="block text-gray-400 text-xs font-semibold uppercase mb-1">Query Node ID</label>
-            <input type="text" value={params.queryNode} onChange={set('queryNode')} className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white font-mono text-sm" />
-          </div>
-          <div>
-            <label className="block text-gray-400 text-xs font-semibold uppercase mb-1">Subgraph Size (k)</label>
-            <input type="number" min="2" value={params.k} onChange={set('k')} className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white font-mono text-sm" />
-          </div>
+      {/* Running status marquee */}
+      {loading && <div className="h-[3px] marquee-bar shrink-0" />}
+      {!loading && <div className="h-px bg-[var(--rule-night)] shrink-0" />}
+
+      {/* ═══ CONFIG — Query / Advanced tabs ══════════════════════════ */}
+      <section className="px-7 pt-5 shrink-0">
+        <TabBar>
+          <Tab label="Query" active={configTab === 'query'} onClick={() => setConfigTab('query')} />
+          <Tab label="Advanced" active={configTab === 'advanced'} onClick={() => setConfigTab('advanced')} />
+        </TabBar>
+
+        <div className="pt-5 pb-6">
+          {configTab === 'query' && (
+            <div className="space-y-5 fade-up">
+              <div>
+                <label className="field-label flex justify-between items-baseline">
+                  <span>Seed Paper ID</span>
+                  <span className="text-[var(--gold)] normal-case tracking-normal text-[11px] italic">entry point</span>
+                </label>
+                <input type="text" value={params.queryNode} onChange={set('queryNode')} className="field-input" />
+              </div>
+              <div>
+                <label className="field-label">Min Community Size · k</label>
+                <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
+              </div>
+            </div>
+          )}
+
+          {configTab === 'advanced' && (
+            <div className="space-y-5 fade-up max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2">
+              <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                <div>
+                  <label className="field-label">Max In-Edges</label>
+                  <input type="number" min="0" step="500" value={params.maxInEdges} onChange={set('maxInEdges')} className="field-input" />
+                </div>
+                <div>
+                  <label className="field-label">Dinkelbach Iter</label>
+                  <input type="number" min="1" max="200" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-x-5 gap-y-5">
+                <div>
+                  <label className="field-label">Time Limit (s)</label>
+                  <input type="number" min="0" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
+                </div>
+                <div>
+                  <label className="field-label">Node Limit</label>
+                  <input type="number" min="1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
+                </div>
+                <div>
+                  <label className="field-label">Gap Tol</label>
+                  <input type="number" min="0" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-x-5 gap-y-5">
+                <div>
+                  <label className="field-label">CG Batch Frac</label>
+                  <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
+                </div>
+                <div>
+                  <label className="field-label">Min Batch</label>
+                  <input type="number" min="1" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
+                </div>
+                <div>
+                  <label className="field-label">Max Batch</label>
+                  <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
+                </div>
+              </div>
+
+              <div>
+                <label className="field-label">Num Tol</label>
+                <input type="number" min="0" step="0.000001" value={params.tol} onChange={set('tol')} className="field-input" />
+              </div>
+            </div>
+          )}
         </div>
+      </section>
 
-        <details className="border border-gray-700 rounded-lg bg-gray-800/50 group shrink-0">
-          <summary className="text-gray-300 font-semibold p-3 select-none hover:text-white cursor-pointer flex items-center gap-2">
-            <Settings2 size={16}/> Adv. Solver Options
-          </summary>
-          <div className="p-4 pt-0 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Time Limit</label><input type="number" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Node Limit</label><input type="number" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-            </div>
-            <div>
-              <label className="block text-gray-400 text-[10px] uppercase mb-1">Max In-Edges</label>
-              <input type="number" step="500" value={params.maxInEdges} onChange={set('maxInEdges')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Gap Tol</label><input type="number" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Num Tol</label><input type="number" step="0.000001" value={params.tol} onChange={set('tol')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-            </div>
-            <div>
-              <label className="flex justify-between text-gray-400 text-[10px] uppercase mb-1">
-                <span>Dinkelbach Iter</span><span className="text-indigo-400">{params.dinkelbachIter}</span>
-              </label>
-              <input type="range" min="1" max="200" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="w-full accent-indigo-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
-            </div>
-            <div>
-              <label className="flex justify-between text-gray-400 text-[10px] uppercase mb-1">
-                <span>CG Batch Frac</span><span className="text-indigo-400">{params.cgBatchFrac}</span>
-              </label>
-              <input type="range" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="w-full accent-indigo-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Min Batch</label><input type="number" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-              <div><label className="block text-gray-400 text-[10px] uppercase mb-1">Max Batch</label><input type="number" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white font-mono text-xs" /></div>
-            </div>
+      {/* ═══ FEED — Dispatch / Log tabs ══════════════════════════════ */}
+      <section className="px-7 pb-6 flex flex-col flex-grow overflow-hidden min-h-0">
+        <TabBar>
+          <Tab label="Dispatch" active={feedTab === 'dispatch'} onClick={() => setFeedTab('dispatch')} />
+          <Tab
+            label="Log"
+            active={feedTab === 'log'}
+            onClick={() => setFeedTab('log')}
+            badge={
+              logs.length > 0 && (
+                <span className="text-[10px] font-mono tnum text-[var(--on-night-faint)] normal-case tracking-normal">
+                  {logs.length}
+                </span>
+              )
+            }
+          />
+          <div className="flex-grow" />
+          <div className="pb-2">
+            <StatusBadge status={telemetry.status} />
           </div>
-        </details>
-      </div>
+        </TabBar>
 
-      {/* 3. HIGHLY COMPRESSIBLE TELEMETRY */}
-      {/* min-h-0 lets the flex child shrink so the options above can claim space */}
-      <div className="px-5 py-4 flex flex-col flex-grow overflow-hidden min-h-0">
-        <TelemetryPanel telemetry={telemetry} logs={logs} loading={loading} />
-      </div>
+        <div className="pt-5 flex flex-col flex-grow min-h-0">
+          {feedTab === 'dispatch' && <DispatchView telemetry={telemetry} loading={loading} />}
+          {feedTab === 'log' && <LogView logs={logs} loading={loading} />}
+        </div>
+      </section>
 
-      {/* 4. FIXED FOOTER */}
-      <div className="p-4 border-t border-gray-800 shrink-0 bg-gray-900 flex gap-2">
-        {!loading ? (
-          <button onClick={onExtract} className="w-full py-3 rounded font-bold shadow-lg bg-indigo-600 hover:bg-indigo-500 text-white hover:shadow-indigo-500/20 transition-all">Extract Subgraph</button>
-        ) : (
-          <>
-            <button disabled className="flex-1 py-3 rounded font-bold bg-indigo-900 text-indigo-300 cursor-not-allowed flex items-center justify-center gap-2"><span className="animate-pulse">Computing...</span></button>
-            <button onClick={onStop} className="px-5 py-3 rounded font-bold bg-red-600 hover:bg-red-500 text-white shadow-lg flex items-center justify-center transition-all"><Square size={16} fill="currentColor"/></button>
-          </>
-        )}
-      </div>
+      {/* ═══ FOOTER / ACTION ═════════════════════════════════════════ */}
+      <footer className="px-7 pt-5 pb-7 shrink-0 border-t border-[var(--rule-night)] bg-[var(--night-2)] relative">
+        <div className="flex items-center gap-3">
+          {!loading ? (
+            <button onClick={onExtract} className="btn-press">
+              <Play size={13} fill="currentColor" />
+              <span>Extract Community</span>
+            </button>
+          ) : (
+            <>
+              <button disabled className="btn-press">
+                <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-[var(--gold)] inline-block" />
+                <span>Computing</span>
+              </button>
+              <button onClick={onStop} className="btn-stop" title="Stop">
+                <Square size={14} fill="currentColor" />
+              </button>
+            </>
+          )}
+        </div>
+        <div className="mt-4 eyebrow text-[var(--on-night-faint)]">
+          Session · Active
+        </div>
+      </footer>
     </div>
   );
 }

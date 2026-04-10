@@ -22,6 +22,7 @@ const PATTERNS = {
   incumbent:     /Incumbent updated at Node \d+\s*\|\s*Obj:\s*([\d.eE+-]+)\s*\|\s*Size:\s*(\d+)/,
   foundSolution: /Found Solution\s*:\s*Size:\s*(\d+)\s*\|\s*New Density:\s*([\d.eE+-]+)/,
   converged:     /Status\s*:\s*Converged/,
+  blacklisted:   /Blacklisting node (\S+?)(?:\s+(?:during|due to)\s+([^:]+?))?\s*:\s*(.+)$/,
 
   // Final statistics block printed once after the solver exits.
   finalBbNodes:     /^B&B Nodes Explored\s+:\s*(\d+)/,
@@ -47,6 +48,7 @@ export const TELEMETRY_INITIAL = Object.freeze({
   solverTime: null,       // final (seconds)
   startedAt: null,        // epoch ms
   finishedAt: null,       // epoch ms
+  blacklisted: [],        // [{ id, phase, reason }] — nodes dropped by the solver
 });
 
 /** Remove the `[YYYY-MM-DD HH:MM:SS,mmm]` timestamp prefix emitted by get_timestamp(). */
@@ -83,6 +85,14 @@ export function parseLogLine(prev, line) {
 
   if (PATTERNS.converged.test(clean))
     return { ...prev, status: 'converged' };
+
+  if ((m = clean.match(PATTERNS.blacklisted))) {
+    const id = m[1];
+    // De-duplicate in case the solver re-reports the same node.
+    if (prev.blacklisted.some(e => e.id === id)) return prev;
+    const entry = { id, phase: (m[2] || '').trim() || null, reason: (m[3] || '').trim() };
+    return { ...prev, blacklisted: [...prev.blacklisted, entry] };
+  }
 
   if ((m = clean.match(PATTERNS.finalBbNodes)))
     return { ...prev, bbNodes: parseInt(m[1], 10) };

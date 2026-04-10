@@ -11,7 +11,7 @@ public:
 
     // Base properties for all Oracles to ensure the Solver can query them safely
     double cumulative_network_time = 0.0;
-    int max_in_edges = 1500;
+    int max_in_edges = 0;
 
     virtual ~IGraphOracle() = default;
 
