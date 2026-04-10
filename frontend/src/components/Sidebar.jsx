@@ -54,9 +54,11 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
         </h1>
       </header>
 
-      {/* Running status marquee */}
-      {loading && <div className="h-[3px] marquee-bar shrink-0" />}
-      {!loading && <div className="h-px bg-[var(--rule-night)] shrink-0" />}
+      {/* Running status marquee — height reserved even when idle */}
+      <div className="h-[3px] shrink-0 relative">
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-[var(--rule-night)]" />
+        {loading && <div className="absolute inset-0 marquee-bar" />}
+      </div>
 
       {/* ═══ CONFIG — Query / Advanced tabs ══════════════════════════ */}
       <section className="px-7 pt-5 shrink-0">
