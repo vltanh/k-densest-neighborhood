@@ -57,14 +57,6 @@ const Stat = ({ label, value, accent = false, big = false }) => (
   </div>
 );
 
-const STATUS_TEXT = {
-  idle:      'Standby',
-  running:   'Running',
-  converged: 'Converged',
-  stopped:   'Halted',
-  error:     'Error',
-};
-
 const STATUS_STYLES = {
   idle:      { label: 'Standby',   cls: 'text-[var(--on-night-faint)]',  dot: 'bg-[var(--on-night-faint)]' },
   running:   { label: 'On-Press',  cls: 'text-[var(--gold)]',             dot: 'bg-[var(--gold)] pulse-dot' },
@@ -102,47 +94,52 @@ export function DispatchView({ telemetry, loading }) {
     telemetry.density != null || telemetry.solverTime != null || telemetry.status === 'converged';
 
   return (
-    <div className="flex-grow min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar">
-      <div className="grid grid-cols-4 gap-x-4 border-t border-b border-[var(--rule-night)] py-3">
-        <Stat label="Iter"      value={fmtInt(telemetry.iteration)} accent />
-        <Stat label="λ"         value={fmtFloat(telemetry.lambda, 6)} accent />
-        <Stat label="Best Obj"  value={bestObjDisplay} accent />
-        <Stat label="Best Size" value={bestSizeDisplay} accent />
-        <Stat label="Elapsed"   value={elapsed} />
-        <Stat label="Started"   value={telemetry.startedAt ? new Date(telemetry.startedAt).toLocaleTimeString() : null} />
-        <Stat label="B&B"       value={fmtInt(telemetry.bbNodes || null)} />
-        <Stat label="LP"        value={fmtInt(telemetry.lpSolves || null)} />
+    <div className="flex flex-col flex-grow min-h-0 overflow-x-hidden fade-in">
+      {/* Fixed-height KPI grids at the top */}
+      <div className="shrink-0">
+        <div className="grid grid-cols-4 gap-x-4 border-t border-b border-[var(--rule-night)] py-3">
+          <Stat label="Iter"      value={fmtInt(telemetry.iteration)} accent />
+          <Stat label="λ"         value={fmtFloat(telemetry.lambda, 6)} accent />
+          <Stat label="Best Obj"  value={bestObjDisplay} accent />
+          <Stat label="Best Size" value={bestSizeDisplay} accent />
+          <Stat label="Elapsed"   value={elapsed} />
+          <Stat label="Started"   value={telemetry.startedAt ? new Date(telemetry.startedAt).toLocaleTimeString() : null} />
+          <Stat label="B&B"       value={fmtInt(telemetry.bbNodes || null)} />
+          <Stat label="LP"        value={fmtInt(telemetry.lpSolves || null)} />
+        </div>
+
+        {showFinalBlock && (
+          <div className="grid grid-cols-4 gap-x-4 border-b border-[var(--rule-night)] py-3 fade-in">
+            <Stat label="Density"  value={fmtFloat(telemetry.density, 6)} accent />
+            <Stat label="Size"     value={fmtInt(telemetry.size)} accent />
+            <Stat label="Solve"    value={telemetry.solverTime != null ? `${telemetry.solverTime.toFixed(3)}s` : null} />
+            <Stat label="Iters"    value={fmtInt(telemetry.iteration)} />
+            <Stat label="B&B"      value={fmtInt(telemetry.bbNodes || null)} />
+            <Stat label="LP"       value={fmtInt(telemetry.lpSolves || null)} />
+            <Stat label="Cols Gen" value={fmtInt(telemetry.columnsGenerated)} />
+            <Stat label="BQP Cuts" value={fmtInt(telemetry.cutsAdded)} />
+          </div>
+        )}
       </div>
 
-      {showFinalBlock && (
-        <div className="grid grid-cols-4 gap-x-4 border-b border-[var(--rule-night)] py-3 fade-up">
-          <Stat label="Density"  value={fmtFloat(telemetry.density, 6)} accent />
-          <Stat label="Size"     value={fmtInt(telemetry.size)} accent />
-          <Stat label="Solve"    value={telemetry.solverTime != null ? `${telemetry.solverTime.toFixed(3)}s` : null} />
-          <Stat label="Iters"    value={fmtInt(telemetry.iteration)} />
-          <Stat label="B&B"      value={fmtInt(telemetry.bbNodes || null)} />
-          <Stat label="LP"       value={fmtInt(telemetry.lpSolves || null)} />
-          <Stat label="Cols Gen" value={fmtInt(telemetry.columnsGenerated)} />
-          <Stat label="BQP Cuts" value={fmtInt(telemetry.cutsAdded)} />
-        </div>
-      )}
-
+      {/* Empty-state hint */}
       {!showFinalBlock && telemetry.iteration == null && telemetry.blacklisted.length === 0 && (
-        <div className="pt-6 text-[14px] text-[var(--on-night-faint)] italic leading-snug">
+        <div className="pt-6 text-[14px] text-[var(--on-night-faint)] italic leading-snug shrink-0">
           No run in progress. Press <span className="text-[var(--gold)] not-italic">Extract Community</span> to
           begin — live metrics will appear here.
         </div>
       )}
 
+      {/* Blacklist — grows to fill remaining space in the tab */}
       {telemetry.blacklisted.length > 0 && (
-        <div className="mt-4 fade-up">
-          <div className="flex items-baseline justify-between mb-2">
+        <div className="mt-4 flex flex-col flex-grow min-h-0">
+          <div className="flex items-baseline justify-between mb-2 shrink-0">
             <span className="eyebrow text-[var(--on-night-faint)]">Blacklisted</span>
             <span className="font-mono tnum text-[11px] text-[var(--on-night-faint)]">
               {telemetry.blacklisted.length}
             </span>
           </div>
-          <ul className="space-y-1.5 max-h-24 overflow-y-auto overflow-x-hidden custom-scrollbar">
+          <ul className="space-y-1 flex-grow min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar">
             {telemetry.blacklisted.map((b) => (
               <li
                 key={b.id}

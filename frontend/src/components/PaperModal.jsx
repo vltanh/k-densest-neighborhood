@@ -11,7 +11,7 @@ export default function PaperModal({ content, onClose }) {
       onClick={onClose}
     >
       <div
-        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[10px_10px_0_0_var(--ink)] border border-[var(--ink)] fade-up"
+        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[10px_10px_0_0_var(--ink)] border border-[var(--ink)] fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* corner ticks */}

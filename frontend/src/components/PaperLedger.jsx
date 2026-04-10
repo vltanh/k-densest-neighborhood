@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { ArrowUp, ArrowDown } from 'lucide-react';
 
 export default function PaperLedger({ nodes, queryNode, loading, error, hoveredNode, setHoveredNode, clickedNode, onDetails, onBib, heightPct }) {
@@ -37,20 +37,21 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
     });
   }, [nodes, sortConfig]);
 
-  const SortIcon = ({ columnKey }) => {
+  const renderSortIcon = (columnKey) => {
     if (sortConfig.key !== columnKey) return <span className="w-3 inline-block" />;
     return sortConfig.direction === 'asc'
       ? <ArrowUp size={11} className="inline ml-1 text-[var(--vermillion)]" />
       : <ArrowDown size={11} className="inline ml-1 text-[var(--vermillion)]" />;
   };
 
-  const Th = ({ columnKey, title, className = "" }) => (
+  const renderTh = (columnKey, title, className = '') => (
     <th
+      key={columnKey}
       onClick={() => requestSort(columnKey)}
       className={`px-5 py-4 eyebrow text-left text-[var(--ink-dim)] hover:text-[var(--ink)] cursor-pointer select-none transition-colors ${className}`}
     >
       <div className="flex items-center">
-        {title} <SortIcon columnKey={columnKey} />
+        {title} {renderSortIcon(columnKey)}
       </div>
     </th>
   );
@@ -82,17 +83,17 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
         {sortedNodes.length > 0 && (
           <thead className="sticky top-0 z-10 bg-[var(--paper)]/95 backdrop-blur border-b border-[var(--rule-paper-2)]">
             <tr>
-              <Th columnKey="displayNum" title="№" className="w-16" />
-              <Th columnKey="year" title="Year" className="w-20" />
-              <Th columnKey="title" title="Title · Authors" />
-              <Th columnKey="journal" title="Venue" className="w-52" />
-              <Th columnKey="citations" title="Cites" className="w-20" />
+              {renderTh('displayNum', '№', 'w-16')}
+              {renderTh('year', 'Year', 'w-20')}
+              {renderTh('title', 'Title · Authors')}
+              {renderTh('journal', 'Venue', 'w-52')}
+              {renderTh('citations', 'Cites', 'w-20')}
               <th className="px-5 py-4 w-36" />
             </tr>
           </thead>
         )}
         <tbody>
-          {sortedNodes.map((node, idx) => {
+          {sortedNodes.map((node) => {
             const isTarget = hoveredNode === node.id || clickedNode === node.id;
             const isSeed = node.id === queryNode;
             return (

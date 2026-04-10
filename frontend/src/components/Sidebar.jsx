@@ -67,7 +67,7 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
 
         <div className="pt-5 pb-6">
           {configTab === 'query' && (
-            <div className="space-y-5 fade-up">
+            <div className="space-y-5 fade-in">
               <div>
                 <label className="field-label flex justify-between items-baseline">
                   <span>Seed Paper ID</span>
@@ -83,7 +83,8 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
           )}
 
           {configTab === 'advanced' && (
-            <div className="space-y-5 fade-up max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2">
+            <div className="max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2 fade-in">
+              <div className="space-y-5">
               <div className="grid grid-cols-2 gap-x-5 gap-y-5">
                 <div>
                   <label className="field-label">Max In-Edges</label>
@@ -128,6 +129,7 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
               <div>
                 <label className="field-label">Num Tol</label>
                 <input type="number" min="0" step="0.000001" value={params.tol} onChange={set('tol')} className="field-input" />
+              </div>
               </div>
             </div>
           )}

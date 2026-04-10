@@ -206,7 +206,7 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
         </div>
 
         {graphData.nodes.length > 0 && (
-          <div className="pointer-events-auto flex items-stretch gap-5 fade-up">
+          <div className="pointer-events-auto flex items-stretch gap-5 fade-in">
             <StatCell label="Core" value={stats.v} />
             <Divider />
             <StatCell label="Frontier" value={stats.ghosts} muted />
