@@ -280,8 +280,11 @@ University of Illinois Urbana-Champaign \\
 
   \textbf{Incoming-citation cap}
   \begin{itemize}
-    \item highly cited papers can have thousands of incoming edges
-    \item the cap limits how many of those are fetched per query
+    \item incoming-edge queries can be more expensive than outgoing:
+      a paper's reference list is bounded, but its cited-by list
+      can run into the thousands
+    \item the cap limits how many incoming edges are fetched per
+      queried node
     \item reported runs fetch only outgoing citations, no incoming
   \end{itemize}
 \end{frame}
