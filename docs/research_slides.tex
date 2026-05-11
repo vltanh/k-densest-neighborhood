@@ -609,7 +609,7 @@ University of Illinois Urbana-Champaign \\
   counted as a non-match.
 \end{frame}
 
-\begin{frame}{Exp 3: classification dataset and split}
+\begin{frame}{Citation dataset and split}
   Dataset: CitationFull Cora-ML (lead dataset).
 
   \vfill
@@ -629,27 +629,7 @@ University of Illinois Urbana-Champaign \\
   \texttt{pool\_criterion = pure\_source\_with\_outdegree\_geq\_2}).
 \end{frame}
 
-\begin{frame}{Exp 3: classification prediction rule}
-  For each val or test query $q$:
-  \begin{itemize}
-    \item Retrieve the community around $q$ from the chosen solver.
-    \item Uniform majority over the train-labelled nodes in the
-    community.
-    \item Ties broken deterministically by ascending label value
-    (\texttt{argmax\_label}).
-    \item If no train neighbour is present in the community, fall back
-    to a BFS walk that \emph{forbids} every val and test node as a
-    stepping stone (no label leakage across splits).
-    \item Last resort if BFS reaches no train label: global majority of
-    the train pool.
-  \end{itemize}
-
-  \vfill
-
-  All Cora\_ML runs use \texttt{max\_in\_edges = 0}.
-\end{frame}
-
-\begin{frame}{Methods compared}
+\begin{frame}{Baselines and BP}
   \begin{itemize}
     \item \textbf{BFS depth 1}
     \begin{itemize}
@@ -673,7 +653,7 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Validation sweep on Cora\_ML}
+\begin{frame}{Exp 2/3: validation sweep on Cora\_ML}
   \scriptsize
   Macro F1 on the 411 eligible val nodes with the median cluster-quality
   values at the tuned hyperparameters. The BFS sweep ranges over
@@ -701,7 +681,7 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Full test split: cluster quality}
+\begin{frame}{Exp 2: full test split, cluster quality}
   \scriptsize
   Median values on 393 eligible test nodes from \texttt{cluster\_quality\_summary.csv}.
   Cluster quality reads before classification.
@@ -730,34 +710,7 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Full test split: classification}
-  \scriptsize
-  Means over five seeds (42..46), bootstrap 95\% CI with $B=500$ resamples,
-  393 eligible test nodes. Precision, recall, and F1 are macro-averaged.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r r}
-    \toprule
-    Method            & Precision           & Recall              & F1 \\
-    \midrule
-    AvgDeg            & 0.709 [0.687, 0.731] & 0.523 [0.501, 0.546] & 0.537 [0.514, 0.562] \\
-    BFS depth 1       & \textbf{0.825 [0.809, 0.842]} & \textbf{0.813 [0.795, 0.832]} & \textbf{0.810 [0.793, 0.829]} \\
-    BP $k=5,\kappa=2$ & 0.749 [0.729, 0.767] & 0.740 [0.720, 0.759] & 0.737 [0.718, 0.756] \\
-    \bottomrule
-  \end{tabular}
-
-  \vfill
-
-  \begin{itemize}
-    \item BFS depth 1 leads on every classification metric.
-    \item BP closes most of the F1 gap (0.737) while returning the densest
-      and best-mixed subgraph of the three.
-    \item AvgDeg trades classification accuracy for community size.
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Why look at a hard subset?}
+\begin{frame}{Hard subset: motivation}
   The full test split mixes two regimes.
 
   \vfill
@@ -783,7 +736,7 @@ University of Illinois Urbana-Champaign \\
   hash-pinned in \texttt{split\_meta.json}.
 \end{frame}
 
-\begin{frame}{Hard subset: cluster quality}
+\begin{frame}{Exp 2: hard subset, cluster quality}
   \scriptsize
   Medians on the 52 BFS-hard val nodes. Cluster quality first; classification follows.
 
@@ -811,7 +764,81 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Hard subset: classification}
+\begin{frame}{Exp 2: cost comparison}
+  \small
+  Averages over the val + test pool (804 eligible queries).
+
+  \vspace{0.5em}
+
+  \begin{tabular}{l r r}
+    \toprule
+    Method            & Avg oracle queries & Avg community size \\
+    \midrule
+    BFS depth 1       & \textbf{1.0}  & 4.87  \\
+    BP $k=5,\kappa=2$ & 10.97         & 4.98  \\
+    AvgDeg            & 201.95        & 21.20 \\
+    \bottomrule
+  \end{tabular}
+
+  \vfill
+
+  \begin{itemize}
+    \item BFS depth 1 issues exactly one query per node and stays compact.
+    \item BP returns a community of comparable size at a tenfold oracle cost,
+      buying density and tunable $\kappa$.
+    \item AvgDeg expands far further and pays two orders of magnitude more
+      oracle queries.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Exp 3: classification prediction rule}
+  For each val or test query $q$:
+  \begin{itemize}
+    \item Retrieve the community around $q$ from the chosen solver.
+    \item Uniform majority over the train-labelled nodes in the
+    community.
+    \item Ties broken deterministically by ascending label value
+    (\texttt{argmax\_label}).
+    \item If no train neighbour is present in the community, fall back
+    to a BFS walk that \emph{forbids} every val and test node as a
+    stepping stone (no label leakage across splits).
+    \item Last resort if BFS reaches no train label: global majority of
+    the train pool.
+  \end{itemize}
+
+  \vfill
+
+  All Cora\_ML runs use \texttt{max\_in\_edges = 0}.
+\end{frame}
+
+\begin{frame}{Exp 3: full test split, classification}
+  \scriptsize
+  Means over five seeds (42..46), bootstrap 95\% CI with $B=500$ resamples,
+  393 eligible test nodes. Precision, recall, and F1 are macro-averaged.
+
+  \vspace{0.5em}
+
+  \begin{tabular}{l r r r}
+    \toprule
+    Method            & Precision           & Recall              & F1 \\
+    \midrule
+    AvgDeg            & 0.709 [0.687, 0.731] & 0.523 [0.501, 0.546] & 0.537 [0.514, 0.562] \\
+    BFS depth 1       & \textbf{0.825 [0.809, 0.842]} & \textbf{0.813 [0.795, 0.832]} & \textbf{0.810 [0.793, 0.829]} \\
+    BP $k=5,\kappa=2$ & 0.749 [0.729, 0.767] & 0.740 [0.720, 0.759] & 0.737 [0.718, 0.756] \\
+    \bottomrule
+  \end{tabular}
+
+  \vfill
+
+  \begin{itemize}
+    \item BFS depth 1 leads on every classification metric.
+    \item BP closes most of the F1 gap (0.737) while returning the densest
+      and best-mixed subgraph of the three.
+    \item AvgDeg trades classification accuracy for community size.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Exp 3: hard subset, classification}
   \scriptsize
   Means over five seeds (42..46), bootstrap 95\% CI ($B=500$), 52 BFS-hard
   val nodes. BFS depth 1 is 0 by construction.
@@ -836,33 +863,6 @@ University of Illinois Urbana-Champaign \\
       cases where retrieval geometry matters.
     \item Absolute F1 stays under 0.2, indicating the subset is genuinely
       difficult and the right comparison is to BFS.
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Cost comparison}
-  \small
-  Averages over the val + test pool (804 eligible queries).
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r}
-    \toprule
-    Method            & Avg oracle queries & Avg community size \\
-    \midrule
-    BFS depth 1       & \textbf{1.0}  & 4.87  \\
-    BP $k=5,\kappa=2$ & 10.97         & 4.98  \\
-    AvgDeg            & 201.95        & 21.20 \\
-    \bottomrule
-  \end{tabular}
-
-  \vfill
-
-  \begin{itemize}
-    \item BFS depth 1 issues exactly one query per node and stays compact.
-    \item BP returns a community of comparable size at a tenfold oracle cost,
-      buying density and tunable $\kappa$.
-    \item AvgDeg expands far further and pays two orders of magnitude more
-      oracle queries.
   \end{itemize}
 \end{frame}
 
