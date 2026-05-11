@@ -48,6 +48,7 @@ private:
     double last_lambda = -1.0;
 
     void _add_edge(int u, int v);
+    void _ingest_neighbors(int v, const std::vector<int> &preds, const std::vector<int> &succs);
     void _initialize_active_set();
     void _init_global_model();
     int _count_edges_in(const std::unordered_set<int> &nodes);
@@ -83,7 +84,7 @@ public:
                              double tol = 1e-6, int bb_node_limit = 100000, double bb_time_limit = 60.0,
                              double bb_gap_tol = 1e-4, int dinkelbach_max_iter = 50,
                              double cg_batch_fraction = 1.0, int cg_min_batch = 50, int cg_max_batch = 50,
-                             int kappa = 2);
+                             int kappa = 0);
     ~FullBranchAndPriceSolver();
 
     std::pair<std::unordered_set<int>, double> solve();

@@ -46,6 +46,28 @@ void FullBranchAndPriceSolver::_add_edge(int u, int v)
     }
 }
 
+// Registers preds → v and v → succs into adj_out/adj_in and promotes any new
+// non-active endpoint into the frontier F. Skips blacklisted endpoints.
+void FullBranchAndPriceSolver::_ingest_neighbors(int v, const vector<int> &preds, const vector<int> &succs)
+{
+    for (int u : preds)
+    {
+        if (error_nodes.count(u))
+            continue;
+        _add_edge(u, v);
+        if (V_active.find(u) == V_active.end())
+            F.insert(u);
+    }
+    for (int w : succs)
+    {
+        if (error_nodes.count(w))
+            continue;
+        _add_edge(v, w);
+        if (V_active.find(w) == V_active.end())
+            F.insert(w);
+    }
+}
+
 // BFS from q to seed V_active with ≥ k nodes. A second pass queries nodes that
 // were added as neighbours but never expanded, completing their adjacency lists.
 // Throws std::runtime_error if the query node itself cannot be fetched.
@@ -71,33 +93,14 @@ void FullBranchAndPriceSolver::_initialize_active_set()
             V_active.insert(curr);
             F.erase(curr);
 
-            for (int u : preds)
-            {
-                if (error_nodes.count(u))
-                    continue;
-                _add_edge(u, curr);
-                if (V_active.find(u) == V_active.end())
-                    F.insert(u);
-            }
-            for (int w : succs)
-            {
-                if (error_nodes.count(w))
-                    continue;
-                _add_edge(curr, w);
-                if (V_active.find(w) == V_active.end())
-                    F.insert(w);
-            }
+            _ingest_neighbors(curr, preds, succs);
 
             for (int u : preds)
-            {
                 if (V_active.find(u) == V_active.end() && !error_nodes.count(u))
                     q_nodes.push(u);
-            }
             for (int w : succs)
-            {
                 if (V_active.find(w) == V_active.end() && !error_nodes.count(w))
                     q_nodes.push(w);
-            }
         }
         catch (const std::exception &e)
         {
@@ -113,34 +116,18 @@ void FullBranchAndPriceSolver::_initialize_active_set()
     vector<int> active_copy(V_active.begin(), V_active.end());
     for (int v : active_copy)
     {
-        if (bfs_queried.find(v) == bfs_queried.end() && !error_nodes.count(v))
+        if (bfs_queried.find(v) != bfs_queried.end() || error_nodes.count(v))
+            continue;
+        try
         {
-            try
-            {
-                const auto &[preds, succs] = oracle.query(v);
-                for (int u : preds)
-                {
-                    if (error_nodes.count(u))
-                        continue;
-                    _add_edge(u, v);
-                    if (V_active.find(u) == V_active.end())
-                        F.insert(u);
-                }
-                for (int w : succs)
-                {
-                    if (error_nodes.count(w))
-                        continue;
-                    _add_edge(v, w);
-                    if (V_active.find(w) == V_active.end())
-                        F.insert(w);
-                }
-            }
-            catch (const std::exception &e)
-            {
-                std::cerr << "[" << get_timestamp() << "] Blacklisting node " << oracle.mapper.get_str(v) << " during post-init: " << e.what() << "\n";
-                error_nodes.insert(v);
-                V_active.erase(v);
-            }
+            const auto &[preds, succs] = oracle.query(v);
+            _ingest_neighbors(v, preds, succs);
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "[" << get_timestamp() << "] Blacklisting node " << oracle.mapper.get_str(v) << " during post-init: " << e.what() << "\n";
+            error_nodes.insert(v);
+            V_active.erase(v);
         }
     }
 
@@ -388,23 +375,7 @@ void FullBranchAndPriceSolver::_expand_node(int f)
 
         V_active.insert(f);
         F.erase(f);
-
-        for (int u : preds)
-        {
-            if (error_nodes.count(u))
-                continue;
-            _add_edge(u, f);
-            if (V_active.find(u) == V_active.end())
-                F.insert(u);
-        }
-        for (int w : succs)
-        {
-            if (error_nodes.count(w))
-                continue;
-            _add_edge(f, w);
-            if (V_active.find(w) == V_active.end())
-                F.insert(w);
-        }
+        _ingest_neighbors(f, preds, succs);
     }
     catch (const std::exception &e)
     {
@@ -699,11 +670,16 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
 //     the j- and k-loops as early as possible.
 int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double> &x_bar)
 {
+    constexpr double kFracLo = 0.1;
+    constexpr double kFracHi = 0.9;
+    constexpr double kViolationTol = 1e-4;
+    constexpr int kMaxCutsPerRound = 20;
+
     vector<int> frac_nodes;
     frac_nodes.reserve(x_bar.size());
     for (const auto &[v, val] : x_bar)
     {
-        if (val > 0.1 && val < 0.9)
+        if (val > kFracLo && val < kFracHi)
             frac_nodes.push_back(v);
     }
 
@@ -741,9 +717,9 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
         {
             const double xj = x_vals[j];
             // Tightest upper bound on x_sum: xi + xj + (max remaining x̄).
-            // Since all frac_nodes satisfy x̄ < 0.9, if xi + xj + 0.9 ≤ 1 + 1e-4
-            // no k-choice can produce a violated cut.
-            if (xi + xj + 0.9 <= 1.0 + 1e-4)
+            // Since all frac_nodes satisfy x̄ < kFracHi, the cut cannot be
+            // violated if xi + xj + kFracHi already fits within 1 + slack.
+            if (xi + xj + kFracHi <= 1.0 + kViolationTol)
                 continue;
 
             const double wij = w_mat[(size_t)i * n + j];
@@ -756,8 +732,8 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
             {
                 const double xk = x_vals[kk];
                 const double x_sum = xij + xk;
-                if (x_sum <= 1.0 + 1e-4)
-                    continue; // cut would not be violated regardless of w̄
+                if (x_sum <= 1.0 + kViolationTol)
+                    continue;
 
                 const double wjk = w_mat[(size_t)j * n + kk];
                 if (std::isnan(wjk))
@@ -767,14 +743,14 @@ int FullBranchAndPriceSolver::_separate_bqp_cuts(const unordered_map<int, double
                     continue;
 
                 const double w_sum = wij + wjk + wik;
-                if (x_sum - w_sum > 1.0 + 1e-4)
+                if (x_sum - w_sum > 1.0 + kViolationTol)
                 {
                     int u = frac_nodes[i], v = frac_nodes[j], w = frac_nodes[kk];
                     pair<int, int> uv = {u, v};
                     pair<int, int> vw = {v, w};
                     pair<int, int> uw = {u, w};
                     rmp->addConstr(x_vars[u] + x_vars[v] + x_vars[w] - w_vars[uv] - w_vars[vw] - w_vars[uw] <= 1.0);
-                    if (++cuts_added >= 20)
+                    if (++cuts_added >= kMaxCutsPerRound)
                         return cuts_added;
                 }
             }
