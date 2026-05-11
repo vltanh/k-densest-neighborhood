@@ -29,6 +29,12 @@ private:
     std::unordered_set<int> V_active;
     std::unordered_set<int> F;
     std::unordered_set<int> error_nodes;
+    // Set of nodes whose adjacency has been fetched from the oracle. Distinct
+    // from V_active (which adds the node to the LP variable set): a node may
+    // be materialized to fill in edges among the frontier without becoming an
+    // LP variable. _expand_node materialises and adds to V_active; the new
+    // _materialize_adjacency only materialises.
+    std::unordered_set<int> queried_nodes;
 
     std::unordered_map<int, std::unordered_set<int>> adj_out;
     std::unordered_map<int, std::unordered_set<int>> adj_in;
@@ -55,6 +61,8 @@ private:
     double _density(const std::unordered_set<int> &nodes);
     double _parametric_obj(const std::unordered_set<int> &nodes, double lambda_val);
     void _expand_node(int f);
+    void _materialize_adjacency(int f);
+    int _materialize_unqueried_frontier();
 
     // _sync_rmp_structure helpers
     bool _register_new_nodes(std::vector<int> &new_nodes);
@@ -65,6 +73,7 @@ private:
     void _sync_rmp_structure(double lambda_val);
     void _apply_node_bounds(const std::vector<int> &v1, const std::vector<int> &v0);
     std::vector<int> _price_frontier(const std::unordered_map<int, double> &x_bar, double pi, const std::unordered_set<int> &v0_set, double lambda_val);
+    std::vector<int> _greedy_joint_pricing(const std::unordered_set<int> &v0_set);
     int _separate_bqp_cuts(const std::unordered_map<int, double> &x_bar);
     std::pair<std::unordered_map<int, double>, double> _column_generation(
         const std::vector<int> &v1,

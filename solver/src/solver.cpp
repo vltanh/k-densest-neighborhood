@@ -89,6 +89,7 @@ void FullBranchAndPriceSolver::_initialize_active_set()
         try
         {
             const auto &[preds, succs] = oracle.query(curr);
+            queried_nodes.insert(curr);
 
             V_active.insert(curr);
             F.erase(curr);
@@ -121,6 +122,7 @@ void FullBranchAndPriceSolver::_initialize_active_set()
         try
         {
             const auto &[preds, succs] = oracle.query(v);
+            queried_nodes.insert(v);
             _ingest_neighbors(v, preds, succs);
         }
         catch (const std::exception &e)
@@ -490,6 +492,7 @@ void FullBranchAndPriceSolver::_expand_node(int f)
     try
     {
         const auto &[preds, succs] = oracle.query(f);
+        queried_nodes.insert(f);
 
         V_active.insert(f);
         F.erase(f);
@@ -502,6 +505,51 @@ void FullBranchAndPriceSolver::_expand_node(int f)
         F.erase(f);
         V_active.erase(f);
     }
+}
+
+// Fetch f's adjacency from the oracle and populate adj_out / adj_in without
+// promoting f to V_active. Used at suspected CG convergence to materialise
+// frontier-internal edges that pricing cannot see otherwise: f stays in F (no
+// new LP variable), but the joint subset pricer can now evaluate f's true
+// degree to other frontier members.
+void FullBranchAndPriceSolver::_materialize_adjacency(int f)
+{
+    if (queried_nodes.count(f) || error_nodes.count(f))
+        return;
+    try
+    {
+        const auto &[preds, succs] = oracle.query(f);
+        queried_nodes.insert(f);
+        _ingest_neighbors(f, preds, succs);
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "[" << get_timestamp() << "] Blacklisting frontier node " << oracle.mapper.get_str(f) << " during materialisation: " << e.what() << "\n";
+        error_nodes.insert(f);
+        F.erase(f);
+    }
+}
+
+// Materialise every frontier node whose adjacency has not yet been queried.
+// Returns the number of nodes queried so the caller can decide whether to
+// rerun pricing on the newly-visible edges.
+int FullBranchAndPriceSolver::_materialize_unqueried_frontier()
+{
+    std::vector<int> to_query;
+    to_query.reserve(F.size());
+    for (int f : F)
+        if (!queried_nodes.count(f) && !error_nodes.count(f))
+            to_query.push_back(f);
+    int materialised = 0;
+    for (int f : to_query)
+    {
+        if (queried_nodes.count(f) || error_nodes.count(f))
+            continue;
+        _materialize_adjacency(f);
+        if (queried_nodes.count(f))
+            ++materialised;
+    }
+    return materialised;
 }
 
 // ── RMP Structure Helpers ─────────────────────────────────────────────────────
@@ -700,6 +748,167 @@ void FullBranchAndPriceSolver::_apply_node_bounds(const vector<int> &v1, const v
 //   rc(f) = frac_deg(f) + ω,   where ω = −2λ · Σ x̄_v − π
 // frac_deg(f) is the sum of x̄_u over active neighbours of f. Batch size is
 // clamped to [cg_min_batch, cg_max_batch], sorted by decreasing rc.
+// Joint pricing heuristic: find a high-density k-set containing q in
+// (V_active ∪ F). Used when individual reduced-cost pricing has returned no
+// improving column. For our bilinear objective, solo pricing is provably
+// incomplete: a subset T of frontier nodes can have positive joint reduced
+// cost even when every solo RC(t) is negative, because the new y_{t,t'}
+// variables among T contribute to the objective only when T is added jointly.
+// Exact subset pricing is NP-hard, so the heuristic picks the densest k-subset
+// it can enumerate inside a bounded budget; only members not already in
+// V_active are returned to the caller for expansion.
+vector<int> FullBranchAndPriceSolver::_greedy_joint_pricing(const unordered_set<int> &v0_set)
+{
+    // Candidate pool: every node currently in V_active ∪ F that is not
+    // forbidden (v0) or blacklisted (error_nodes) and is not q itself.
+    unordered_set<int> pool;
+    for (int v : V_active) pool.insert(v);
+    for (int v : F) pool.insert(v);
+    pool.erase(q);
+    for (int v : v0_set) pool.erase(v);
+    for (int v : error_nodes) pool.erase(v);
+
+    vector<int> cand(pool.begin(), pool.end());
+    std::sort(cand.begin(), cand.end());
+    int n_c = (int)cand.size();
+    int k_minus_1 = k - 1;
+    if (n_c < k_minus_1)
+        return {};
+
+    auto count_edges_in = [&](const vector<int> &S) -> int {
+        int m = 0;
+        for (size_t i = 0; i < S.size(); ++i)
+        {
+            auto a_it = adj_out.find(S[i]);
+            if (a_it == adj_out.end())
+                continue;
+            for (size_t j = 0; j < S.size(); ++j)
+            {
+                if (i == j)
+                    continue;
+                if (a_it->second.count(S[j]))
+                    ++m;
+            }
+        }
+        return m;
+    };
+
+    vector<int> best_S;
+    int best_m = -1;
+
+    // Budget for exhaustive enumeration. C(n_c, k-1) over the candidate pool
+    // is bounded; for k <= 5 and pools below ~ 100 it stays under 5e5.
+    constexpr long long ENUMERATE_BUDGET = 500000;
+
+    long long combos_est = 1;
+    {
+        for (int i = 0; i < k_minus_1; ++i)
+        {
+            combos_est *= (long long)(n_c - i);
+            combos_est /= (i + 1);
+            if (combos_est < 0 || combos_est > ENUMERATE_BUDGET)
+            {
+                combos_est = ENUMERATE_BUDGET + 1;
+                break;
+            }
+        }
+    }
+
+    if (combos_est <= ENUMERATE_BUDGET)
+    {
+        vector<int> idx(k_minus_1);
+        for (int i = 0; i < k_minus_1; ++i)
+            idx[i] = i;
+        vector<int> S;
+        S.reserve(k);
+        while (true)
+        {
+            S.clear();
+            S.push_back(q);
+            for (int i : idx)
+                S.push_back(cand[i]);
+            int m = count_edges_in(S);
+            if (m > best_m)
+            {
+                best_m = m;
+                best_S = S;
+            }
+            int i = k_minus_1 - 1;
+            while (i >= 0 && idx[i] == n_c - k_minus_1 + i)
+                --i;
+            if (i < 0)
+                break;
+            ++idx[i];
+            for (int j = i + 1; j < k_minus_1; ++j)
+                idx[j] = idx[j - 1] + 1;
+        }
+    }
+    else
+    {
+        // Greedy fallback for pools too large to enumerate exhaustively.
+        // Each round picks the candidate maximising edges to the current S
+        // (gain), then breaking ties by candidate degree into the remaining
+        // pool (favours dense-core nodes over peripheral leaves).
+        unordered_set<int> S_set = {q};
+        auto edge_to_S = [&](int v) -> int {
+            int g = 0;
+            auto a_it = adj_out.find(v);
+            if (a_it != adj_out.end())
+                for (int u : a_it->second)
+                    if (S_set.count(u))
+                        ++g;
+            return g;
+        };
+        auto edge_to_pool = [&](int v) -> int {
+            int g = 0;
+            auto a_it = adj_out.find(v);
+            if (a_it != adj_out.end())
+                for (int u : a_it->second)
+                    if (pool.count(u) && !S_set.count(u))
+                        ++g;
+            return g;
+        };
+        while ((int)S_set.size() < k)
+        {
+            int best_node = -1;
+            int best_gain = -1;
+            int best_sec = -1;
+            for (int v : cand)
+            {
+                if (S_set.count(v))
+                    continue;
+                int g = edge_to_S(v);
+                int s = edge_to_pool(v);
+                if (g > best_gain ||
+                    (g == best_gain && s > best_sec) ||
+                    (g == best_gain && s == best_sec && (best_node == -1 || v < best_node)))
+                {
+                    best_node = v;
+                    best_gain = g;
+                    best_sec = s;
+                }
+            }
+            if (best_node == -1)
+                break;
+            S_set.insert(best_node);
+        }
+        if ((int)S_set.size() == k)
+        {
+            best_S.assign(S_set.begin(), S_set.end());
+            best_m = count_edges_in(best_S);
+        }
+    }
+
+    if ((int)best_S.size() != k)
+        return {};
+
+    vector<int> to_expand;
+    for (int v : best_S)
+        if (V_active.find(v) == V_active.end())
+            to_expand.push_back(v);
+    return to_expand;
+}
+
 vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, double> &x_bar, double pi, const unordered_set<int> &v0_set, double lambda_val)
 {
     double sum_x_bar = 0.0;
@@ -889,6 +1098,7 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     double local_lp_obj = -1e9;
     double prev_lp_bound = 1e9;
     int consecutive_stalls = 0;
+    bool joint_pricing_tried = false;
 
     // Feasibility pre-check: enough active nodes remain after excluding v0
     if (V_active.size() < (size_t)(k + v0.size()))
@@ -916,6 +1126,24 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
 
         if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
             return {std::move(local_x_bar), local_lp_obj};
+
+        // Materialise the adjacency of every frontier node we have not yet
+        // queried. Pricing must score columns against the true subgraph
+        // induced by V_active ∪ F; without this an edge among two F members
+        // is invisible (neither endpoint has been queried), and the joint
+        // pricer cannot detect a frontier clique that completes a k-set.
+        // Snapshot F first so a fetch that discovers new neighbours (joining
+        // F) does not grow the round; new F entries get their turn the next
+        // time we loop here.
+        {
+            std::vector<int> to_query;
+            to_query.reserve(F.size());
+            for (int f : F)
+                if (!queried_nodes.count(f) && !error_nodes.count(f))
+                    to_query.push_back(f);
+            for (int f : to_query)
+                _materialize_adjacency(f);
+        }
 
         t0 = chrono::high_resolution_clock::now();
         _sync_rmp_structure(lambda_val);
@@ -954,6 +1182,30 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
             for (int f : top_f)
                 _expand_node(f);
             continue;
+        }
+
+        // Individual reduced-cost pricing returned no improving column. Before
+        // declaring LP-optimality, run one structural pass that scores frontier
+        // nodes jointly: a greedy k-densest seed starting from {q} surfaces
+        // clique-completer subsets whose members each have negative solo RC
+        // under the current dual prices but together form a high-density set.
+        // The flag prevents an infinite loop when the greedy result is already
+        // contained in V_active (no progress) or when later LP iterations
+        // converge to the same incumbent.
+        if (!joint_pricing_tried)
+        {
+            joint_pricing_tried = true;
+            auto t_jp_0 = chrono::high_resolution_clock::now();
+            vector<int> joint = _greedy_joint_pricing(v0_set);
+            auto t_jp_1 = chrono::high_resolution_clock::now();
+            stats.t_pricing += chrono::duration<double>(t_jp_1 - t_jp_0).count();
+            if (!joint.empty())
+            {
+                stats.total_columns_added += joint.size();
+                for (int f : joint)
+                    _expand_node(f);
+                continue;
+            }
         }
 
         // Track consecutive LP bound stalls (no positive-RC columns were found)
