@@ -23,6 +23,24 @@ QUALITY_COLUMNS = {
 }
 
 
+# Driver table for the hyperparameter columns that participate in resume keys,
+# row reconstruction, and sort order. Adding a new hyperparameter means adding
+# one entry here; config_key / row_key / sort_key derive from it.
+HP_COLUMNS = [
+    ("method", str),
+    ("k", int),
+    ("kappa", int),
+    ("depth", int),
+    ("time_limit", float),
+    ("cg_batch_frac", float),
+    ("cg_min_batch", int),
+    ("cg_max_batch", int),
+    ("node_limit", int),
+    ("gap_tol", float),
+    ("dinkelbach_iter", int),
+]
+
+
 def parse_int_list(raw):
     return [int(v) for v in raw.split(",") if v.strip() != ""]
 
@@ -38,66 +56,37 @@ def limit_nodes(nodes, limit, seed):
     return rng.sample(list(nodes), limit)
 
 
+def _cast(value, caster):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return caster(value)
+
+
 def config_key(config):
-    return (
-        config["method"],
-        config["k"],
-        config["kappa"],
-        config["depth"],
-        config.get("time_limit"),
-        config.get("cg_batch_frac"),
-        config.get("cg_min_batch"),
-        config.get("cg_max_batch"),
-        config.get("node_limit"),
-        config.get("gap_tol"),
-        config.get("dinkelbach_iter"),
-    )
+    return tuple(_cast(config.get(col), caster) for col, caster in HP_COLUMNS)
 
 
 def row_key(row):
-    return (
-        row.get("method"),
-        None if pd.isna(row.get("k")) else int(row.get("k")),
-        None if pd.isna(row.get("kappa")) else int(row.get("kappa")),
-        None if pd.isna(row.get("depth")) else int(row.get("depth")),
-        None
-        if "time_limit" not in row or pd.isna(row.get("time_limit"))
-        else float(row.get("time_limit")),
-        None
-        if "cg_batch_frac" not in row or pd.isna(row.get("cg_batch_frac"))
-        else float(row.get("cg_batch_frac")),
-        None
-        if "cg_min_batch" not in row or pd.isna(row.get("cg_min_batch"))
-        else int(row.get("cg_min_batch")),
-        None
-        if "cg_max_batch" not in row or pd.isna(row.get("cg_max_batch"))
-        else int(row.get("cg_max_batch")),
-        None
-        if "node_limit" not in row or pd.isna(row.get("node_limit"))
-        else int(row.get("node_limit")),
-        None
-        if "gap_tol" not in row or pd.isna(row.get("gap_tol"))
-        else float(row.get("gap_tol")),
-        None
-        if "dinkelbach_iter" not in row or pd.isna(row.get("dinkelbach_iter"))
-        else int(row.get("dinkelbach_iter")),
+    return tuple(
+        _cast(row.get(col) if col in row else None, caster)
+        for col, caster in HP_COLUMNS
     )
 
 
 def sort_key(row):
-    return (
-        row["method"],
-        -1 if pd.isna(row.get("k")) else int(row["k"]),
-        -1 if pd.isna(row.get("kappa")) else int(row["kappa"]),
-        -1 if pd.isna(row.get("depth")) else int(row["depth"]),
-        -1 if pd.isna(row.get("time_limit")) else float(row["time_limit"]),
-        -1 if pd.isna(row.get("cg_batch_frac")) else float(row["cg_batch_frac"]),
-        -1 if pd.isna(row.get("cg_min_batch")) else int(row["cg_min_batch"]),
-        -1 if pd.isna(row.get("cg_max_batch")) else int(row["cg_max_batch"]),
-        -1 if pd.isna(row.get("node_limit")) else int(row["node_limit"]),
-        -1 if pd.isna(row.get("gap_tol")) else float(row["gap_tol"]),
-        -1 if pd.isna(row.get("dinkelbach_iter")) else int(row["dinkelbach_iter"]),
-    )
+    parts = []
+    for col, caster in HP_COLUMNS:
+        value = _cast(row.get(col), caster)
+        if value is None:
+            parts.append((0, "") if caster is str else (0, -1))
+        else:
+            parts.append((1, value))
+    return tuple(parts)
 
 
 def build_tuning_stages(
