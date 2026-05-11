@@ -261,7 +261,7 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Directionality and max-in-degree cap}
+\begin{frame}{Directionality and the incoming-citation cap}
   Edge convention:
   \[
     u \to v
@@ -271,20 +271,19 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  Oracle query for node $v$:
+  Each oracle query for a paper $v$ returns:
   \begin{itemize}
-    \item outgoing neighbors: papers referenced by $v$
-    \item incoming neighbors: papers that cite $v$
+    \item papers referenced by $v$ (outgoing)
+    \item papers that cite $v$ (incoming)
   \end{itemize}
 
   \vfill
 
-  \textbf{\texttt{max\_in\_edges}}
+  \textbf{Incoming-citation cap}
   \begin{itemize}
-    \item caps incoming/cited-by edges fetched per queried node
-    \item prevents explosion around highly cited papers
-    \item reported Cora-ML runs use \texttt{max\_in\_edges = 0}
-    \item therefore: no incoming expansion, outgoing citation direction only
+    \item highly cited papers can have thousands of incoming edges
+    \item the cap limits how many of those are fetched per query
+    \item reported runs fetch only outgoing citations, no incoming
   \end{itemize}
 \end{frame}
 
@@ -512,22 +511,25 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Average-degree baseline: pipeline}
-  \textbf{Problem.} Maximise $|E(S)| / |S|$ over $S \ni q$,
-  $S \subseteq V_{\mathrm{loc}}$ where $V_{\mathrm{loc}}$ is BFS-bounded.
-  No size constraint, no connectivity constraint, no triangle
-  relaxation. Different objective from BP: avg degree, not pair
-  density.
+  \textbf{Problem}
+  \begin{itemize}
+    \item maximise $|E(S)| / |S|$ over $S \ni q$,
+      $S \subseteq V_{\mathrm{loc}}$
+    \item $V_{\mathrm{loc}}$ is BFS-bounded
+    \item no size constraint, no connectivity constraint, no triangle
+      relaxation
+    \item avg degree, not pair density
+  \end{itemize}
 
   \vfill
 
-  \textbf{Pipeline.}
+  \textbf{Pipeline}
   \begin{itemize}
-    \item BFS from $q$ caches the local subgraph once.
-    \item Dinkelbach bisects $\lambda \in [0, |E_{\mathrm{loc}}|]$.
-    \item Per $\lambda$: Goldberg-style $s$--$t$ flow network, then
-    push-relabel max-flow. The source-side residual gives $S_\lambda$.
-    \item Keep the argmax density across every probed $\lambda$, not
-    only the converged one.
+    \item BFS from $q$ caches the local subgraph once
+    \item Dinkelbach bisects $\lambda \in [0, |E_{\mathrm{loc}}|]$
+    \item per $\lambda$: Goldberg $s$--$t$ flow + push-relabel
+    \item $S_\lambda$ = source-side residual
+    \item argmax density across every probed $\lambda$
   \end{itemize}
 \end{frame}
 
@@ -549,84 +551,91 @@ University of Illinois Urbana-Champaign \\
 \section{Experiments}
 
 \begin{frame}{Exp 1: solver correctness on enumerable graphs}
-  \textbf{Goal.} Verify that the C++ branch-and-price binary recovers
-  the true edge-density and avg-degree optima on graphs small enough
-  to enumerate exhaustively.
+  \textbf{Goal}
+  \begin{itemize}
+    \item check that the solver recovers the true optimum on graphs
+      small enough to enumerate every subset
+  \end{itemize}
 
   \vfill
 
-  \textbf{Fixture.} Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at
-  $n = 20$, $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$. Fifteen
-  graphs total. Query node $q$ is the highest-degree node per graph.
+  \textbf{Fixture}
+  \begin{itemize}
+    \item Erd\H{o}s--R\'enyi random graphs $G(n, p)$
+    \item $n = 20$
+    \item $p \in \{0.25,\, 0.50,\, 0.75\}$
+    \item seeds $0..4$, so 15 graphs total
+    \item query $q$: highest-degree node per graph
+  \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 1: brute-force oracle}
-  \textbf{Enumerator.} For every $S \ni q$ with $|S| \ge k$:
+  For every $S \ni q$ with $|S| \ge k$:
   \begin{itemize}
-    \item Iterate $k \in \{3, 4, 5\}$ and
-    $\kappa \in \{0, 1, 2\}$.
-    \item Record the maximum-density $S$ subject to
-    $\lambda(S) \ge \kappa$.
-    \item Cells with no feasible $S$ at the requested $\kappa$ store a
-    $-1$ sentinel in \texttt{optima.csv}.
+    \item iterate $k \in \{3, 4, 5\}$, $\kappa \in \{0, 1, 2\}$
+    \item record the maximum-density $S$ subject to
+      $\lambda(S) \ge \kappa$
+    \item mark cells with no feasible $S$ at the requested $\kappa$
+      as infeasible
   \end{itemize}
-
-  \vfill
-
-  Every row carries a \texttt{code\_hash} (sha256 of the brute-force
-  script) so a stale CSV is rejected at aggregation.
 \end{frame}
 
 \begin{frame}{Exp 1: solver protocol}
-  \textbf{Runs.} The C++ binary on every
-  $(\mathrm{method}, k, \kappa, \mathrm{seed})$ cell with no time,
-  node, gap, or Dinkelbach limit.
-
-  \vfill
-
-  \textbf{Skip rule.} Cells brute-force-infeasible (the $-1$ sentinel
-  in \texttt{optima.csv}) are not dispatched; without this the solver
-  exhausts B\&B trying to prove infeasibility and wall time blows up
-  on sparse seeds.
-
-  \vfill
-
-  Every row in \texttt{solver\_runs.csv} carries the matching
-  \texttt{solver\_build\_id} (git short SHA + UTC build time baked at
-  \texttt{cmake} time) so a stale binary is rejected at aggregation.
+  \begin{itemize}
+    \item run the solver on every (method, $k$, $\kappa$, seed) cell
+    \item no time, node, gap, or Dinkelbach limit
+    \item skip cells the brute force already flagged infeasible:
+    \begin{itemize}
+      \item otherwise the solver exhausts the search proving
+        infeasibility
+      \item wall time blows up on sparse seeds
+    \end{itemize}
+  \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 1: result}
-  \textbf{AvgDeg} matches the unconstrained avg-degree optimum on
-  $15 / 15$ graphs at every $p$.
-
-  \vfill
-
-  \textbf{BP} matches the edge-density optimum on every feasible
-  $(k, \kappa, p)$ cell. Two cells at $k = 3$, $\kappa \in \{1, 2\}$,
-  $p = 0.5$ have one seed where no $S$ reaches the requested $\kappa$;
-  that seed is surfaced as \texttt{infeasible\_kappa} rather than
-  counted as a non-match.
-\end{frame}
-
-\begin{frame}{Citation dataset and split}
-  Dataset: CitationFull Cora-ML (lead dataset).
-
-  \vfill
-
+  \textbf{AvgDeg}
   \begin{itemize}
-    \item 2,995 nodes, 8,416 directed edges, 7 labels.
-    \item Pool: pure-source papers (citing-only) with out-degree $\ge 2$.
-    \item Pool split 50 / 50: val = 402, test = 402 (seed 42).
-    \item Train = every other node (2,191 on Cora\_ML).
-    \item Hard subset: 64 val nodes where BFS depth-1 label vote is wrong.
+    \item matches the unconstrained avg-degree optimum on
+      $15 / 15$ graphs at every $p$
   \end{itemize}
 
   \vfill
 
-  All splits, train mask, and hard subset are hash-pinned in
-  \texttt{data/Cora\_ML/split\_meta.json} (schema $2.0$,
-  \texttt{pool\_criterion = pure\_source\_with\_outdegree\_geq\_2}).
+  \textbf{BP}
+  \begin{itemize}
+    \item matches the edge-density optimum on every feasible
+      $(k, \kappa, p)$ cell
+    \item two cells at $k = 3$, $\kappa \in \{1, 2\}$, $p = 0.5$
+      contain one seed with $\lambda(S) < \kappa$
+    \item that seed is surfaced as infeasible-$\kappa$, not as a
+      non-match
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Citation dataset and split}
+  Dataset: CitationFull Cora-ML (lead dataset)
+  \begin{itemize}
+    \item 2,995 nodes
+    \item 8,416 directed edges
+    \item 7 paper labels
+  \end{itemize}
+
+  \vfill
+
+  Query pool: papers that only cite (pure sources) with out-degree
+  $\ge 2$.
+  \begin{itemize}
+    \item val: 402 queries
+    \item test: 402 queries
+    \item train: every other node, 2,191 on Cora\_ML
+    \item hard subset: 64 val nodes where the depth-1 BFS vote is
+      wrong
+  \end{itemize}
+
+  \vfill
+
+  Splits and hard subset are hash-pinned at creation time.
 \end{frame}
 
 \begin{frame}{Baselines and BP}
@@ -654,32 +663,42 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 2: scope}
-  \textbf{Intrinsic perspective on val + test combined.}
-  Cluster quality and cost are label-agnostic and read the geometry
-  of the returned subgraph; aggregating over the val + test union
-  uses every query the solver was asked to retrieve.
+  \begin{itemize}
+    \item intrinsic perspective: label-agnostic geometry of the
+      returned community
+    \item evaluated on val + test combined, so every queried node
+      contributes
+  \end{itemize}
 
   \vfill
 
-  Grid (locked):
+  Locked grid:
   \begin{itemize}
     \item BFS depth $\in \{1, 2\}$
     \item BP $k \in \{3, 4, 5\}$, $\kappa \in \{0, 1, 2\}$
     \item AvgDeg single cell
-    \item Five Gurobi seeds for BP $(42..46)$; deterministic methods once
-    \item No time, node, gap, or Dinkelbach limit
+    \item five Gurobi seeds for BP $(42..46)$; deterministic methods
+      once
+    \item no time, node, gap, or Dinkelbach limit
   \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 2: cluster quality on val + test}
-  Median per $(\mathrm{method}, k, \kappa)$ cell over the val + test
-  union from \texttt{cluster\_quality\_summary.csv}.
+  Median over the val + test pool per (method, $k$, $\kappa$).
 
   \vfill
 
-  Reported metrics: size, $\lambda_2$, edge density, NCut, mixing
-  parameter, within-class internal edges ratio, true-class vote
-  share, train-label entropy.
+  Reported metrics:
+  \begin{itemize}
+    \item community size
+    \item algebraic connectivity $\lambda_2$
+    \item edge density
+    \item normalised cut
+    \item mixing parameter
+    \item within-class internal edge ratio
+    \item true-class vote share
+    \item train-label entropy
+  \end{itemize}
 
   \vfill
 
@@ -687,38 +706,49 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 2: cost on val + test}
-  Median per $(\mathrm{method}, k, \kappa)$ cell over the val + test
-  union from \texttt{cost\_summary.csv}.
+  Median over the val + test pool per (method, $k$, $\kappa$).
 
   \vfill
 
-  Reported: wall time, oracle queries, total\_bb\_nodes (BP),
-  total\_lp\_solves (BP), total\_columns\_added (BP),
-  total\_cuts\_added (BP), $t$\_lp\_solve, $t$\_pricing, returned
-  community size.
+  Reported:
+  \begin{itemize}
+    \item wall time
+    \item oracle queries
+    \item BP branch-and-bound nodes
+    \item BP LP solves
+    \item BP columns added
+    \item BP cuts added
+    \item LP solve time
+    \item pricing time
+    \item returned community size
+  \end{itemize}
 
   \vfill
 
-  \textbf{Placeholder.} Numbers pending pipeline rerun. The
-  materialise-frontier solver pays more oracle queries per call than
-  the legacy lazy build; this slide makes the price explicit.
+  \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
 \begin{frame}{Exp 3: scope and prediction rule}
-  \textbf{Extrinsic perspective: tune on val, evaluate on test and on
-  the BFS-hard val subset.}
+  \begin{itemize}
+    \item extrinsic perspective
+    \item tune on val, evaluate on test and on the BFS-hard val
+      subset
+  \end{itemize}
 
   \vfill
 
   For each val or test query $q$:
   \begin{itemize}
-    \item Retrieve the community around $q$ from the chosen solver.
-    \item Uniform majority over the train-labelled nodes in the
-    community; ties broken deterministically by ascending label
-    (\texttt{argmax\_label}).
-    \item Fallback: BFS that \emph{forbids} every val and test node
-    as a stepping stone.
-    \item Last resort: global majority of the train pool.
+    \item retrieve a community around $q$ from the chosen method
+    \item predict $q$'s label by a uniform majority vote over the
+      training-labelled members of that community
+    \item ties broken by ascending label so the result is
+      reproducible
+    \item fallback when the community has no training neighbour: walk
+      outward by BFS, forbidding val and test nodes as stepping
+      stones
+    \item last resort if no training label is reachable: the global
+      majority of the training pool
   \end{itemize}
 \end{frame}
 
@@ -760,17 +790,20 @@ University of Illinois Urbana-Champaign \\
   \vfill
 
   \begin{itemize}
-    \item \emph{Easy regime.} One-hop citation labels are already
-    correct; BFS depth 1 is hard to beat.
-    \item \emph{Hard regime.} One-hop BFS predicts the wrong label;
-    retrieval geometry has to compensate.
+    \item easy regime: the immediate citations already carry the
+      right label, so depth-1 BFS is hard to beat
+    \item hard regime: the immediate citations carry the wrong label,
+      so the retrieval has to look further
   \end{itemize}
 
   \vfill
 
-  \textbf{BFS-hard validation subset:} val nodes where the BFS
-  depth-1 vote disagrees with the ground-truth label (64 on
-  Cora\_ML). The subset is hash-pinned in \texttt{split\_meta.json}.
+  BFS-hard val subset:
+  \begin{itemize}
+    \item val nodes where the depth-1 BFS vote disagrees with the
+      true label
+    \item 64 nodes on Cora-ML, fixed at split-creation time
+  \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 3: evaluation on the hard subset}
@@ -792,27 +825,29 @@ University of Illinois Urbana-Champaign \\
 \section{Conclusion}
 
 \begin{frame}{Main interpretation}
-  \textbf{Cluster quality is the headline; classification is the supporting signal.}
+  \textbf{Placeholder.} Numbers pending pipeline rerun. The
+  expected story:
 
   \vfill
 
   \begin{itemize}
-    \item BP returns the densest, best-mixed subgraph of the three methods
-      on Cora\_ML, at a community size close to BFS depth 1.
-    \item BFS depth 1 wins macro F1 on the full test split because Cora\_ML
-      test nodes cite training papers of the same class.
-    \item On the BFS-hard subset, the spectral and density picture stays the
-      same: BFS still has the highest $\lambda_2$, BP returns the densest
-      community, AvgDeg spreads out far past the local cluster.
-    \item Classification ranks reorder on the hard subset: BFS collapses to 0
-      by construction, and AvgDeg and BP both move off zero.
+    \item BP returns a denser, better-mixed community at a size
+      comparable to depth-1 BFS
+    \item depth-1 BFS wins macro F1 on the full test split because
+      most test papers cite same-class training papers
+    \item on the BFS-hard subset the geometry picture stays the
+      same; classification ranks shift because BFS is zero by
+      construction there
   \end{itemize}
 
   \vfill
 
-  \textbf{Claim:} BP is a principled dense-community retriever. Its
-  competitive classification F1 follows from the geometry, not the other
-  way round.
+  Claim:
+  \begin{itemize}
+    \item BP is a dense-community retriever
+    \item its classification F1 follows from the geometry, not the
+      other way around
+  \end{itemize}
 \end{frame}
 
 \begin{frame}{Limitations}
