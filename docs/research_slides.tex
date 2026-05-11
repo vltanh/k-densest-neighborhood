@@ -571,6 +571,43 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
+\begin{frame}{Solver correctness on enumerable graphs}
+  Synthetic Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at $n = 20$,
+  $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$ (15 graphs).
+  Query node $q$ is the highest-degree node per graph.
+
+  \vfill
+
+  \textbf{Brute force} enumerates every subset containing $q$ at sizes
+  $|S| \ge k$ for $k \in \{3, 4, 5\}$, and at edge-connectivity
+  $\lambda(S) \ge \kappa$ for $\kappa \in \{0, 1, 2\}$. The optimum and its
+  realised edge-connectivity are recorded for every cell.
+
+  \vfill
+
+  \textbf{Solver runs} the C++ solver across every (method, $k$, $\kappa$)
+  cell with no time, node, gap, or Dinkelbach limit. Cells declared
+  brute-force-infeasible are skipped (the sentinel $-1$ in
+  \texttt{optima.csv}) to keep the wall time finite.
+
+  \vfill
+
+  \textbf{Result.} AvgDeg recovers the brute-force avg-degree optimum on
+  $15 / 15$ graphs. BP recovers the brute-force edge-density optimum on
+  every $(k, \kappa, p)$ cell that is feasible on at least one seed; two
+  cells at $k = 3$, $\kappa \in \{1, 2\}$, $p = 0.5$ have one seed with
+  $\lambda(S) < \kappa$ and that seed is surfaced as
+  \texttt{infeasible\_kappa} rather than counted as a non-match.
+
+  \vfill
+
+  \textbf{Reproducibility stamps.} Every \texttt{optima.csv} row carries a
+  \texttt{code\_hash} (sha256 of the brute-force script) and every
+  \texttt{solver\_runs.csv} row carries the matching solver
+  \texttt{solver\_build\_id} so a stale binary or script is caught at
+  aggregation.
+\end{frame}
+
 \begin{frame}{Classification protocol}
   Dataset: CitationFull Cora-ML (lead dataset).
 
