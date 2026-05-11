@@ -100,8 +100,15 @@ def _collapse_seeds(per_query: pd.DataFrame) -> pd.DataFrame:
     return agg.merge(extras, on=keys, how="left")
 
 
-def _summarise(collapsed: pd.DataFrame, group_extra: Optional[list] = None) -> pd.DataFrame:
-    group_cols = ["dataset", "method", "params_hash", "query_split"]
+def _summarise(
+    collapsed: pd.DataFrame,
+    group_extra: Optional[list] = None,
+    combine_splits: bool = False,
+) -> pd.DataFrame:
+    if combine_splits:
+        group_cols = ["dataset", "method", "params_hash"]
+    else:
+        group_cols = ["dataset", "method", "params_hash", "query_split"]
     if group_extra:
         group_cols = group_cols + list(group_extra)
     rows = []
@@ -221,6 +228,21 @@ def main():
         help="Filter records by query_split before aggregating (default: union of val+test).",
     )
     parser.add_argument(
+        "--combine-splits",
+        action="store_true",
+        help=(
+            "Group by (dataset, method, params_hash) only, treating val and "
+            "test records as one pool. Use for the headline cluster-quality "
+            "frame which is intrinsic and label-agnostic across both splits."
+        ),
+    )
+    parser.add_argument(
+        "--params-hash",
+        type=str,
+        default=None,
+        help="Filter records to one params_hash; combine with --combine-splits to emit one row per method.",
+    )
+    parser.add_argument(
         "--paired-vs",
         type=str,
         default=None,
@@ -247,6 +269,8 @@ def main():
         records = [r for r in records if r.get("dataset") == args.dataset]
     if args.method:
         records = [r for r in records if r.get("method") == args.method]
+    if args.params_hash:
+        records = [r for r in records if r.get("params_hash") == args.params_hash]
 
     if not records:
         print(f"No records matched at {records_path}")
@@ -255,7 +279,7 @@ def main():
     per_query = pd.DataFrame([_row_for(r) for r in records])
     per_query = _filter_by_split(per_query, args.split)
     collapsed = _collapse_seeds(per_query)
-    summary = _summarise(collapsed)
+    summary = _summarise(collapsed, combine_splits=args.combine_splits)
 
     os.makedirs(args.output, exist_ok=True)
     per_query_path = os.path.join(args.output, "cluster_quality_per_query.csv")
@@ -271,7 +295,9 @@ def main():
     # Size-stratified summary so density gains can be read separately from
     # size effects in the headline frames.
     if "size_bucket" in collapsed.columns:
-        size_summary = _summarise(collapsed, group_extra=["size_bucket"])
+        size_summary = _summarise(
+            collapsed, group_extra=["size_bucket"], combine_splits=args.combine_splits
+        )
         size_path = os.path.join(args.output, "cluster_quality_summary_by_size.csv")
         size_summary.to_csv(size_path, index=False)
         print(f"wrote {size_path}")
