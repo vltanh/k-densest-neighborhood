@@ -17,10 +17,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class SolverRequest(BaseModel):
-    session_id: str = Field(..., description="Unique ID for this extraction run")
-    query_node: str = Field(..., pattern=r"^[a-zA-Z0-9]+$", description="OpenAlex ID")
-    k: int = Field(..., ge=2, description="Target subgraph size")
+VARIANT_FLAGS = {
+    "bp": "--bp",
+    "avgdeg": "--avgdeg",
+    "bfs": "--bfs",
+    "conn_greedy": "--conn-greedy",
+    "conn_avgdeg": "--conn-avgdeg",
+}
+
+
+class SolverParams(BaseModel):
+    """Shared solver-side hyperparameters across both extraction endpoints."""
+
+    k: int = Field(default=5, ge=2, description="Target subgraph size (BP / conn-greedy)")
+    variant: str = Field(default="bp", description="Solver variant: bp, avgdeg, bfs, conn_greedy, conn_avgdeg")
+    kappa: int = Field(default=0, ge=0, description="Edge-connectivity threshold (BP only; 0 disables)")
+    baseline_depth: int = Field(default=-1, description="BFS-frontier depth for conn-* baselines (-1 = unbounded)")
+    bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
+    compute_qualities: bool = Field(default=False, description="Compute final density / connectivity metrics")
+
     time_limit: Optional[float] = 60.0
     node_limit: Optional[int] = 100000
     max_in_edges: Optional[int] = 0
@@ -30,6 +45,50 @@ class SolverRequest(BaseModel):
     cg_min_batch: Optional[int] = 50
     cg_max_batch: Optional[int] = 50
     tol: Optional[float] = 1e-6
+
+
+class SolverRequest(SolverParams):
+    session_id: str = Field(..., description="Unique ID for this extraction run")
+    query_node: str = Field(..., pattern=r"^[a-zA-Z0-9]+$", description="OpenAlex ID")
+
+
+def _variant_argv(req: "SolverParams") -> list:
+    """Translate a SolverParams payload into solver CLI arguments.
+
+    Only forwards the per-variant flags that main.cpp accepts for the chosen variant;
+    forbidden combinations would otherwise cause the binary to exit 1.
+    """
+    variant = (req.variant or "bp").lower()
+    if variant not in VARIANT_FLAGS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown variant '{req.variant}'. Allowed: {sorted(VARIANT_FLAGS)}",
+        )
+
+    args = [
+        VARIANT_FLAGS[variant],
+        "--time-limit", str(req.time_limit),
+        "--node-limit", str(req.node_limit),
+        "--max-in-edges", str(req.max_in_edges),
+        "--gap-tol", str(req.gap_tol),
+        "--dinkelbach-iter", str(req.dinkelbach_iter),
+        "--cg-batch-frac", str(req.cg_batch_frac),
+        "--cg-min-batch", str(req.cg_min_batch),
+        "--cg-max-batch", str(req.cg_max_batch),
+        "--tol", str(req.tol),
+    ]
+
+    if variant in ("bp", "conn_greedy"):
+        args += ["--k", str(req.k)]
+    if variant == "bp":
+        args += ["--kappa", str(req.kappa)]
+    if variant in ("conn_greedy", "conn_avgdeg"):
+        args += ["--baseline-depth", str(req.baseline_depth)]
+    if variant == "bfs":
+        args += ["--bfs-depth", str(req.bfs_depth)]
+    if req.compute_qualities:
+        args.append("--compute-qualities")
+    return args
 
 
 app = FastAPI(title="KDensest Subgraph Explorer API")
@@ -195,20 +254,10 @@ DATA_ROOT = os.path.join(PROJECT_ROOT, "data")
 SIM_DATASETS = ("Cora", "PubMed", "DBLP", "CiteSeer", "Cora_ML")
 
 
-class SimSolverRequest(BaseModel):
+class SimSolverRequest(SolverParams):
     session_id: str = Field(..., description="Unique ID for this extraction run")
     dataset: str = Field(..., description="Dataset name under data/")
     query_node: int = Field(..., ge=0, description="Integer node id")
-    k: int = Field(..., ge=2, description="Target subgraph size")
-    time_limit: Optional[float] = 60.0
-    node_limit: Optional[int] = 100000
-    max_in_edges: Optional[int] = 0
-    gap_tol: Optional[float] = 1e-4
-    dinkelbach_iter: Optional[int] = 50
-    cg_batch_frac: Optional[float] = 1.0
-    cg_min_batch: Optional[int] = 50
-    cg_max_batch: Optional[int] = 50
-    tol: Optional[float] = 1e-6
     ghost_sample_frac: Optional[float] = 0.1
     ghost_max_per_node: Optional[int] = 5
 
@@ -304,38 +353,11 @@ async def extract_sim(req: SimSolverRequest):
         try:
             cmd = [
                 bin_path,
-                "--mode",
-                "sim",
-                "--input",
-                edge_csv,
-                "--query",
-                str(req.query_node),
-                "--k",
-                str(req.k),
-                "--output",
-                out_csv,
-                "--time-limit",
-                str(req.time_limit),
-                "--node-limit",
-                str(req.node_limit),
-                "--max-in-edges",
-                str(req.max_in_edges),
-                "--gap-tol",
-                str(req.gap_tol),
-                "--dinkelbach-iter",
-                str(req.dinkelbach_iter),
-                "--cg-batch-frac",
-                str(req.cg_batch_frac),
-                "--cg-min-batch",
-                str(req.cg_min_batch),
-                "--cg-max-batch",
-                str(req.cg_max_batch),
-                "--tol",
-                str(req.tol),
-                # "--baseline",
-                # "--baseline-depth",
-                # str(6),
-            ]
+                "--mode", "sim",
+                "--input", edge_csv,
+                "--query", str(req.query_node),
+                "--output", out_csv,
+            ] + _variant_argv(req)
             yield json.dumps(
                 {
                     "type": "log",
@@ -488,33 +510,10 @@ async def extract_subgraph(req: SolverRequest):
         try:
             cmd = [
                 bin_path,
-                "--mode",
-                "openalex",
-                "--query",
-                req.query_node,
-                "--k",
-                str(req.k),
-                "--output",
-                out_csv,
-                "--time-limit",
-                str(req.time_limit),
-                "--node-limit",
-                str(req.node_limit),
-                "--max-in-edges",
-                str(req.max_in_edges),
-                "--gap-tol",
-                str(req.gap_tol),
-                "--dinkelbach-iter",
-                str(req.dinkelbach_iter),
-                "--cg-batch-frac",
-                str(req.cg_batch_frac),
-                "--cg-min-batch",
-                str(req.cg_min_batch),
-                "--cg-max-batch",
-                str(req.cg_max_batch),
-                "--tol",
-                str(req.tol),
-            ]
+                "--mode", "openalex",
+                "--query", req.query_node,
+                "--output", out_csv,
+            ] + _variant_argv(req)
             yield json.dumps(
                 {"type": "log", "content": f"Executing: {' '.join(cmd)}"}
             ) + "\n"
