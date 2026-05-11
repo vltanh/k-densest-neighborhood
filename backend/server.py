@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Tuple, List
 
+from pymincut.pygraph import PyGraph
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,6 @@ class SolverParams(BaseModel):
     kappa: int = Field(default=0, ge=0, description="Edge-connectivity threshold (BP only; 0 disables)")
     baseline_depth: int = Field(default=-1, description="BFS-frontier depth for conn-* baselines (-1 = unbounded)")
     bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
-    compute_qualities: bool = Field(default=False, description="Compute final density / connectivity metrics")
 
     time_limit: Optional[float] = 60.0
     node_limit: Optional[int] = 100000
@@ -86,8 +87,7 @@ def _variant_argv(req: "SolverParams") -> list:
         args += ["--baseline-depth", str(req.baseline_depth)]
     if variant == "bfs":
         args += ["--bfs-depth", str(req.bfs_depth)]
-    if req.compute_qualities:
-        args.append("--compute-qualities")
+    args.append("--compute-qualities")
     return args
 
 
@@ -316,6 +316,80 @@ def _load_sim_dataset(dataset: str):
     return _sim_cache[dataset]
 
 
+def _compute_sim_qualities(
+    core_ids: List[int],
+    adj: Dict[int, List[int]],
+    adj_out: Dict[int, List[int]],
+) -> dict:
+    """Compute density / conductance / normalized-cut metrics on the induced
+    subgraph defined by ``core_ids`` against the cached simulation adjacency."""
+    S = set(core_ids)
+    n = len(S)
+
+    # Directed internal edge count (m): (u, v) with u in S, v in adj_out[u], v in S, v != u.
+    m = 0
+    for u in S:
+        for v in adj_out.get(u, []):
+            if v in S and v != u:
+                m += 1
+
+    avg_internal_degree = m / n if n > 0 else 0.0
+    edge_density = m / (n * (n - 1)) if n > 1 else 0.0
+
+    # Undirected internal edge dedup via (min, max).
+    internal_pairs = set()
+    boundary_undirected_edges = 0
+    for u in S:
+        for v in adj.get(u, []):
+            if v in S:
+                if v == u:
+                    continue
+                internal_pairs.add((u, v) if u < v else (v, u))
+            else:
+                boundary_undirected_edges += 1
+    internal_undirected_edges = len(internal_pairs)
+
+    vol_S = 2 * internal_undirected_edges + boundary_undirected_edges
+    vol_full = sum(len(adj[v]) for v in adj)
+    vol_outside = vol_full - vol_S
+    cond_denom = min(vol_S, vol_outside)
+    ext_conductance = (
+        boundary_undirected_edges / cond_denom if cond_denom > 0 else 0.0
+    )
+
+    int_ncut: float
+    if internal_undirected_edges == 0 or n < 2:
+        int_ncut = 0.0
+    else:
+        try:
+            cluster_edges = set()
+            for a, b in internal_pairs:
+                cluster_edges.add((a, b))
+                cluster_edges.add((b, a))
+            part_a, part_b, cut_value = PyGraph(
+                list(S), list(cluster_edges)
+            ).mincut("noi", "bqueue", False)
+            vol_a = sum(
+                1 for u in part_a for v in adj.get(u, []) if v in S
+            )
+            vol_b = sum(
+                1 for u in part_b for v in adj.get(u, []) if v in S
+            )
+            if vol_a > 0 and vol_b > 0:
+                int_ncut = cut_value * (vol_a + vol_b) / (vol_a * vol_b)
+            else:
+                int_ncut = 0.0
+        except Exception:
+            int_ncut = float("nan")
+
+    return {
+        "avg_internal_degree": float(avg_internal_degree),
+        "edge_density": float(edge_density),
+        "ext_conductance": float(ext_conductance),
+        "int_ncut": float(int_ncut),
+    }
+
+
 @app.get("/api/datasets")
 def list_datasets():
     out = []
@@ -412,6 +486,9 @@ async def extract_sim(req: SimSolverRequest):
             if not core_ids:
                 yield json.dumps({"type": "error", "content": "Empty subgraph."}) + "\n"
                 return
+
+            qualities = _compute_sim_qualities(core_ids, adj, adj_out)
+            yield json.dumps({"type": "qualities", "content": qualities}) + "\n"
 
             core_set = set(core_ids)
             nodes_out = []
