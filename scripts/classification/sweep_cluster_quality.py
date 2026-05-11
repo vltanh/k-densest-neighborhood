@@ -140,6 +140,16 @@ def main():
         default="42,43,44,45,46",
         help="Comma-separated Gurobi seeds for BP cells; deterministic methods ignore them and run once.",
     )
+    parser.add_argument(
+        "--solver-time-limit",
+        type=float,
+        default=None,
+        help=(
+            "Per-call wall-time cap (seconds) appended to BP solver argv via "
+            "--time-limit. Kept outside the params dict so it does not change "
+            "params_hash and the existing record cache stays valid across runs."
+        ),
+    )
     parser.add_argument("--weighting", type=str, default="uniform")
     parser.add_argument("--max-fallback-hops", type=int, default=10)
     parser.add_argument("--keep-solver-dumps", action="store_true")
@@ -206,6 +216,8 @@ def main():
             seeds_for_this_fam = bp_seeds if fam == "bp" else [None]
             for seed in seeds_for_this_fam:
                 extra = method_extra_args(fam, params, gurobi_seed=seed if fam == "bp" else None)
+                if fam == "bp" and args.solver_time_limit is not None:
+                    extra = list(extra) + ["--time-limit", str(args.solver_time_limit)]
                 _run_on_split(
                     query_nodes=val_ids,
                     split_label="val",
