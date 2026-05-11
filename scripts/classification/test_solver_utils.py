@@ -112,7 +112,6 @@ class SolverCommandTests(unittest.TestCase):
                     method="bfs",
                     time_limit=1.0,
                     node_limit=10,
-                    baseline_depth=-1,
                     bfs_depth=2,
                     output_dir=tmp_dir,
                 )
@@ -143,7 +142,6 @@ class SolverCommandTests(unittest.TestCase):
                     method="bp",
                     time_limit=1.0,
                     node_limit=10,
-                    baseline_depth=-1,
                     bfs_depth=2,
                     output_dir=tmp_dir,
                 )

@@ -23,7 +23,6 @@ METHODS = {
         "flags": ["--bp"],
         "kappa": 0,
         "uses_k": True,
-        "uses_baseline_depth": False,
         "uses_bfs_depth": False,
         "problem_scope": "global k-densest",
     },
@@ -32,7 +31,6 @@ METHODS = {
         "flags": ["--bp"],
         "kappa": 2,
         "uses_k": True,
-        "uses_baseline_depth": False,
         "uses_bfs_depth": False,
         "problem_scope": "global k-densest + kappa-connectivity",
     },
@@ -41,34 +39,14 @@ METHODS = {
         "flags": ["--avgdeg"],
         "kappa": None,
         "uses_k": False,
-        "uses_baseline_depth": False,
         "uses_bfs_depth": False,
         "problem_scope": "local BFS average-degree",
-    },
-    "conn_greedy": {
-        "label": "Conn-greedy",
-        "flags": ["--conn-greedy"],
-        "kappa": None,
-        "uses_k": True,
-        "uses_baseline_depth": True,
-        "uses_bfs_depth": False,
-        "problem_scope": "local connected heuristic",
-    },
-    "conn_avgdeg": {
-        "label": "Conn-avgdeg",
-        "flags": ["--conn-avgdeg"],
-        "kappa": None,
-        "uses_k": False,
-        "uses_baseline_depth": True,
-        "uses_bfs_depth": False,
-        "problem_scope": "local connected average-degree",
     },
     "bfs": {
         "label": "BFS",
         "flags": ["--bfs"],
         "kappa": None,
         "uses_k": False,
-        "uses_baseline_depth": False,
         "uses_bfs_depth": True,
         "problem_scope": "1-hop BFS neighborhood",
     },
@@ -129,7 +107,6 @@ def run_solver(
     method,
     time_limit,
     node_limit,
-    baseline_depth,
     bfs_depth,
     output_dir,
 ):
@@ -145,8 +122,6 @@ def run_solver(
         cmd += ["--kappa", str(method_spec["kappa"])]
     if method_spec["uses_bfs_depth"]:
         cmd += ["--bfs-depth", str(bfs_depth)]
-    if method_spec["uses_baseline_depth"] and baseline_depth is not None:
-        cmd += ["--baseline-depth", str(baseline_depth)]
     cmd += method_spec["flags"]
 
     started = time.perf_counter()
@@ -202,12 +177,6 @@ def main():
     parser.add_argument("--time_limit", type=float, default=60.0, help="Per-run solver time limit")
     parser.add_argument("--node_limit", type=int, default=100000, help="Per-run branch-and-bound node limit")
     parser.add_argument(
-        "--baseline_depth",
-        type=int,
-        default=-1,
-        help="Local exploration depth for baseline solvers; use -1 for the full reachable graph",
-    )
-    parser.add_argument(
         "--bfs_depth",
         type=int,
         default=1,
@@ -253,7 +222,6 @@ def main():
                     method,
                     args.time_limit,
                     args.node_limit,
-                    args.baseline_depth,
                     args.bfs_depth,
                     tmp_dir,
                 )
