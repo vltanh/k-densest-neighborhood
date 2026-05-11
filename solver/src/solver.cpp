@@ -404,20 +404,40 @@ bool FullBranchAndPriceSolver::_verify_kappa_connectivity(const std::unordered_s
         rev[e2] = e1;
     };
 
-    for (int u : sol_nodes)
+    // Collect each undirected pair once. A symmetric directed input emits both
+    // (u,v) and (v,u) in adj_out; both invocations of add_flow_edge would
+    // otherwise double the unit capacity that models a single undirected edge.
+    std::vector<std::pair<int, int>> undirected_pairs;
     {
-        auto it = adj_out.find(u);
-        if (it == adj_out.end())
-            continue;
-        for (int v : it->second)
+        std::unordered_set<long long> seen;
+        undirected_pairs.reserve(sol_nodes.size() * 4);
+        for (int u : sol_nodes)
         {
-            if (!sol_nodes.count(v))
+            auto it = adj_out.find(u);
+            if (it == adj_out.end())
                 continue;
-            int bu = g_to_b[u];
-            int bv = g_to_b[v];
-            add_flow_edge(bu, bv, 1);
-            add_flow_edge(bv, bu, 1);
+            for (int v : it->second)
+            {
+                if (u == v)
+                    continue;
+                if (!sol_nodes.count(v))
+                    continue;
+                int a = std::min(u, v);
+                int b = std::max(u, v);
+                long long key = ((long long)(unsigned int)a << 32) | (unsigned int)b;
+                if (!seen.insert(key).second)
+                    continue;
+                undirected_pairs.emplace_back(a, b);
+            }
         }
+    }
+
+    for (const auto &pr : undirected_pairs)
+    {
+        int bu = g_to_b[pr.first];
+        int bv = g_to_b[pr.second];
+        add_flow_edge(bu, bv, 1);
+        add_flow_edge(bv, bu, 1);
     }
 
     int S = g_to_b[q];
@@ -441,20 +461,12 @@ bool FullBranchAndPriceSolver::_verify_kappa_connectivity(const std::unordered_s
             rev_iter[e1] = e2;
             rev_iter[e2] = e1;
         };
-        for (int u : sol_nodes)
+        for (const auto &pr : undirected_pairs)
         {
-            auto it = adj_out.find(u);
-            if (it == adj_out.end())
-                continue;
-            for (int v : it->second)
-            {
-                if (!sol_nodes.count(v))
-                    continue;
-                int bu = g_to_b[u];
-                int bv = g_to_b[v];
-                add_iter_edge(bu, bv, 1);
-                add_iter_edge(bv, bu, 1);
-            }
+            int bu = g_to_b[pr.first];
+            int bv = g_to_b[pr.second];
+            add_iter_edge(bu, bv, 1);
+            add_iter_edge(bv, bu, 1);
         }
         long long flow = boost::push_relabel_max_flow(fg_iter, S, T);
         if (flow < kappa)
@@ -1203,16 +1215,26 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                         rev[e2] = e1;
                     };
 
+                    // Symmetric directed inputs emit reciprocal y_vars for each
+                    // undirected edge; collapse to one unit-capacity undirected
+                    // edge per unordered pair so flow capacity stays at 1 in
+                    // each direction.
+                    std::unordered_set<long long> seen_uv;
                     for (const auto &[edge, y_var] : y_vars)
                     {
-                        if (y_var.get(GRB_DoubleAttr_X) > 0.5)
-                        {
-                            int u = g_to_b[edge.first];
-                            int v = g_to_b[edge.second];
-                            // Add undirected capacity of 1
-                            add_flow_edge(u, v, 1);
-                            add_flow_edge(v, u, 1);
-                        }
+                        if (y_var.get(GRB_DoubleAttr_X) <= 0.5)
+                            continue;
+                        if (!sol_nodes.count(edge.first) || !sol_nodes.count(edge.second))
+                            continue;
+                        int a = std::min(edge.first, edge.second);
+                        int b = std::max(edge.first, edge.second);
+                        long long key = ((long long)(unsigned int)a << 32) | (unsigned int)b;
+                        if (!seen_uv.insert(key).second)
+                            continue;
+                        int u = g_to_b[a];
+                        int v = g_to_b[b];
+                        add_flow_edge(u, v, 1);
+                        add_flow_edge(v, u, 1);
                     }
 
                     // 2. Compute Max-Flow (Number of edge-disjoint paths)

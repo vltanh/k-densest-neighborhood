@@ -5,6 +5,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Solver build id: short git sha when available, otherwise "unknown". Wired into
+# main.cpp via the SOLVER_BUILD_ID macro and surfaced in every emitted JSON.
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE SOLVER_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE SOLVER_GIT_RC
+    ERROR_QUIET
+)
+if(NOT SOLVER_GIT_RC EQUAL 0 OR SOLVER_GIT_SHA STREQUAL "")
+    set(SOLVER_GIT_SHA "unknown")
+endif()
+string(TIMESTAMP SOLVER_BUILD_TIME UTC)
+set(SOLVER_BUILD_ID "${SOLVER_GIT_SHA}_${SOLVER_BUILD_TIME}")
+
 # ==============================================================================
 # 1. External Dependencies
 # ==============================================================================
@@ -61,6 +77,7 @@ set_target_properties(solver PROPERTIES
 # 3. Include Directories & Linking
 # ==============================================================================
 target_include_directories(solver PRIVATE src ${GUROBI_INCLUDE_DIRS} ${JSON_INCLUDE_DIR})
+target_compile_definitions(solver PRIVATE SOLVER_BUILD_ID="${SOLVER_BUILD_ID}")
 
 target_link_libraries(solver
     PRIVATE

@@ -546,6 +546,11 @@ int main(int argc, char *argv[])
         {
             json j;
             j["schema_version"] = "1.0";
+#ifdef SOLVER_BUILD_ID
+            j["solver_build_id"] = std::string(SOLVER_BUILD_ID);
+#else
+            j["solver_build_id"] = "unknown";
+#endif
             std::string method_name = run_avgdeg ? "avgdeg" : run_bfs ? "bfs" : "bp";
             j["method"] = method_name;
             j["query_node"] = query_node;
