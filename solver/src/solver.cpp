@@ -1125,7 +1125,9 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         double net = oracle.cumulative_network_time - net_start_bb;
         double effective_time = max(0.0, wall - net);
 
-        if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
+        // Same gate as the BB loop: the soft no-improvement cap fires only
+        // when there is an incumbent worth not improving on.
+        if (bb_time_limit >= 0.0 && current_incumbent > tol && effective_time > bb_time_limit)
             return {std::move(local_x_bar), local_lp_obj};
 
         double solve_elapsed_cg = chrono::duration<double>(t_now - t_start_solve).count();
@@ -1159,7 +1161,9 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
         double lp_time_budget = -1.0;
-        if (bb_time_limit >= 0.0)
+        // Soft budget tracks the BB-local clock; only meaningful once we have
+        // an incumbent (consistent with the gated soft cap above).
+        if (bb_time_limit >= 0.0 && current_incumbent > tol)
             lp_time_budget = max(1e-3, bb_time_limit - effective_time);
         if (bb_hard_time_limit >= 0.0)
         {
@@ -1371,10 +1375,15 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         double net = oracle.cumulative_network_time - net_start_bb;
         double effective_time = max(0.0, wall - net);
 
-        if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
+        // Soft no-improvement cap is gated on the existence of an improving
+        // incumbent. Before BP finds any integer point that beats f = 0, the
+        // clock does not fire: in that regime BB must run to exhaustion so the
+        // Dinkelbach loop can conclude "no S improves at lambda_t" correctly,
+        // which is the condition that makes the outer loop exact.
+        if (bb_time_limit >= 0.0 && best_int_obj > tol && effective_time > bb_time_limit)
         {
             cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached ("
-                 << bb_time_limit << "s without improvement)." << endl;
+                 << bb_time_limit << "s without improvement on an existing incumbent)." << endl;
             break;
         }
 
