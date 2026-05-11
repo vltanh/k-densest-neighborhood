@@ -142,7 +142,7 @@ def main():
         default="all",
         choices=["all", "avgdeg", "bfs", "bp"],
     )
-    parser.add_argument("--bp-k", type=str, default="3,4,5,6,7,8,9,10")
+    parser.add_argument("--bp-k", type=str, default="3,4,5")
     parser.add_argument("--bp-kappa", type=str, default="0,1,2")
     parser.add_argument("--bp-time-limit", type=str, default="-1")
     parser.add_argument("--bp-dinkelbach-iter", type=str, default="-1")

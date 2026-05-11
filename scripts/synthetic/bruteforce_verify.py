@@ -900,7 +900,7 @@ def main():
 
     opt = sub.add_parser("bf_optima", help="brute-force optima per graph")
     opt.add_argument("--n", type=int, default=25)
-    opt.add_argument("--k-values", type=str, default="3,4,5,6,7,8,9,10")
+    opt.add_argument("--k-values", type=str, default="3,4,5")
     opt.add_argument("--kappa-values", type=str, default="0,1,2")
     opt.add_argument("--data-dir", type=str, default="data")
     opt.add_argument("--exps-dir", type=str, default="exps")
@@ -915,7 +915,7 @@ def main():
 
     runs = sub.add_parser("bf_solver_runs", help="run solver across (method, k, kappa)")
     runs.add_argument("--n", type=int, default=25)
-    runs.add_argument("--k-values", type=str, default="3,4,5,6,7,8,9,10")
+    runs.add_argument("--k-values", type=str, default="3,4,5")
     runs.add_argument("--kappa-values", type=str, default="0,1,2")
     runs.add_argument("--data-dir", type=str, default="data")
     runs.add_argument("--exps-dir", type=str, default="exps")
