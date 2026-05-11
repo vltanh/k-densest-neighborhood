@@ -15,6 +15,7 @@ direct use by other scripts and the test harness.
 """
 
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -27,6 +28,17 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+def _bf_code_hash() -> str:
+    """sha256 of this file's source. Stamped on every optima row so a CSV from
+    a stale checkout fails loudly downstream rather than silently mismatching
+    solver_runs records emitted from a different version."""
+    try:
+        with open(__file__, "rb") as f:
+            return "sha256:" + hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return "unknown"
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _solver_runner import (  # noqa: E402
@@ -485,7 +497,14 @@ def _compute_optima_one(meta_path: Path, k_set: List[int], kappa_set: List[int])
     optima = brute_force_optima(adj_out, n, q, k_set, kappa_set=kappa_set)
     elapsed = time.perf_counter() - started
     rows = []
-    common = {"n": n, "p": meta["p"], "seed": meta["seed"], "query_node": q}
+    code_hash = _bf_code_hash()
+    common = {
+        "n": n,
+        "p": meta["p"],
+        "seed": meta["seed"],
+        "query_node": q,
+        "code_hash": code_hash,
+    }
     rows.append(
         {
             **common,
@@ -581,31 +600,62 @@ def _solver_runs_one(args_tuple):
     return _run_solver_cell(*args_tuple)
 
 
+def _extract_opt_row(row: dict):
+    actual = row.get("actual_kappa")
+    return (
+        row["opt_value"],
+        row["opt_size"],
+        json.loads(row["opt_nodes_json"]),
+        None if pd.isna(actual) else int(actual),
+    )
+
+
 def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int], kappa: Optional[int]):
+    """Return ((primary_value, primary_size, primary_nodes, primary_actual_kappa),
+    (secondary_value, secondary_size, secondary_nodes, secondary_actual_kappa)).
+
+    Primary follows the solver's actual feasibility region:
+      - avgdeg: unconstrained avg-degree optimum (|S| >= 2, contains q, possibly disconnected).
+      - bp + kappa = 0: unconstrained edge-density optimum at |S| >= k.
+      - bp + kappa >= 1: edge-density optimum with edge-connectivity >= kappa.
+    Secondary is the connected-only counterpart kept for cross-check:
+      - avgdeg: avg-degree optimum on connected sets only.
+      - bp + kappa = 0: edge-density optimum on connected sets only (edge_density_kappa[k][0]).
+      - bp + kappa >= 1: same as primary (no secondary distinct from it).
+    """
     target_kappa = 0 if (kappa is None or pd.isna(kappa)) else int(kappa)
+    primary = None
+    secondary = None
     for row in opt_rows:
-        if method == "avgdeg" and row["optimum_kind"] == "avgdeg_connected":
-            actual = row.get("actual_kappa")
-            return (
-                row["opt_value"],
-                row["opt_size"],
-                json.loads(row["opt_nodes_json"]),
-                None if pd.isna(actual) else int(actual),
-            )
-        if (
-            method == "bp"
-            and row["optimum_kind"] == "edge_density_kappa"
-            and int(row["k"]) == int(k)
-            and int(row["kappa"]) == target_kappa
-        ):
-            actual = row.get("actual_kappa")
-            return (
-                row["opt_value"],
-                row["opt_size"],
-                json.loads(row["opt_nodes_json"]),
-                None if pd.isna(actual) else int(actual),
-            )
-    raise KeyError(f"optimum not found for method={method}, k={k}, kappa={kappa}")
+        kind = row["optimum_kind"]
+        if method == "avgdeg":
+            if kind == "avgdeg":
+                primary = _extract_opt_row(row)
+            elif kind == "avgdeg_connected":
+                secondary = _extract_opt_row(row)
+        elif method == "bp":
+            if k is None:
+                continue
+            if target_kappa == 0:
+                if kind == "edge_density" and int(row["k"]) == int(k):
+                    primary = _extract_opt_row(row)
+                elif (
+                    kind == "edge_density_kappa"
+                    and int(row["k"]) == int(k)
+                    and int(row["kappa"]) == 0
+                ):
+                    secondary = _extract_opt_row(row)
+            else:
+                if (
+                    kind == "edge_density_kappa"
+                    and int(row["k"]) == int(k)
+                    and int(row["kappa"]) == target_kappa
+                ):
+                    primary = _extract_opt_row(row)
+                    secondary = primary
+    if primary is None:
+        raise KeyError(f"optimum not found for method={method}, k={k}, kappa={kappa}")
+    return primary, secondary
 
 
 def _do_generate(args):
@@ -663,6 +713,12 @@ def _do_solver_runs(args):
     out_root.mkdir(parents=True, exist_ok=True)
     out_csv = out_root / "solver_runs.csv"
 
+    optima_code_hash: Optional[str] = None
+    if "code_hash" in optima_df.columns and not optima_df.empty:
+        first = optima_df["code_hash"].dropna().head(1)
+        if len(first):
+            optima_code_hash = str(first.iloc[0])
+
     rows: List[dict] = []
     tol = float(args.match_tol)
     # Cache (n, p, seed) -> adj_out bitmask so post-checks don't reread edge.csv per cell.
@@ -693,9 +749,15 @@ def _do_solver_runs(args):
                 & (optima_df["p"] == meta["p"])
                 & (optima_df["seed"] == meta["seed"])
             ].to_dict("records")
-            opt_value, opt_size, opt_nodes, brute_actual_kappa = _opt_value_from_optima(
-                opt_rows, method, k, kappa
-            )
+            primary, secondary = _opt_value_from_optima(opt_rows, method, k, kappa)
+            opt_value, opt_size, opt_nodes, brute_actual_kappa = primary
+            if secondary is not None:
+                opt_value_secondary, opt_size_secondary, opt_nodes_secondary, brute_actual_kappa_secondary = secondary
+            else:
+                opt_value_secondary = float("nan")
+                opt_size_secondary = None
+                opt_nodes_secondary = []
+                brute_actual_kappa_secondary = None
             solver_size = int(payload.get("size") or len(result["pred_nodes"]))
             if method == "avgdeg":
                 solver_value = qualities.get("avg_degree_density", float("nan"))
@@ -705,12 +767,25 @@ def _do_solver_runs(args):
                 within_tol = abs(float(solver_value) - float(opt_value)) <= tol
             except Exception:
                 within_tol = False
+            try:
+                within_tol_secondary = (
+                    abs(float(solver_value) - float(opt_value_secondary)) <= tol
+                    if secondary is not None
+                    else False
+                )
+            except Exception:
+                within_tol_secondary = False
             solver_nodes_set = set(int(n) for n in result["pred_nodes"])
             opt_set = set(int(n) for n in opt_nodes)
+            opt_set_secondary = set(int(n) for n in (opt_nodes_secondary or []))
             opt_match = solver_nodes_set == opt_set
+            opt_match_secondary = (
+                solver_nodes_set == opt_set_secondary if secondary is not None else False
+            )
             opt_match_size_only = solver_size == opt_size
             kappa_verified = payload.get("kappa_verified")
             kappa_verify_failed = payload.get("kappa_verify_failed")
+            solver_build_id = payload.get("solver_build_id")
             # Compute the actual edge-connectivity of the solver's returned set.
             solver_actual_kappa: Optional[int] = None
             if result["returncode"] == 0 and solver_nodes_set:
@@ -736,7 +811,12 @@ def _do_solver_runs(args):
                     "opt_match": opt_match,
                     "opt_match_within_tol": within_tol,
                     "opt_match_size_only": opt_match_size_only,
+                    "opt_value_brute_secondary": opt_value_secondary,
+                    "opt_size_brute_secondary": opt_size_secondary,
+                    "opt_match_secondary": opt_match_secondary,
+                    "opt_match_within_tol_secondary": within_tol_secondary,
                     "brute_actual_kappa": brute_actual_kappa,
+                    "brute_actual_kappa_secondary": brute_actual_kappa_secondary,
                     "solver_actual_kappa": solver_actual_kappa,
                     "kappa_verified": kappa_verified,
                     "kappa_verify_failed": kappa_verify_failed,
@@ -744,6 +824,9 @@ def _do_solver_runs(args):
                     "brute_size": opt_size,
                     "wall_time_s": wall,
                     "total_bb_nodes": stats.get("total_bb_nodes"),
+                    "returncode": result["returncode"],
+                    "solver_build_id": solver_build_id,
+                    "optima_code_hash": optima_code_hash,
                 }
             )
             if i % 50 == 0 or i == len(cells):

@@ -1,8 +1,15 @@
 """Summarise exps/synthetic/bf/solver_runs.csv into a per-cell match table.
 
+The summary gates "match" counts on actual feasibility of the solver's returned
+set: returncode == 0; |S| >= k for BP cells; solver_actual_kappa >= requested
+kappa for kappa >= 1 cells. Non-feasible cells are surfaced as separate rows
+(``status_breakdown``) instead of being silently counted as a non-match.
+
 Output columns:
 
-    method, k, p, n_runs, n_match_within_tol, match_rate,
+    method, k, kappa, p, n_runs, n_feasible, n_match_primary,
+    match_rate_primary, n_match_secondary, match_rate_secondary,
+    n_solver_error, n_infeasible_size, n_infeasible_kappa,
     median_wall_time_s, median_total_bb_nodes
 """
 
@@ -12,7 +19,29 @@ import os
 import pandas as pd
 
 
+def _row_status(row) -> str:
+    """Per-row feasibility status. 'feasible' means the row is eligible to be
+    counted in the match-rate denominator."""
+    rc = row.get("returncode")
+    if rc is not None and rc != 0:
+        return "solver_error"
+    method = row["method"]
+    k = row.get("k")
+    if method == "bp" and pd.notna(k):
+        if pd.isna(row.get("solver_size")) or int(row["solver_size"]) < int(k):
+            return "infeasible_size"
+    kappa = row.get("kappa")
+    if pd.notna(kappa) and int(kappa) >= 1:
+        actual = row.get("solver_actual_kappa")
+        if pd.isna(actual) or int(actual) < int(kappa):
+            return "infeasible_kappa"
+    return "feasible"
+
+
 def _summarise(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["_status"] = df.apply(_row_status, axis=1)
+
     group_cols = ["method", "k", "kappa", "p"] if "kappa" in df.columns else ["method", "k", "p"]
     rows = []
     for keys, chunk in df.groupby(group_cols, dropna=False):
@@ -20,15 +49,45 @@ def _summarise(df: pd.DataFrame) -> pd.DataFrame:
             keys = (keys,)
         row = {col: val for col, val in zip(group_cols, keys)}
         n_runs = len(chunk)
-        n_match = int(chunk["opt_match_within_tol"].sum())
-        row["n_runs"] = n_runs
-        row["n_match_within_tol"] = n_match
-        row["match_rate"] = n_match / n_runs if n_runs else 0.0
-        row["median_wall_time_s"] = float(chunk["wall_time_s"].median())
-        if "total_bb_nodes" in chunk.columns:
+        feasible_mask = chunk["_status"] == "feasible"
+        feasible_chunk = chunk[feasible_mask]
+        n_feasible = int(feasible_mask.sum())
+        n_solver_error = int((chunk["_status"] == "solver_error").sum())
+        n_infeasible_size = int((chunk["_status"] == "infeasible_size").sum())
+        n_infeasible_kappa = int((chunk["_status"] == "infeasible_kappa").sum())
+
+        n_match_primary = int(feasible_chunk["opt_match_within_tol"].sum()) if n_feasible else 0
+        match_rate_primary = n_match_primary / n_feasible if n_feasible else 0.0
+
+        if "opt_match_within_tol_secondary" in chunk.columns:
+            n_match_secondary = int(feasible_chunk["opt_match_within_tol_secondary"].sum()) if n_feasible else 0
+            match_rate_secondary = n_match_secondary / n_feasible if n_feasible else 0.0
+        else:
+            n_match_secondary = None
+            match_rate_secondary = None
+
+        row.update(
+            {
+                "n_runs": n_runs,
+                "n_feasible": n_feasible,
+                "n_match_primary": n_match_primary,
+                "match_rate_primary": match_rate_primary,
+                "n_match_secondary": n_match_secondary,
+                "match_rate_secondary": match_rate_secondary,
+                "n_solver_error": n_solver_error,
+                "n_infeasible_size": n_infeasible_size,
+                "n_infeasible_kappa": n_infeasible_kappa,
+                "median_wall_time_s": float(feasible_chunk["wall_time_s"].median())
+                if n_feasible
+                else float("nan"),
+            }
+        )
+        if "total_bb_nodes" in feasible_chunk.columns and feasible_chunk["total_bb_nodes"].notna().any():
             row["median_total_bb_nodes"] = float(
-                chunk["total_bb_nodes"].dropna().median()
-            ) if chunk["total_bb_nodes"].notna().any() else None
+                feasible_chunk["total_bb_nodes"].dropna().median()
+            )
+        else:
+            row["median_total_bb_nodes"] = None
         rows.append(row)
     return pd.DataFrame(rows).sort_values(group_cols).reset_index(drop=True)
 
