@@ -215,11 +215,78 @@ def _connected_in_subset(adj_und: List[int], s: int, start: int) -> bool:
     return visited == s
 
 
+def _edge_connectivity_in_subset(adj_und: List[int], s_mask: int, q: int) -> int:
+    """Edge connectivity of the undirected subgraph induced by s_mask, anchored
+    at q. Uses unit-capacity BFS max-flow from q to every other vertex in S;
+    returns the minimum, which equals lambda(S) by Menger's theorem.
+    """
+    nodes: List[int] = []
+    tmp = s_mask
+    while tmp:
+        lsb = tmp & -tmp
+        nodes.append(lsb.bit_length() - 1)
+        tmp &= tmp - 1
+    nn = len(nodes)
+    if nn < 2:
+        return 0
+    idx = {v: i for i, v in enumerate(nodes)}
+    adj_compact: List[int] = [0] * nn
+    for i, u in enumerate(nodes):
+        a = adj_und[u] & s_mask
+        while a:
+            lsb = a & -a
+            v = lsb.bit_length() - 1
+            adj_compact[i] |= 1 << idx[v]
+            a &= a - 1
+    s_local = idx[q]
+    min_flow = nn
+    for t_local in range(nn):
+        if t_local == s_local:
+            continue
+        # BFS-augmenting-path max-flow on a mutable capacity matrix
+        cap = [list(adj_compact)]
+        # Encode capacities as bitmasks: cap_to[u] = bitmask of v with cap[u][v]==1
+        cap_to = list(adj_compact)
+        flow = 0
+        while True:
+            # BFS
+            parent_arr = [-1] * nn
+            parent_arr[s_local] = s_local
+            queue: List[int] = [s_local]
+            head = 0
+            while head < len(queue) and parent_arr[t_local] == -1:
+                u = queue[head]
+                head += 1
+                outs = cap_to[u]
+                while outs:
+                    lsb = outs & -outs
+                    v = lsb.bit_length() - 1
+                    outs &= outs - 1
+                    if parent_arr[v] == -1:
+                        parent_arr[v] = u
+                        queue.append(v)
+            if parent_arr[t_local] == -1:
+                break
+            v = t_local
+            while v != s_local:
+                u = parent_arr[v]
+                cap_to[u] &= ~(1 << v)
+                cap_to[v] |= 1 << u
+                v = u
+            flow += 1
+        if flow < min_flow:
+            min_flow = flow
+        if min_flow == 0:
+            break
+    return min_flow
+
+
 def brute_force_optima(
     adj_out: List[int],
     n: int,
     q: int,
     k_set: Iterable[int],
+    kappa_set: Iterable[int] = (0, 1, 2, 3, 4),
 ):
     """Enumerate every subset that contains q and is at least 2 in size.
     Returns argmax records for the avg-degree and edge-density objectives.
@@ -230,13 +297,17 @@ def brute_force_optima(
     """
     bit_q = 1 << q
     k_list = sorted(set(int(k) for k in k_set))
+    kappa_list = sorted(set(int(kp) for kp in kappa_set))
+    if 0 not in kappa_list:
+        kappa_list = [0] + kappa_list
     # Symmetric directed edges -> adj_und = adj_out.
     adj_und = adj_out
 
-    best_avg = (-1.0, -1, -1, 0)  # (score, size, m, mask)
-    best_avg_conn = (-1.0, -1, -1, 0)
-    best_bp = {k: (-1.0, -1, -1, 0) for k in k_list}
-    best_bp_conn = {k: (-1.0, -1, -1, 0) for k in k_list}
+    best_avg = (-1.0, -1, -1, 0, None)  # (score, size, m, mask, actual_kappa)
+    best_avg_conn = (-1.0, -1, -1, 0, None)
+    best_bp = {k: (-1.0, -1, -1, 0, None) for k in k_list}
+    # best_bp_kappa[k][kappa] = (score, size, m, mask, actual_kappa). kappa=0 = connected.
+    best_bp_kappa = {k: {kp: (-1.0, -1, -1, 0, None) for kp in kappa_list} for k in k_list}
 
     full = 1 << n
     for s in range(full):
@@ -252,28 +323,72 @@ def brute_force_optima(
             v = lsb.bit_length() - 1
             m += (adj_out[v] & s).bit_count()
             ss &= ss - 1
-        # avg-degree
+        # avg-degree (unconstrained)
         avg = m / sz
         if avg > best_avg[0]:
-            best_avg = (avg, sz, m, s)
-        # edge-density per k
+            best_avg = (avg, sz, m, s, None)
+        # edge-density per k (unconstrained)
         for k in k_list:
             if sz >= k:
-                ed = m / (sz * (sz - 1)) if sz > 1 else 0.0
+                ed = m / (sz * (sz - 1))
                 if ed > best_bp[k][0]:
-                    best_bp[k] = (ed, sz, m, s)
-        # Connected-only optima.
-        if avg > best_avg_conn[0] or any(
-            sz >= k and (m / (sz * (sz - 1))) > best_bp_conn[k][0] for k in k_list
-        ):
-            if _connected_in_subset(adj_und, s, q):
-                if avg > best_avg_conn[0]:
-                    best_avg_conn = (avg, sz, m, s)
-                for k in k_list:
-                    if sz >= k:
-                        ed = m / (sz * (sz - 1)) if sz > 1 else 0.0
-                        if ed > best_bp_conn[k][0]:
-                            best_bp_conn[k] = (ed, sz, m, s)
+                    best_bp[k] = (ed, sz, m, s, None)
+
+        # Decide whether this subset could improve any connected or kappa cell.
+        could_improve_avg_conn = avg > best_avg_conn[0]
+        could_improve_bp_any_kappa = False
+        for k in k_list:
+            if sz >= k:
+                ed = m / (sz * (sz - 1))
+                for kp in kappa_list:
+                    if ed > best_bp_kappa[k][kp][0]:
+                        could_improve_bp_any_kappa = True
+                        break
+                if could_improve_bp_any_kappa:
+                    break
+        if not (could_improve_avg_conn or could_improve_bp_any_kappa):
+            continue
+        if not _connected_in_subset(adj_und, s, q):
+            continue
+        # Subset is connected.
+        kappa_S: Optional[int] = None
+        if could_improve_avg_conn:
+            best_avg_conn = (avg, sz, m, s, None)
+        # kappa=0 cells take connectivity only; record actual kappa lazily.
+        for k in k_list:
+            if sz >= k:
+                ed = m / (sz * (sz - 1))
+                if ed > best_bp_kappa[k][0][0]:
+                    if kappa_S is None:
+                        kappa_S = _edge_connectivity_in_subset(adj_und, s, q)
+                    best_bp_kappa[k][0] = (ed, sz, m, s, kappa_S)
+        # For kappa >= 1, compute edge-connectivity if needed.
+        need_kappa_check = False
+        for k in k_list:
+            if sz < k:
+                continue
+            ed = m / (sz * (sz - 1))
+            for kp in kappa_list:
+                if kp == 0:
+                    continue
+                if ed > best_bp_kappa[k][kp][0]:
+                    need_kappa_check = True
+                    break
+            if need_kappa_check:
+                break
+        if not need_kappa_check:
+            continue
+        if kappa_S is None:
+            kappa_S = _edge_connectivity_in_subset(adj_und, s, q)
+        for k in k_list:
+            if sz < k:
+                continue
+            ed = m / (sz * (sz - 1))
+            for kp in kappa_list:
+                if kp == 0:
+                    continue
+                if kappa_S >= kp and ed > best_bp_kappa[k][kp][0]:
+                    best_bp_kappa[k][kp] = (ed, sz, m, s, kappa_S)
 
     def _mask_to_nodes(mask: int) -> List[int]:
         nodes = []
@@ -289,15 +404,17 @@ def brute_force_optima(
             "size": best_avg[1],
             "internal_edges": best_avg[2],
             "nodes": _mask_to_nodes(best_avg[3]),
+            "actual_kappa": best_avg[4],
         },
         "avgdeg_connected": {
             "score": best_avg_conn[0],
             "size": best_avg_conn[1],
             "internal_edges": best_avg_conn[2],
             "nodes": _mask_to_nodes(best_avg_conn[3]),
+            "actual_kappa": best_avg_conn[4],
         },
         "bp": {},
-        "bp_connected": {},
+        "bp_kappa": {},
     }
     for k in k_list:
         out["bp"][k] = {
@@ -305,13 +422,17 @@ def brute_force_optima(
             "size": best_bp[k][1],
             "internal_edges": best_bp[k][2],
             "nodes": _mask_to_nodes(best_bp[k][3]),
+            "actual_kappa": best_bp[k][4],
         }
-        out["bp_connected"][k] = {
-            "score": best_bp_conn[k][0],
-            "size": best_bp_conn[k][1],
-            "internal_edges": best_bp_conn[k][2],
-            "nodes": _mask_to_nodes(best_bp_conn[k][3]),
-        }
+        out["bp_kappa"][k] = {}
+        for kp in kappa_list:
+            out["bp_kappa"][k][kp] = {
+                "score": best_bp_kappa[k][kp][0],
+                "size": best_bp_kappa[k][kp][1],
+                "internal_edges": best_bp_kappa[k][kp][2],
+                "nodes": _mask_to_nodes(best_bp_kappa[k][kp][3]),
+                "actual_kappa": best_bp_kappa[k][kp][4],
+            }
     return out
 
 
@@ -362,7 +483,7 @@ def _generate_one(n: int, p: float, seed: int, root: Path):
     return out_dir
 
 
-def _compute_optima_one(meta_path: Path, k_set: List[int]):
+def _compute_optima_one(meta_path: Path, k_set: List[int], kappa_set: List[int]):
     with open(meta_path) as f:
         meta = json.load(f)
     n = meta["n"]
@@ -371,7 +492,7 @@ def _compute_optima_one(meta_path: Path, k_set: List[int]):
     edges_dir = list(zip(df_edges["source"].astype(int), df_edges["target"].astype(int)))
     adj_out = _bitmask_adjacency(n, edges_dir)
     started = time.perf_counter()
-    optima = brute_force_optima(adj_out, n, q, k_set)
+    optima = brute_force_optima(adj_out, n, q, k_set, kappa_set=kappa_set)
     elapsed = time.perf_counter() - started
     rows = []
     common = {"n": n, "p": meta["p"], "seed": meta["seed"], "query_node": q}
@@ -380,8 +501,10 @@ def _compute_optima_one(meta_path: Path, k_set: List[int]):
             **common,
             "optimum_kind": "avgdeg",
             "k": None,
+            "kappa": None,
             "opt_value": optima["avgdeg"]["score"],
             "opt_size": optima["avgdeg"]["size"],
+            "actual_kappa": optima["avgdeg"]["actual_kappa"],
             "opt_nodes_json": json.dumps(optima["avgdeg"]["nodes"]),
             "enumerate_time_s": elapsed,
         }
@@ -391,8 +514,10 @@ def _compute_optima_one(meta_path: Path, k_set: List[int]):
             **common,
             "optimum_kind": "avgdeg_connected",
             "k": None,
+            "kappa": None,
             "opt_value": optima["avgdeg_connected"]["score"],
             "opt_size": optima["avgdeg_connected"]["size"],
+            "actual_kappa": optima["avgdeg_connected"]["actual_kappa"],
             "opt_nodes_json": json.dumps(optima["avgdeg_connected"]["nodes"]),
             "enumerate_time_s": elapsed,
         }
@@ -403,23 +528,29 @@ def _compute_optima_one(meta_path: Path, k_set: List[int]):
                 **common,
                 "optimum_kind": "edge_density",
                 "k": k,
+                "kappa": None,
                 "opt_value": optima["bp"][k]["score"],
                 "opt_size": optima["bp"][k]["size"],
+                "actual_kappa": optima["bp"][k]["actual_kappa"],
                 "opt_nodes_json": json.dumps(optima["bp"][k]["nodes"]),
                 "enumerate_time_s": elapsed,
             }
         )
-        rows.append(
-            {
-                **common,
-                "optimum_kind": "edge_density_connected",
-                "k": k,
-                "opt_value": optima["bp_connected"][k]["score"],
-                "opt_size": optima["bp_connected"][k]["size"],
-                "opt_nodes_json": json.dumps(optima["bp_connected"][k]["nodes"]),
-                "enumerate_time_s": elapsed,
-            }
-        )
+        kappa_cells = optima["bp_kappa"].get(k, {})
+        for kp in sorted(kappa_cells.keys()):
+            rows.append(
+                {
+                    **common,
+                    "optimum_kind": "edge_density_kappa",
+                    "k": k,
+                    "kappa": kp,
+                    "opt_value": kappa_cells[kp]["score"],
+                    "opt_size": kappa_cells[kp]["size"],
+                    "actual_kappa": kappa_cells[kp]["actual_kappa"],
+                    "opt_nodes_json": json.dumps(kappa_cells[kp]["nodes"]),
+                    "enumerate_time_s": elapsed,
+                }
+            )
     return rows
 
 
@@ -453,20 +584,38 @@ def _run_solver_cell(meta_path: Path, method: str, k: Optional[int], kappa: Opti
         json_output_path=str(dump_path),
     )
     wall = time.perf_counter() - started
-    return meta, method, k, kappa, result, wall
+    return meta, str(meta_path), method, k, kappa, result, wall
 
 
 def _solver_runs_one(args_tuple):
     return _run_solver_cell(*args_tuple)
 
 
-def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int]):
+def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int], kappa: Optional[int]):
+    target_kappa = 0 if (kappa is None or pd.isna(kappa)) else int(kappa)
     for row in opt_rows:
         if method == "avgdeg" and row["optimum_kind"] == "avgdeg_connected":
-            return row["opt_value"], row["opt_size"], json.loads(row["opt_nodes_json"])
-        if method == "bp" and row["optimum_kind"] == "edge_density_connected" and row["k"] == k:
-            return row["opt_value"], row["opt_size"], json.loads(row["opt_nodes_json"])
-    raise KeyError(f"optimum not found for method={method}, k={k}")
+            actual = row.get("actual_kappa")
+            return (
+                row["opt_value"],
+                row["opt_size"],
+                json.loads(row["opt_nodes_json"]),
+                None if pd.isna(actual) else int(actual),
+            )
+        if (
+            method == "bp"
+            and row["optimum_kind"] == "edge_density_kappa"
+            and int(row["k"]) == int(k)
+            and int(row["kappa"]) == target_kappa
+        ):
+            actual = row.get("actual_kappa")
+            return (
+                row["opt_value"],
+                row["opt_size"],
+                json.loads(row["opt_nodes_json"]),
+                None if pd.isna(actual) else int(actual),
+            )
+    raise KeyError(f"optimum not found for method={method}, k={k}, kappa={kappa}")
 
 
 def _do_generate(args):
@@ -482,6 +631,7 @@ def _do_generate(args):
 def _do_optima(args):
     root = Path(args.data_dir)
     k_set = [int(x) for x in args.k_values.split(",")]
+    kappa_set = [int(x) for x in args.kappa_values.split(",")]
     metas = sorted((root / "synthetic" / "bf" / f"n{args.n}").rglob("meta.json"))
     if not metas:
         raise FileNotFoundError(f"no meta.json found under {root}/synthetic/bf/n{args.n}")
@@ -490,12 +640,12 @@ def _do_optima(args):
     out_csv = out_root / "optima.csv"
     rows: List[dict] = []
     with ProcessPoolExecutor(max_workers=args.max_workers) as exe:
-        futures = {exe.submit(_compute_optima_one, m, k_set): m for m in metas}
+        futures = {exe.submit(_compute_optima_one, m, k_set, kappa_set): m for m in metas}
         for i, fut in enumerate(as_completed(futures), 1):
             rows.extend(fut.result())
-            if i % 10 == 0 or i == len(metas):
+            if i % 5 == 0 or i == len(metas):
                 pd.DataFrame(rows).to_csv(out_csv, index=False)
-                print(f"optima: {i}/{len(metas)} graphs done")
+                print(f"optima: {i}/{len(metas)} graphs done", flush=True)
     pd.DataFrame(rows).to_csv(out_csv, index=False)
     print(f"wrote {out_csv}")
 
@@ -528,7 +678,7 @@ def _do_solver_runs(args):
     with ProcessPoolExecutor(max_workers=args.max_workers) as exe:
         futures = {exe.submit(_solver_runs_one, cell): cell for cell in cells}
         for i, fut in enumerate(as_completed(futures), 1):
-            meta, method, k, kappa, result, wall = fut.result()
+            meta, meta_path_str, method, k, kappa, result, wall = fut.result()
             payload = result.get("solver_json") or {}
             stats = payload.get("stats") or {}
             qualities = payload.get("qualities") or {}
@@ -537,7 +687,9 @@ def _do_solver_runs(args):
                 & (optima_df["p"] == meta["p"])
                 & (optima_df["seed"] == meta["seed"])
             ].to_dict("records")
-            opt_value, opt_size, opt_nodes = _opt_value_from_optima(opt_rows, method, k)
+            opt_value, opt_size, opt_nodes, brute_actual_kappa = _opt_value_from_optima(
+                opt_rows, method, k, kappa
+            )
             solver_size = int(payload.get("size") or len(result["pred_nodes"]))
             if method == "avgdeg":
                 solver_value = qualities.get("avg_degree_density", float("nan"))
@@ -553,6 +705,23 @@ def _do_solver_runs(args):
             opt_match_size_only = solver_size == opt_size
             kappa_verified = payload.get("kappa_verified")
             kappa_verify_failed = payload.get("kappa_verify_failed")
+            # Compute the actual edge-connectivity of the solver's returned set.
+            solver_actual_kappa: Optional[int] = None
+            if result["returncode"] == 0 and solver_nodes_set:
+                edge_csv_for = str(Path(meta_path_str).with_name("edge.csv"))
+                df_e = pd.read_csv(edge_csv_for)
+                edges_dir_local = list(
+                    zip(df_e["source"].astype(int), df_e["target"].astype(int))
+                )
+                adj_local = _bitmask_adjacency(meta["n"], edges_dir_local)
+                s_mask_local = 0
+                for nid in solver_nodes_set:
+                    s_mask_local |= 1 << int(nid)
+                q_local = int(meta["query_node"])
+                if (s_mask_local >> q_local) & 1:
+                    solver_actual_kappa = _edge_connectivity_in_subset(
+                        adj_local, s_mask_local, q_local
+                    )
             rows.append(
                 {
                     "n": meta["n"],
@@ -566,6 +735,8 @@ def _do_solver_runs(args):
                     "opt_match": opt_match,
                     "opt_match_within_tol": within_tol,
                     "opt_match_size_only": opt_match_size_only,
+                    "brute_actual_kappa": brute_actual_kappa,
+                    "solver_actual_kappa": solver_actual_kappa,
                     "kappa_verified": kappa_verified,
                     "kappa_verify_failed": kappa_verify_failed,
                     "solver_size": solver_size,
@@ -601,6 +772,7 @@ def main():
     opt = sub.add_parser("bf_optima", help="brute-force optima per graph")
     opt.add_argument("--n", type=int, default=25)
     opt.add_argument("--k-values", type=str, default="3,4,5,6,7,8,9,10")
+    opt.add_argument("--kappa-values", type=str, default="0,1,2,3,4")
     opt.add_argument("--data-dir", type=str, default="data")
     opt.add_argument("--exps-dir", type=str, default="exps")
     opt.add_argument("--max-workers", type=int, default=4)
