@@ -609,34 +609,44 @@ University of Illinois Urbana-Champaign \\
   counted as a non-match.
 \end{frame}
 
-\begin{frame}{Classification protocol}
+\begin{frame}{Exp 3: classification dataset and split}
   Dataset: CitationFull Cora-ML (lead dataset).
 
   \vfill
 
   \begin{itemize}
-    \item 2,995 nodes, 8,416 directed edges, 7 labels
-    \item val + test: 1,249 pure-source papers split 624 / 625 (seed 42)
-    \item train: every remaining node (1,746 on Cora\_ML)
-    \item eligible val: 411; eligible test: 393 (one-hop $\ge 2$ filter)
-    \item hard subset: 52 eligible val nodes where BFS depth 1 votes wrong
+    \item 2,995 nodes, 8,416 directed edges, 7 labels.
+    \item Pool: pure-source papers (citing-only) with out-degree $\ge 2$.
+    \item Pool split 50 / 50: val = 402, test = 402 (seed 42).
+    \item Train = every other node (2,191 on Cora\_ML).
+    \item Hard subset: 64 val nodes where BFS depth-1 label vote is wrong.
   \end{itemize}
 
   \vfill
 
-  Prediction:
+  All splits, train mask, and hard subset are hash-pinned in
+  \texttt{data/Cora\_ML/split\_meta.json} (schema $2.0$,
+  \texttt{pool\_criterion = pure\_source\_with\_outdegree\_geq\_2}).
+\end{frame}
+
+\begin{frame}{Exp 3: classification prediction rule}
+  For each val or test query $q$:
   \begin{itemize}
-    \item retrieve community around query node
-    \item uniform majority over train nodes in the community
-    \item ties broken deterministically by ascending label
-    \item fallback BFS forbids val and test as stepping stones
-    \item all reported Cora\_ML runs use \texttt{max\_in\_edges = 0}
+    \item Retrieve the community around $q$ from the chosen solver.
+    \item Uniform majority over the train-labelled nodes in the
+    community.
+    \item Ties broken deterministically by ascending label value
+    (\texttt{argmax\_label}).
+    \item If no train neighbour is present in the community, fall back
+    to a BFS walk that \emph{forbids} every val and test node as a
+    stepping stone (no label leakage across splits).
+    \item Last resort if BFS reaches no train label: global majority of
+    the train pool.
   \end{itemize}
 
   \vfill
 
-  \textbf{Splits + eligible + hard subset are hash-pinned in
-  \texttt{split\_meta.json}.}
+  All Cora\_ML runs use \texttt{max\_in\_edges = 0}.
 \end{frame}
 
 \begin{frame}{Methods compared}
