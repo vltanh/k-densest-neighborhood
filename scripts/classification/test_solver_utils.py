@@ -289,6 +289,13 @@ class ForbiddenBfsTests(unittest.TestCase):
         distances = _bfs_with_forbidden(G, 0, cutoff=10, forbidden=set())
         self.assertEqual(distances, {0: 0, 1: 1, 2: 2, 3: 3})
 
+    def test_source_in_forbidden_still_expands(self):
+        G = self._line_graph()
+        distances = _bfs_with_forbidden(G, 0, cutoff=10, forbidden={0})
+        # Source is visited at distance 0 so its non-forbidden neighbours
+        # remain reachable; the caller filters the source from the vote.
+        self.assertEqual(distances, {0: 0, 1: 1, 2: 2, 3: 3})
+
 
 @unittest.skipIf(
     evaluate_nodes is None,

@@ -105,11 +105,14 @@ def _bfs_with_forbidden(
     cutoff: int,
     forbidden: Optional[Set[int]],
 ):
-    """BFS that never visits forbidden nodes (neither destinations nor stepping stones)."""
+    """BFS that never visits forbidden nodes as destinations or stepping stones.
+
+    The source is always visited (distance 0) so its non-forbidden neighbours
+    can be expanded; the caller filters the source out of the voting pool via
+    ``n != q_node``.
+    """
     if forbidden is None:
         forbidden = set()
-    if source in forbidden:
-        return {}
     distances = {source: 0}
     queue = deque([source])
     while queue:
