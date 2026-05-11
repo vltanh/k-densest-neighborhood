@@ -2,8 +2,6 @@
 #include "openalex_oracle.hpp"
 #include "solver.hpp"
 #include "average_degree_solver.hpp"
-#include "connected_greedy_baseline.hpp"
-#include "exact_connected_avg_degree.hpp"
 #include "bfs_solver.hpp"
 #include "subgraph_quality.hpp"
 #include <iostream>
@@ -39,14 +37,11 @@ void print_usage(const char *prog_name)
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
          << "  --k <int>                 Target subgraph size (REQUIRED for --bp; k >= 2)\n"
          << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
-         << "  --baseline-depth <int>    Max BFS depth for connected baselines; -1 means full reachable graph (default: -1)\n"
          << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n\n"
          << "Solver Variants:\n"
          << "  --bp                      Run BP; uses --k and --kappa\n"
          << "  --avgdeg                  Run exact query-anchored avgdeg; no method-specific CLI parameter\n"
          << "  --bfs                     Run BFS; uses --bfs-depth\n"
-         << "  --conn-greedy             Run Conn-greedy; uses --k and --baseline-depth\n"
-         << "  --conn-avgdeg             Run Conn-avgdeg; uses --baseline-depth\n"
          << "  --help, -h                Print this help menu and exit\n";
 }
 
@@ -103,13 +98,9 @@ int main(int argc, char *argv[])
     bool run_bp = false;
     bool run_avgdeg = false;
     bool run_bfs = false;
-    bool run_conn_greedy = false;
-    bool run_conn_avgdeg = false;
-    int baseline_depth = -1;
     int bfs_depth = 1;
     bool k_provided = false;
     bool kappa_provided = false;
-    bool baseline_depth_provided = false;
     bool bfs_depth_provided = false;
 
     // ---------------------------------------------------------
@@ -157,18 +148,6 @@ int main(int argc, char *argv[])
                 continue;
             }
 
-            if (arg == "--conn-greedy")
-            {
-                run_conn_greedy = true;
-                continue;
-            }
-
-            if (arg == "--conn-avgdeg")
-            {
-                run_conn_avgdeg = true;
-                continue;
-            }
-
             if (i + 1 >= argc)
             {
                 cerr << "Error: Argument " << arg << " requires a value.\n";
@@ -211,11 +190,6 @@ int main(int argc, char *argv[])
                 kappa = stoi(argv[++i]);
                 kappa_provided = true;
             }
-            else if (arg == "--baseline-depth")
-            {
-                baseline_depth = stoi(argv[++i]);
-                baseline_depth_provided = true;
-            }
             else if (arg == "--bfs-depth")
             {
                 bfs_depth = stoi(argv[++i]);
@@ -253,15 +227,14 @@ int main(int argc, char *argv[])
         cerr << "Error: --query is required.\n";
         return 1;
     }
-    int solver_count = (run_bp ? 1 : 0) + (run_avgdeg ? 1 : 0) + (run_bfs ? 1 : 0) +
-                       (run_conn_greedy ? 1 : 0) + (run_conn_avgdeg ? 1 : 0);
+    int solver_count = (run_bp ? 1 : 0) + (run_avgdeg ? 1 : 0) + (run_bfs ? 1 : 0);
     if (solver_count > 1)
     {
         cerr << "Error: Specify at most one solver variant.\n";
         return 1;
     }
 
-    const bool uses_k = run_bp || run_conn_greedy || solver_count == 0;
+    const bool uses_k = run_bp || solver_count == 0;
     if (uses_k && k < 2)
     {
         cerr << "Error: --k must be specified and >= 2 for this solver.\n";
@@ -269,7 +242,7 @@ int main(int argc, char *argv[])
     }
     if (!uses_k && k_provided)
     {
-        cerr << "Error: --k is only valid for --bp and --conn-greedy.\n";
+        cerr << "Error: --k is only valid for --bp.\n";
         return 1;
     }
     if (mode == "sim" && input_file.empty())
@@ -290,11 +263,6 @@ int main(int argc, char *argv[])
     if (!run_bfs && bfs_depth_provided)
     {
         cerr << "Error: --bfs-depth is only valid for --bfs.\n";
-        return 1;
-    }
-    if ((run_bp || run_avgdeg || run_bfs) && baseline_depth_provided)
-    {
-        cerr << "Error: --baseline-depth is only valid for --conn-greedy and --conn-avgdeg.\n";
         return 1;
     }
 
@@ -369,7 +337,7 @@ int main(int argc, char *argv[])
             auto t_start = chrono::high_resolution_clock::now();
             AverageDegreeSolver baseline_solver(oracle_ptr.get());
 
-            vector<int> res = baseline_solver.solve(q_node_int, baseline_depth);
+            vector<int> res = baseline_solver.solve(q_node_int, -1);
             auto t_end = chrono::high_resolution_clock::now();
 
             best_nodes = res;
@@ -391,46 +359,6 @@ int main(int argc, char *argv[])
             vector<int> res = bfs_solver.solve(q_node_int, bfs_depth);
             auto t_end = chrono::high_resolution_clock::now();
 
-            best_nodes = res;
-
-            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
-            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
-            cout << "--------------------------------------------------" << endl;
-            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
-                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
-        }
-        else if (run_conn_greedy)
-        {
-            cout << "==================================================" << endl;
-            cout << "[" << get_timestamp() << "] Running Conn-greedy solver..." << endl;
-            cout << "==================================================" << endl;
-
-            auto t_start = chrono::high_resolution_clock::now();
-            ConnectedGreedyBaseline connected_baseline(oracle_ptr.get(), k);
-
-            vector<int> res = connected_baseline.solve(q_node_int, baseline_depth);
-            auto t_end = chrono::high_resolution_clock::now();
-
-            best_nodes = res;
-
-            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
-            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
-            cout << "--------------------------------------------------" << endl;
-            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
-                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
-        }
-        else if (run_conn_avgdeg)
-        {
-            cout << "==================================================" << endl;
-            cout << "[" << get_timestamp() << "] Running Conn-avgdeg solver..." << endl;
-            cout << "==================================================" << endl;
-
-            auto t_start = chrono::high_resolution_clock::now();
-
-            ExactConnectedAvgDegree exact_connected(oracle_ptr.get(), &env);
-            vector<int> res = exact_connected.solve(q_node_int, baseline_depth);
-
-            auto t_end = chrono::high_resolution_clock::now();
             best_nodes = res;
 
             cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;

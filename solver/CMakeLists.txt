@@ -51,8 +51,6 @@ add_executable(solver
     src/subgraph_quality.cpp
     src/average_degree_solver.cpp
     src/bfs_solver.cpp
-    src/connected_greedy_baseline.cpp
-    src/exact_connected_avg_degree.cpp
 )
 
 set_target_properties(solver PROPERTIES
