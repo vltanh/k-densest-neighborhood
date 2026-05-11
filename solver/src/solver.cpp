@@ -357,6 +357,112 @@ void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_
     }
 }
 
+// Edge-connectivity verification for a pruned integer solution. Builds a flow
+// network from adj_out restricted to sol_nodes (each directed edge contributes
+// unit capacity, doubled for the undirected view) and runs q→t max-flow for
+// every other vertex. Returns false on the first t whose max-flow falls below
+// kappa.
+bool FullBranchAndPriceSolver::_verify_kappa_connectivity(const std::unordered_set<int> &sol_nodes)
+{
+    if (kappa <= 0)
+        return true;
+    if (!sol_nodes.count(q))
+        return false;
+    if (sol_nodes.size() < 2)
+        return false;
+
+    std::unordered_map<int, int> g_to_b;
+    std::vector<int> b_to_g;
+    g_to_b.reserve(sol_nodes.size() * 2);
+    b_to_g.reserve(sol_nodes.size());
+    for (int node_id : sol_nodes)
+    {
+        g_to_b[node_id] = (int)b_to_g.size();
+        b_to_g.push_back(node_id);
+    }
+    int N = (int)sol_nodes.size();
+
+    typedef boost::adjacency_list_traits<boost::vecS, boost::vecS, boost::directedS> Traits;
+    typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::directedS,
+                                  boost::property<boost::vertex_name_t, int>,
+                                  boost::property<boost::edge_capacity_t, long long,
+                                                  boost::property<boost::edge_residual_capacity_t, long long,
+                                                                  boost::property<boost::edge_reverse_t, Traits::edge_descriptor>>>>
+        FlowGraph;
+
+    FlowGraph fg(N);
+    auto capacity = boost::get(boost::edge_capacity, fg);
+    auto rev = boost::get(boost::edge_reverse, fg);
+
+    auto add_flow_edge = [&](int u, int v, long long cap)
+    {
+        auto e1 = boost::add_edge(u, v, fg).first;
+        auto e2 = boost::add_edge(v, u, fg).first;
+        capacity[e1] = cap;
+        capacity[e2] = 0;
+        rev[e1] = e2;
+        rev[e2] = e1;
+    };
+
+    for (int u : sol_nodes)
+    {
+        auto it = adj_out.find(u);
+        if (it == adj_out.end())
+            continue;
+        for (int v : it->second)
+        {
+            if (!sol_nodes.count(v))
+                continue;
+            int bu = g_to_b[u];
+            int bv = g_to_b[v];
+            add_flow_edge(bu, bv, 1);
+            add_flow_edge(bv, bu, 1);
+        }
+    }
+
+    int S = g_to_b[q];
+    for (int target_node : sol_nodes)
+    {
+        if (target_node == q)
+            continue;
+        int T = g_to_b[target_node];
+        // Reset residual capacities by recomputing from scratch each call: the
+        // push_relabel implementation consumes the residual property, so we
+        // build a fresh graph per target to keep verification self-contained.
+        FlowGraph fg_iter(N);
+        auto cap_iter = boost::get(boost::edge_capacity, fg_iter);
+        auto rev_iter = boost::get(boost::edge_reverse, fg_iter);
+        auto add_iter_edge = [&](int u, int v, long long cap)
+        {
+            auto e1 = boost::add_edge(u, v, fg_iter).first;
+            auto e2 = boost::add_edge(v, u, fg_iter).first;
+            cap_iter[e1] = cap;
+            cap_iter[e2] = 0;
+            rev_iter[e1] = e2;
+            rev_iter[e2] = e1;
+        };
+        for (int u : sol_nodes)
+        {
+            auto it = adj_out.find(u);
+            if (it == adj_out.end())
+                continue;
+            for (int v : it->second)
+            {
+                if (!sol_nodes.count(v))
+                    continue;
+                int bu = g_to_b[u];
+                int bv = g_to_b[v];
+                add_iter_edge(bu, bv, 1);
+                add_iter_edge(bv, bu, 1);
+            }
+        }
+        long long flow = boost::push_relabel_max_flow(fg_iter, S, T);
+        if (flow < kappa)
+            return false;
+    }
+    return true;
+}
+
 // ── Dynamic Graph Expansion ───────────────────────────────────────────────────
 
 // Promotes frontier node f to V_active, loading its edges via the oracle.
@@ -1178,9 +1284,25 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             }
             // ====================================================================
 
-            // Integer solution strictly connected — prune to improve the parametric objective before
-            // accepting as incumbent
+            // Integer solution kappa-feasible. Prune to improve the parametric objective; if
+            // pruning breaks edge-connectivity, revert to the pre-prune set (already verified).
+            std::unordered_set<int> pre_prune_sol = sol_nodes;
             _prune_discrete_solution(sol_nodes, lambda_val, false, true);
+
+            if (this->kappa > 0)
+            {
+                bool prune_ok = _verify_kappa_connectivity(sol_nodes);
+                if (!prune_ok)
+                {
+                    this->last_kappa_verify_failed = true;
+                    cout << "[" << get_timestamp() << "]     [!] Post-prune kappa verification failed; reverting to pre-prune set." << endl;
+                    sol_nodes = std::move(pre_prune_sol);
+                }
+                else
+                {
+                    this->last_kappa_verified = true;
+                }
+            }
 
             if (sol_nodes.size() >= (size_t)k)
             {
@@ -1258,6 +1380,8 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         cout << "[" << get_timestamp() << "]   -> Iteration Finished in " << fixed << setprecision(3) << iter_time << "s" << endl;
         cout << "[" << get_timestamp() << "]   -> Nodes Explored : " << iter_bb_nodes << " (Total: " << stats.total_bb_nodes << ")" << endl;
         cout << "[" << get_timestamp() << "]   -> LP Solves      : " << iter_lp_solves << " (Total: " << stats.total_lp_solves << ")" << endl;
+
+        stats.lambda_trajectory.push_back({t, lambda_val, iter_time, iter_bb_nodes, iter_lp_solves});
 
         if (sol.empty() || param_obj <= tol)
         {

@@ -11,8 +11,10 @@
 #include <string>
 #include <stdexcept>
 #include "gurobi_c++.h"
+#include <nlohmann/json.hpp>
 
 using namespace std;
+using json = nlohmann::json;
 
 void print_usage(const char *prog_name)
 {
@@ -23,7 +25,9 @@ void print_usage(const char *prog_name)
          << "Conditionally Required:\n"
          << "  --input <edge.csv>        Path to the local edge list (REQUIRED if --mode sim)\n\n"
          << "Optional I/O:\n"
-         << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n\n"
+         << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n"
+         << "  --emit-json               Emit a structured JSON payload (stdout JSON_RESULT: prefix, or --json-output path)\n"
+         << "  --json-output <path>      Write JSON to <path> instead of stdout (implies --emit-json)\n\n"
          << "  --compute-qualities       Compute final density/internal-edge metrics (may issue extra oracle queries)\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
          << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: -1)\n"
@@ -37,7 +41,8 @@ void print_usage(const char *prog_name)
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
          << "  --k <int>                 Target subgraph size (REQUIRED for --bp; k >= 2)\n"
          << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
-         << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n\n"
+         << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n"
+         << "  --gurobi-seed <int>       Gurobi Seed parameter (default: -1; unset)\n\n"
          << "Solver Variants:\n"
          << "  --bp                      Run BP; uses --k and --kappa\n"
          << "  --avgdeg                  Run exact query-anchored avgdeg; no method-specific CLI parameter\n"
@@ -82,6 +87,9 @@ int main(int argc, char *argv[])
     int k = -1;
     string output_file = "";
     bool compute_qualities = false;
+    bool emit_json = false;
+    string json_output = "";
+    int gurobi_seed = -1;
 
     double time_limit = -1.0;
     int node_limit = -1;
@@ -127,6 +135,12 @@ int main(int argc, char *argv[])
             if (arg == "--compute-qualities")
             {
                 compute_qualities = true;
+                continue;
+            }
+
+            if (arg == "--emit-json")
+            {
+                emit_json = true;
                 continue;
             }
 
@@ -194,6 +208,15 @@ int main(int argc, char *argv[])
             {
                 bfs_depth = stoi(argv[++i]);
                 bfs_depth_provided = true;
+            }
+            else if (arg == "--json-output")
+            {
+                json_output = argv[++i];
+                emit_json = true;
+            }
+            else if (arg == "--gurobi-seed")
+            {
+                gurobi_seed = stoi(argv[++i]);
             }
             else
             {
@@ -275,8 +298,13 @@ int main(int argc, char *argv[])
         env.set("OutputFlag", "0");
         env.set("Method", "1");
         env.start();
+        if (gurobi_seed >= 0)
+            env.set(GRB_IntParam_Seed, gurobi_seed);
 
         unique_ptr<IGraphOracle> oracle_ptr;
+
+        size_t edge_count = 0;
+        double io_time_s = 0.0;
 
         if (mode == "openalex")
         {
@@ -293,12 +321,12 @@ int main(int argc, char *argv[])
 
             auto sim_oracle = make_unique<SimulationOracle>(max_in_edges);
             auto t_io_start = chrono::high_resolution_clock::now();
-            size_t edge_count = load_edge_csv(*sim_oracle, input_file);
+            edge_count = load_edge_csv(*sim_oracle, input_file);
             auto t_io_end = chrono::high_resolution_clock::now();
+            io_time_s = chrono::duration<double>(t_io_end - t_io_start).count();
 
             cout << "[" << get_timestamp() << "] Sim DB Loaded     | Edges: " << edge_count
-                 << " | IO Time: " << fixed << setprecision(2)
-                 << chrono::duration<double>(t_io_end - t_io_start).count() << "s" << endl;
+                 << " | IO Time: " << fixed << setprecision(2) << io_time_s << "s" << endl;
             cout << "--------------------------------------------------" << endl;
 
             oracle_ptr = std::move(sim_oracle);
@@ -307,6 +335,46 @@ int main(int argc, char *argv[])
         int q_node_int = oracle_ptr->mapper.get_or_create_id(query_node);
 
         vector<int> best_nodes;
+        double wall_time_s = 0.0;
+        json bp_block;
+        bool used_bp = false;
+        double lambda_final = 0.0;
+
+        auto capture_bp = [&](FullBranchAndPriceSolver &solver, double lf)
+        {
+            used_bp = true;
+            lambda_final = lf;
+            json traj = json::array();
+            for (const auto &it : solver.stats.lambda_trajectory)
+            {
+                traj.push_back({{"iter", it.iter},
+                                {"lambda", it.lambda},
+                                {"iter_time_s", it.iter_time_s},
+                                {"bb_nodes", it.bb_nodes},
+                                {"lp_solves", it.lp_solves}});
+            }
+            bp_block["lambda_trajectory"] = traj;
+            bp_block["stats"] = {
+                {"total_bb_nodes", solver.stats.total_bb_nodes},
+                {"total_lp_solves", solver.stats.total_lp_solves},
+                {"total_columns_added", solver.stats.total_columns_added},
+                {"total_cuts_added", solver.stats.total_cuts_added},
+                {"t_sync", solver.stats.t_sync},
+                {"t_lp_solve", solver.stats.t_lp_solve},
+                {"t_pricing", solver.stats.t_pricing},
+                {"t_separation", solver.stats.t_separation},
+                {"t_total", solver.stats.t_total}};
+            if (kappa > 0)
+            {
+                bp_block["kappa_verified"] = solver.last_kappa_verified;
+                bp_block["kappa_verify_failed"] = solver.last_kappa_verify_failed;
+            }
+            else
+            {
+                bp_block["kappa_verified"] = nullptr;
+                bp_block["kappa_verify_failed"] = nullptr;
+            }
+        };
 
         if (run_bp)
         {
@@ -322,11 +390,12 @@ int main(int argc, char *argv[])
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
             auto t_end = chrono::high_resolution_clock::now();
+            wall_time_s = chrono::duration<double>(t_end - t_start).count();
+            capture_bp(solver, bp_result.second);
             cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
             cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
             cout << "--------------------------------------------------" << endl;
-            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
-                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << wall_time_s << "s" << endl;
         }
         else if (run_avgdeg)
         {
@@ -339,14 +408,14 @@ int main(int argc, char *argv[])
 
             vector<int> res = baseline_solver.solve(q_node_int, -1);
             auto t_end = chrono::high_resolution_clock::now();
+            wall_time_s = chrono::duration<double>(t_end - t_start).count();
 
             best_nodes = res;
 
             cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
             cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
             cout << "--------------------------------------------------" << endl;
-            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
-                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << wall_time_s << "s" << endl;
         }
         else if (run_bfs)
         {
@@ -358,23 +427,27 @@ int main(int argc, char *argv[])
             BFSSolver bfs_solver(oracle_ptr.get());
             vector<int> res = bfs_solver.solve(q_node_int, bfs_depth);
             auto t_end = chrono::high_resolution_clock::now();
+            wall_time_s = chrono::duration<double>(t_end - t_start).count();
 
             best_nodes = res;
 
             cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
             cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
             cout << "--------------------------------------------------" << endl;
-            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
-                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << wall_time_s << "s" << endl;
         }
         else
         {
+            auto t_start = chrono::high_resolution_clock::now();
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
                                             dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch, kappa);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
+            auto t_end = chrono::high_resolution_clock::now();
+            wall_time_s = chrono::duration<double>(t_end - t_start).count();
+            capture_bp(solver, bp_result.second);
 
             cout << "==================================================" << endl;
             cout << "OPTIMIZATION STATISTICS" << endl;
@@ -400,6 +473,8 @@ int main(int argc, char *argv[])
         cout << "FINAL SOLUTION" << endl;
         cout << "==================================================" << endl;
         int solve_queries_made = oracle_ptr->queries_made;
+        json qualities_json = nullptr;
+        int quality_extra_queries = 0;
         if (compute_qualities)
         {
             SubgraphQualities final_metrics = compute_subgraph_qualities(best_nodes, oracle_ptr.get());
@@ -414,7 +489,22 @@ int main(int argc, char *argv[])
             cout << left << setw(25) << "Largest Weak Comp Ratio" << ": " << fixed << setprecision(6) << final_metrics.weak_component_ratio << endl;
             cout << left << setw(25) << "Reciprocity" << ": " << fixed << setprecision(6) << final_metrics.reciprocity << endl;
             cout << left << setw(25) << "Size" << ": " << final_metrics.num_nodes << endl;
-            cout << left << setw(25) << "Quality Extra Queries" << ": " << (oracle_ptr->queries_made - solve_queries_made) << endl;
+            quality_extra_queries = oracle_ptr->queries_made - solve_queries_made;
+            cout << left << setw(25) << "Quality Extra Queries" << ": " << quality_extra_queries << endl;
+            qualities_json = {
+                {"num_nodes", final_metrics.num_nodes},
+                {"num_edges", final_metrics.num_edges},
+                {"boundary_edges_out", final_metrics.boundary_edges_out},
+                {"outgoing_volume", final_metrics.outgoing_volume},
+                {"weak_components", final_metrics.weak_components},
+                {"largest_weak_component_size", final_metrics.largest_weak_component_size},
+                {"avg_degree_density", final_metrics.avg_degree_density},
+                {"avg_total_internal_degree", final_metrics.avg_total_internal_degree},
+                {"edge_density", final_metrics.edge_density},
+                {"outgoing_conductance", final_metrics.outgoing_conductance},
+                {"expansion", final_metrics.expansion},
+                {"weak_component_ratio", final_metrics.weak_component_ratio},
+                {"reciprocity", final_metrics.reciprocity}};
         }
         else
         {
@@ -450,6 +540,84 @@ int main(int argc, char *argv[])
             for (int node : best_nodes)
                 cout << oracle_ptr->mapper.get_str(node) << " ";
             cout << endl;
+        }
+
+        if (emit_json)
+        {
+            json j;
+            j["schema_version"] = "1.0";
+            std::string method_name = run_avgdeg ? "avgdeg" : run_bfs ? "bfs" : "bp";
+            j["method"] = method_name;
+            j["query_node"] = query_node;
+            bool uses_k_out = (method_name == "bp");
+            j["k"] = uses_k_out ? json(k) : json(nullptr);
+            j["kappa"] = uses_k_out ? json(kappa) : json(nullptr);
+            j["bfs_depth"] = (method_name == "bfs") ? json(bfs_depth) : json(nullptr);
+            std::vector<std::string> node_strs;
+            node_strs.reserve(best_nodes.size());
+            for (int n : best_nodes)
+                node_strs.push_back(oracle_ptr->mapper.get_str(n));
+            j["nodes"] = node_strs;
+            j["size"] = (int)best_nodes.size();
+            if (used_bp)
+            {
+                j["lambda_final"] = lambda_final;
+                j["lambda_trajectory"] = bp_block.value("lambda_trajectory", json::array());
+                j["kappa_verified"] = bp_block.value("kappa_verified", json(nullptr));
+                j["kappa_verify_failed"] = bp_block.value("kappa_verify_failed", json(nullptr));
+                j["stats"] = bp_block.value("stats", json::object());
+            }
+            else
+            {
+                j["lambda_final"] = nullptr;
+                j["lambda_trajectory"] = json::array();
+                j["kappa_verified"] = nullptr;
+                j["kappa_verify_failed"] = nullptr;
+                j["stats"] = nullptr;
+            }
+            j["qualities"] = qualities_json;
+            j["oracle"] = {
+                {"queries_made", oracle_ptr->queries_made},
+                {"unique_nodes_mapped", oracle_ptr->mapper.size()},
+                {"cumulative_network_time_s", oracle_ptr->cumulative_network_time},
+                {"quality_extra_queries", quality_extra_queries}};
+            j["io"] = {
+                {"input_edge_count", (long long)edge_count},
+                {"io_time_s", io_time_s}};
+            j["config"] = {
+                {"time_limit", time_limit},
+                {"node_limit", node_limit},
+                {"max_in_edges", max_in_edges},
+                {"gap_tol", gap_tol},
+                {"dinkelbach_iter", dinkelbach_iter},
+                {"cg_batch_frac", cg_batch_frac},
+                {"cg_min_batch", cg_min_batch},
+                {"cg_max_batch", cg_max_batch},
+                {"tol", tol},
+                {"gurobi_seed", gurobi_seed}};
+            j["wall_time_s"] = wall_time_s;
+
+            std::string payload = j.dump();
+            if (!json_output.empty())
+            {
+                filesystem::path jp(json_output);
+                if (jp.has_parent_path() && !filesystem::exists(jp.parent_path()))
+                    filesystem::create_directories(jp.parent_path());
+                ofstream jf(json_output);
+                if (jf.is_open())
+                {
+                    jf << payload;
+                    jf.close();
+                }
+                else
+                {
+                    cerr << "[" << get_timestamp() << "] Error: Could not write JSON to " << json_output << endl;
+                }
+            }
+            else
+            {
+                cout << "JSON_RESULT:" << payload << "\n";
+            }
         }
     }
     catch (const GRBException &e)

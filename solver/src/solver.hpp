@@ -76,9 +76,12 @@ private:
     std::pair<int, bool> _select_branch_var(const std::unordered_map<int, double> &x_bar, double lambda_val);
     std::pair<std::unordered_set<int>, double> _branch_and_price(double lambda_val);
     void _prune_discrete_solution(std::unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density, bool enforce_connectivity = false);
+    bool _verify_kappa_connectivity(const std::unordered_set<int> &sol_nodes);
 
 public:
     SolverStats stats;
+    bool last_kappa_verified = false;
+    bool last_kappa_verify_failed = false;
 
     FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                              double tol = 1e-6, int bb_node_limit = -1, double bb_time_limit = -1.0,

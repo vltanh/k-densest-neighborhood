@@ -35,6 +35,15 @@ struct pair_hash
     }
 };
 
+struct DinkelbachIter
+{
+    int iter;
+    double lambda;
+    double iter_time_s;
+    int bb_nodes;
+    int lp_solves;
+};
+
 struct SolverStats
 {
     int total_bb_nodes = 0;
@@ -42,6 +51,7 @@ struct SolverStats
     int total_columns_added = 0;
     int total_cuts_added = 0;
     double t_sync = 0.0, t_lp_solve = 0.0, t_pricing = 0.0, t_separation = 0.0, t_total = 0.0;
+    std::vector<DinkelbachIter> lambda_trajectory;
 };
 
 class IDMapper
