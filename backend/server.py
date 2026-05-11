@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict, Tuple, List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,8 +26,8 @@ class SolverRequest(BaseModel):
     max_in_edges: Optional[int] = 0
     gap_tol: Optional[float] = 1e-4
     dinkelbach_iter: Optional[int] = 50
-    cg_batch_frac: Optional[float] = 0.1
-    cg_min_batch: Optional[int] = 5
+    cg_batch_frac: Optional[float] = 1.0
+    cg_min_batch: Optional[int] = 50
     cg_max_batch: Optional[int] = 50
     tol: Optional[float] = 1e-6
 
@@ -42,6 +42,20 @@ app.add_middleware(
 )
 
 active_processes = {}
+
+
+async def cleanup_solver_process(session_id: str, process):
+    if process is None:
+        return
+    if active_processes.get(session_id) is process:
+        active_processes.pop(session_id, None)
+    if process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 @app.post("/api/stop")
@@ -177,6 +191,286 @@ async def fetch_paper_metadata(
 # launched from any working directory (e.g. `python backend/server.py`).
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOLVER_BIN = os.path.join(PROJECT_ROOT, "solver", "bin", "solver")
+DATA_ROOT = os.path.join(PROJECT_ROOT, "data")
+SIM_DATASETS = ("Cora", "PubMed", "DBLP", "CiteSeer", "Cora_ML")
+
+
+class SimSolverRequest(BaseModel):
+    session_id: str = Field(..., description="Unique ID for this extraction run")
+    dataset: str = Field(..., description="Dataset name under data/")
+    query_node: int = Field(..., ge=0, description="Integer node id")
+    k: int = Field(..., ge=2, description="Target subgraph size")
+    time_limit: Optional[float] = 60.0
+    node_limit: Optional[int] = 100000
+    max_in_edges: Optional[int] = 0
+    gap_tol: Optional[float] = 1e-4
+    dinkelbach_iter: Optional[int] = 50
+    cg_batch_frac: Optional[float] = 1.0
+    cg_min_batch: Optional[int] = 50
+    cg_max_batch: Optional[int] = 50
+    tol: Optional[float] = 1e-6
+    ghost_sample_frac: Optional[float] = 0.1
+    ghost_max_per_node: Optional[int] = 5
+
+
+# Cache: dataset -> (nodes_df_dict, adjacency, num_classes)
+_sim_cache: Dict[str, Tuple[Dict[int, dict], Dict[int, List[int]], int]] = {}
+
+
+def _load_sim_dataset(dataset: str):
+    if dataset in _sim_cache:
+        return _sim_cache[dataset]
+    base = os.path.join(DATA_ROOT, dataset)
+    nodes_csv = os.path.join(base, "nodes.csv")
+    edge_csv = os.path.join(base, "edge.csv")
+    if not (os.path.exists(nodes_csv) and os.path.exists(edge_csv)):
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset} missing files")
+
+    nodes: Dict[int, dict] = {}
+    max_label = 0
+    with open(nodes_csv, "r") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            nid = int(row["node_id"])
+            lbl = int(row["label"])
+            max_label = max(max_label, lbl)
+            split = (
+                "train"
+                if row.get("train", "").lower() == "true"
+                else (
+                    "val"
+                    if row.get("val", "").lower() == "true"
+                    else (
+                        "test" if row.get("test", "").lower() == "true" else "unlabeled"
+                    )
+                )
+            )
+            nodes[nid] = {"id": nid, "label": lbl, "split": split}
+
+    adj: Dict[int, List[int]] = {}
+    with open(edge_csv, "r") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            s, t = int(row[0]), int(row[1])
+            adj.setdefault(s, []).append(t)
+            adj.setdefault(t, []).append(s)
+
+    _sim_cache[dataset] = (nodes, adj, max_label + 1)
+    return _sim_cache[dataset]
+
+
+@app.get("/api/datasets")
+def list_datasets():
+    out = []
+    for d in SIM_DATASETS:
+        base = os.path.join(DATA_ROOT, d)
+        if os.path.exists(os.path.join(base, "nodes.csv")) and os.path.exists(
+            os.path.join(base, "edge.csv")
+        ):
+            try:
+                nodes, _adj, nclass = _load_sim_dataset(d)
+                out.append({"name": d, "numNodes": len(nodes), "numClasses": nclass})
+            except Exception as e:
+                logger.warning(f"Failed loading {d}: {e}")
+    return {"datasets": out}
+
+
+@app.post("/api/extract-sim")
+async def extract_sim(req: SimSolverRequest):
+    if req.dataset not in SIM_DATASETS:
+        raise HTTPException(status_code=400, detail=f"Unknown dataset: {req.dataset}")
+    bin_path = SOLVER_BIN
+    if not os.path.exists(bin_path):
+        raise HTTPException(status_code=500, detail="Solver missing.")
+
+    nodes_meta, adj, num_classes = _load_sim_dataset(req.dataset)
+    if req.query_node not in nodes_meta:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Query node {req.query_node} not in dataset (max id {max(nodes_meta)})",
+        )
+
+    edge_csv = os.path.join(DATA_ROOT, req.dataset, "edge.csv")
+    with tempfile.NamedTemporaryFile(
+        mode="w+", delete=False, suffix=".csv"
+    ) as tmp_file:
+        out_csv = tmp_file.name
+
+    async def event_stream():
+        process = None
+        try:
+            cmd = [
+                bin_path,
+                "--mode",
+                "sim",
+                "--input",
+                edge_csv,
+                "--query",
+                str(req.query_node),
+                "--k",
+                str(req.k),
+                "--output",
+                out_csv,
+                "--time-limit",
+                str(req.time_limit),
+                "--node-limit",
+                str(req.node_limit),
+                "--max-in-edges",
+                str(req.max_in_edges),
+                "--gap-tol",
+                str(req.gap_tol),
+                "--dinkelbach-iter",
+                str(req.dinkelbach_iter),
+                "--cg-batch-frac",
+                str(req.cg_batch_frac),
+                "--cg-min-batch",
+                str(req.cg_min_batch),
+                "--cg-max-batch",
+                str(req.cg_max_batch),
+                "--tol",
+                str(req.tol),
+                # "--baseline",
+                # "--baseline-depth",
+                # str(6),
+            ]
+            yield json.dumps(
+                {
+                    "type": "log",
+                    "content": f"[sim:{req.dataset}] Executing: {' '.join(cmd)}",
+                }
+            ) + "\n"
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+            )
+            active_processes[req.session_id] = process
+
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                yield json.dumps(
+                    {"type": "log", "content": line.decode("utf-8").rstrip()}
+                ) + "\n"
+
+            await process.wait()
+            rc = process.returncode
+            if req.session_id in active_processes:
+                del active_processes[req.session_id]
+
+            if rc != 0:
+                msg = (
+                    "Manually aborted."
+                    if rc in [-15, -9]
+                    else f"Failed (exit code {rc})"
+                )
+                yield json.dumps({"type": "error", "content": msg}) + "\n"
+                return
+
+            core_ids: List[int] = []
+            if os.path.exists(out_csv):
+                with open(out_csv, "r") as f:
+                    reader = csv.reader(f)
+                    next(reader, None)
+                    for row in reader:
+                        if row:
+                            try:
+                                core_ids.append(int(row[0].strip()))
+                            except ValueError:
+                                pass
+
+            if not core_ids:
+                yield json.dumps({"type": "error", "content": "Empty subgraph."}) + "\n"
+                return
+
+            core_set = set(core_ids)
+            nodes_out = []
+            for idx, nid in enumerate(core_ids):
+                meta = nodes_meta.get(nid, {"label": -1, "split": "unlabeled"})
+                deg = len(adj.get(nid, []))
+                nodes_out.append(
+                    {
+                        "id": str(nid),
+                        "rawId": nid,
+                        "displayNum": idx + 1,
+                        "label": meta["label"],
+                        "split": meta["split"],
+                        "degree": deg,
+                        "type": "core",
+                        "group": 1,
+                    }
+                )
+
+            edges_out = []
+            seen_pairs = set()
+            for nid in core_ids:
+                for nb in adj.get(nid, []):
+                    if nb in core_set and nb != nid:
+                        key = (min(nid, nb), max(nid, nb))
+                        if key in seen_pairs:
+                            continue
+                        seen_pairs.add(key)
+                        edges_out.append(
+                            {"source": str(nid), "target": str(nb), "type": "core"}
+                        )
+
+            # Ghost frontier sampling
+            ghost_set = set()
+            frac = max(0.0, min(1.0, req.ghost_sample_frac or 0.0))
+            cap = max(0, req.ghost_max_per_node or 0)
+            for nid in core_ids:
+                neighbors_outside = [n for n in adj.get(nid, []) if n not in core_set]
+                if not neighbors_outside or frac <= 0 or cap <= 0:
+                    continue
+                sample_size = min(cap, max(1, int(len(neighbors_outside) * frac)))
+                sample = random.sample(
+                    neighbors_outside, min(sample_size, len(neighbors_outside))
+                )
+                for nb in sample:
+                    g_id = f"ghost_{nb}"
+                    if g_id not in ghost_set:
+                        gm = nodes_meta.get(nb, {"label": -1, "split": "unlabeled"})
+                        nodes_out.append(
+                            {
+                                "id": g_id,
+                                "rawId": nb,
+                                "label": gm["label"],
+                                "split": gm["split"],
+                                "type": "ghost",
+                                "group": 2,
+                            }
+                        )
+                        ghost_set.add(g_id)
+                    edges_out.append(
+                        {"source": str(nid), "target": g_id, "type": "ghost"}
+                    )
+
+            yield json.dumps(
+                {
+                    "type": "meta",
+                    "content": {
+                        "dataset": req.dataset,
+                        "numClasses": num_classes,
+                        "queryNode": req.query_node,
+                        "queryLabel": nodes_meta[req.query_node]["label"],
+                        "querySplit": nodes_meta[req.query_node]["split"],
+                    },
+                }
+            ) + "\n"
+            yield json.dumps(
+                {"type": "result", "content": {"nodes": nodes_out, "edges": edges_out}}
+            ) + "\n"
+            yield json.dumps({"type": "log", "content": "Graph built!"}) + "\n"
+
+        finally:
+            await cleanup_solver_process(req.session_id, process)
+            if os.path.exists(out_csv):
+                os.remove(out_csv)
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @app.post("/api/extract")
@@ -190,6 +484,7 @@ async def extract_subgraph(req: SolverRequest):
         out_csv = tmp_file.name
 
     async def event_stream():
+        process = None
         try:
             cmd = [
                 bin_path,
@@ -349,6 +644,7 @@ async def extract_subgraph(req: SolverRequest):
             yield json.dumps({"type": "log", "content": "Graph built!"}) + "\n"
 
         finally:
+            await cleanup_solver_process(req.session_id, process)
             if os.path.exists(out_csv):
                 os.remove(out_csv)
 
