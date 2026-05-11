@@ -367,7 +367,7 @@ int main(int argc, char *argv[])
             cout << "==================================================" << endl;
 
             auto t_start = chrono::high_resolution_clock::now();
-            AverageDegreeSolver baseline_solver(oracle_ptr.get(), 1);
+            AverageDegreeSolver baseline_solver(oracle_ptr.get());
 
             vector<int> res = baseline_solver.solve(q_node_int, baseline_depth);
             auto t_end = chrono::high_resolution_clock::now();

@@ -4,21 +4,17 @@
 #include "oracle.hpp"
 #include "subgraph_quality.hpp"
 #include <vector>
-#include <set>
 #include <map>
 
 class AverageDegreeSolver
 {
 public:
-    AverageDegreeSolver(IGraphOracle *oracle, int k) : oracle_(oracle), k_(k) {}
+    explicit AverageDegreeSolver(IGraphOracle *oracle) : oracle_(oracle) {}
 
-    // Main solver: returns only the selected node set.
     std::vector<int> solve(int query_node, int exploration_depth = 3);
-    std::vector<int> solve_at_least_k_core(int query_node, int exploration_depth = 3);
 
 private:
     IGraphOracle *oracle_;
-    int k_;
 
     struct LocalGraph
     {

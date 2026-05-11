@@ -4,27 +4,30 @@
 #include <queue>
 #include <cmath>
 #include <iostream>
-#include <set>
 #include <algorithm>
 #include <unordered_set>
 #include <limits>
 
 using namespace boost;
 
-typedef adjacency_list_traits<vecS, vecS, directedS> Traits;
-typedef adjacency_list<vecS, vecS, directedS,
-                       property<vertex_name_t, int>,
-                       property<edge_capacity_t, long long,
-                                property<edge_residual_capacity_t, long long,
-                                         property<edge_reverse_t, Traits::edge_descriptor>>>>
-    Graph;
+namespace
+{
+constexpr long long SCALE = 1000000LL;
+constexpr long long INF_CAP = std::numeric_limits<long long>::max() / 4;
+constexpr int MAX_BISECT_ITERS = 100;
+constexpr double BISECT_TOL = 1e-9;
+}
 
+// Single-pass BFS that records every oracle response, then materialises directed
+// edges in one sweep over the cache. Avoids the previous re-query-every-node
+// second pass.
 AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(int start, int depth)
 {
     LocalGraph lg;
     std::queue<std::pair<int, int>> q;
-    std::set<int> visited;
-    std::set<int> error_nodes;
+    std::unordered_set<int> visited;
+    std::unordered_set<int> error_nodes;
+    std::vector<std::pair<int, std::vector<int>>> succ_cache;
 
     q.push({start, 0});
     visited.insert(start);
@@ -49,42 +52,32 @@ AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(int st
             continue;
         }
 
-        lg.id_map[u] = lg.nodes.size();
+        lg.id_map[u] = (int)lg.nodes.size();
         lg.nodes.push_back(u);
+        succ_cache.push_back({u, std::move(edges.second)});
 
         if (depth < 0 || d < depth)
         {
-            for (int v : edges.second)
-            {
+            for (int v : succ_cache.back().second)
                 if (visited.insert(v).second)
                     q.push({v, d + 1});
-            }
             for (int v : edges.first)
-            {
                 if (visited.insert(v).second)
                     q.push({v, d + 1});
-            }
         }
     }
 
-    for (size_t i = 0; i < lg.nodes.size(); ++i)
+    for (const auto &[u, succs] : succ_cache)
     {
-        int u = lg.nodes[i];
-        std::pair<std::vector<int>, std::vector<int>> edges;
-        try
-        {
-            edges = oracle_->query(u);
-        }
-        catch (...)
-        {
+        auto it_u = lg.id_map.find(u);
+        if (it_u == lg.id_map.end())
             continue;
-        }
-        for (int v : edges.second)
+        int i = it_u->second;
+        for (int v : succs)
         {
-            if (lg.id_map.count(v))
-            {
-                lg.edges.push_back({(int)i, lg.id_map[v]});
-            }
+            auto it_v = lg.id_map.find(v);
+            if (it_v != lg.id_map.end())
+                lg.edges.push_back({i, it_v->second});
         }
     }
     return lg;
@@ -100,8 +93,8 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
         return {};
     }
 
-    int n = (int)lg.nodes.size();
-    int query_idx = lg.id_map[query_node];
+    const int n = (int)lg.nodes.size();
+    const int query_idx = lg.id_map[query_node];
 
     std::unordered_set<std::pair<int, int>, pair_hash> edge_set(lg.edges.begin(), lg.edges.end());
     std::vector<std::pair<int, int>> directed_edges(edge_set.begin(), edge_set.end());
@@ -112,9 +105,6 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
                                      property<edge_capacity_t, long long,
                                               property<edge_residual_capacity_t, long long,
                                                        property<edge_reverse_t, Traits::edge_descriptor>>>>;
-
-    const long long SCALE = 1000000LL;
-    const long long INF_CAP = std::numeric_limits<long long>::max() / 4;
 
     auto solve_threshold = [&](double lambda_val)
     {
@@ -132,8 +122,8 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
             rev[e2] = e1;
         };
 
-        int source = n + (int)directed_edges.size();
-        int sink = source + 1;
+        const int source = n + (int)directed_edges.size();
+        const int sink = source + 1;
 
         for (int i = 0; i < n; ++i)
         {
@@ -145,7 +135,7 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
         for (size_t idx = 0; idx < directed_edges.size(); ++idx)
         {
             const auto &[u_idx, v_idx] = directed_edges[idx];
-            int item = n + (int)idx;
+            const int item = n + (int)idx;
             add_flow_edge(source, item, SCALE);
             add_flow_edge(item, u_idx, INF_CAP);
             add_flow_edge(item, v_idx, INF_CAP);
@@ -179,15 +169,11 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
         std::vector<int> selected_nodes;
         int selected_edges = 0;
         for (int i = 0; i < n; ++i)
-        {
             if (vis[i])
                 selected_nodes.push_back(lg.nodes[i]);
-        }
         for (size_t idx = 0; idx < directed_edges.size(); ++idx)
-        {
             if (vis[n + (int)idx])
                 selected_edges++;
-        }
 
         double value = (double)selected_edges - lambda_val * (double)selected_nodes.size();
         return std::make_pair(selected_nodes, std::make_pair(selected_edges, value));
@@ -195,9 +181,10 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
 
     double low = 0.0;
     double high = (double)directed_edges.size();
-    double tol = 1e-9;
     std::vector<int> best_nodes;
     double best_density = -1.0;
+    bool low_probed = false;
+    bool high_probed = false;
 
     auto consider = [&](const std::vector<int> &nodes, int edges)
     {
@@ -211,7 +198,7 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
         }
     };
 
-    for (int iter = 0; iter < 100; ++iter)
+    for (int iter = 0; iter < MAX_BISECT_ITERS; ++iter)
     {
         double mid = (low + high) / 2.0;
         auto [nodes_mid, pair_mid] = solve_threshold(mid);
@@ -222,131 +209,33 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
         if (value_mid > 0.0)
         {
             low = mid;
+            low_probed = true;
+            high_probed = false;
         }
         else
         {
             high = mid;
+            high_probed = true;
+            low_probed = false;
         }
 
-        if (high - low <= tol)
+        if (high - low <= BISECT_TOL)
             break;
     }
 
-    auto [nodes_low, pair_low] = solve_threshold(low);
-    consider(nodes_low, pair_low.first);
-    auto [nodes_high, pair_high] = solve_threshold(high);
-    consider(nodes_high, pair_high.first);
+    if (!low_probed)
+    {
+        auto [nodes_low, pair_low] = solve_threshold(low);
+        consider(nodes_low, pair_low.first);
+    }
+    if (!high_probed)
+    {
+        auto [nodes_high, pair_high] = solve_threshold(high);
+        consider(nodes_high, pair_high.first);
+    }
 
     if (best_nodes.empty())
         best_nodes.push_back(query_node);
 
     return best_nodes;
-}
-
-std::vector<int> AverageDegreeSolver::solve_at_least_k_core(int query_node, int depth)
-{
-    LocalGraph lg = explore_neighborhood(query_node, depth);
-
-    auto query_it = lg.id_map.find(query_node);
-    if (query_it == lg.id_map.end())
-    {
-        std::cerr << "[" << get_timestamp() << "] Error: Query node could not be fetched.\n";
-        return {};
-    }
-
-    int n = (int)lg.nodes.size();
-    if (n == 0)
-        return {};
-
-    int query_idx = query_it->second;
-    std::vector<std::map<int, double>> adj(n);
-
-    for (const auto &e : lg.edges)
-    {
-        if (e.first == e.second)
-            continue;
-        int u = std::min(e.first, e.second);
-        int v = std::max(e.first, e.second);
-        adj[u][v] += 1.0;
-        adj[v][u] += 1.0;
-    }
-
-    std::vector<double> degree(n, 0.0);
-    double internal_weight = 0.0;
-    for (int u = 0; u < n; ++u)
-    {
-        for (const auto &[v, w] : adj[u])
-            degree[u] += w;
-    }
-    for (int u = 0; u < n; ++u)
-    {
-        for (const auto &[v, w] : adj[u])
-            if (u < v)
-                internal_weight += w;
-    }
-
-    std::vector<char> active(n, true);
-    int active_count = n;
-    bool query_active = true;
-    double best_density = -1.0;
-    std::vector<int> best_nodes;
-
-    auto snapshot_active = [&]()
-    {
-        std::vector<int> result;
-        result.reserve(active_count);
-        for (int i = 0; i < n; ++i)
-        {
-            if (active[i])
-                result.push_back(lg.nodes[i]);
-        }
-        return result;
-    };
-
-    while (active_count > 0 && query_active)
-    {
-        if (active_count >= k_)
-        {
-            double density = internal_weight / active_count;
-            if (density > best_density)
-            {
-                best_density = density;
-                best_nodes = snapshot_active();
-            }
-        }
-
-        int remove_idx = -1;
-        double min_degree = std::numeric_limits<double>::infinity();
-        for (int i = 0; i < n; ++i)
-        {
-            if (active[i] && degree[i] < min_degree)
-            {
-                min_degree = degree[i];
-                remove_idx = i;
-            }
-        }
-
-        if (remove_idx < 0)
-            break;
-
-        active[remove_idx] = false;
-        active_count--;
-        if (remove_idx == query_idx)
-            query_active = false;
-
-        for (const auto &[v, w] : adj[remove_idx])
-        {
-            if (active[v])
-            {
-                degree[v] -= w;
-                internal_weight -= w;
-            }
-        }
-        degree[remove_idx] = 0.0;
-    }
-
-    if (!best_nodes.empty())
-        return best_nodes;
-
-    return {query_node};
 }
