@@ -654,60 +654,38 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 2/3: validation sweep on Cora\_ML}
-  \scriptsize
-  Macro F1 on the 411 eligible val nodes with the median cluster-quality
-  values at the tuned hyperparameters. The BFS sweep ranges over
-  depth $\in \{1, 2\}$; the BP sweep ranges over $k \in \{5, 10\}$ and
-  $\kappa \in \{0, 2\}$ at a 5\,s per-iteration BP time budget.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l l r r r r r r}
-    \toprule
-    Method & Best setting & Size & Density & $\lambda_2$ & ncut & F1 (val) & Queries \\
-    \midrule
-    AvgDeg              & local           & 17.0 & 0.146 & 0.236 & 1.011 & 0.614 & 204.1 \\
-    BFS                 & depth 1         & 4.0  & 0.333 & \textbf{1.000} & 1.200 & \textbf{0.864} & 1.0 \\
-    BP                  & $k=5,\kappa=2$  & 5.0  & \textbf{0.400} & 0.726 & 1.158 & 0.827 & 10.7 \\
-    \bottomrule
-  \end{tabular}
+  Sweep grid (locked):
+  \begin{itemize}
+    \item BFS depth $\in \{1, 2\}$
+    \item BP $k \in \{3, 4, 5\}$, $\kappa \in \{0, 1, 2\}$
+    \item AvgDeg single cell
+    \item Five Gurobi seeds for BP $(42..46)$; deterministic methods once
+    \item No time, node, gap, or Dinkelbach limit
+  \end{itemize}
 
   \vfill
 
-  \begin{itemize}
-    \item BFS depth 1 reaches the highest val F1 at the lowest oracle cost.
-    \item BP at $k=5,\kappa=2$ wins the BP sweep and returns the densest community.
-    \item AvgDeg explores far larger neighbourhoods and pays many more oracle queries per query.
-  \end{itemize}
+  \textbf{Placeholder.} Numbers pending the unified pipeline rerun
+  with the materialise-frontier solver. Best per-family settings come
+  from \texttt{aggregate\_classification.py} (val macro F1) joined to
+  \texttt{aggregate\_cluster\_quality.py} and \texttt{aggregate\_cost.py}.
 \end{frame}
 
 \begin{frame}{Exp 2: full test split, cluster quality}
-  \scriptsize
-  Median values on 393 eligible test nodes from \texttt{cluster\_quality\_summary.csv}.
-  Cluster quality reads before classification.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r r r r r}
-    \toprule
-    Method & Size & $\lambda_2$ & Density & ncut & Mixing & Conduct. \\
-    \midrule
-    AvgDeg                & 15.0 & 0.181 & 0.144 & 1.007 & 0.677 & 0.677 \\
-    BFS depth 1           & 4.0  & \textbf{1.000} & 0.333 & 1.200 & 0.840 & 0.840 \\
-    BP $k=5,\kappa=2$     & 5.0  & 0.726 & \textbf{0.350} & \textbf{1.143} & \textbf{0.855} & \textbf{0.855} \\
-    \bottomrule
-  \end{tabular}
+  Median values across the val + test pool from
+  \texttt{cluster\_quality\_summary.csv} at the tuned hyperparameters.
 
   \vfill
 
-  \begin{itemize}
-    \item BFS returns the most algebraically connected community
-      ($\lambda_2 = 1$ matches the small clique-like neighbourhoods one hop away).
-    \item BP returns the densest community at a similar size and the highest
-      mixing parameter, indicating tighter internal connectivity relative to
-      boundary.
-    \item AvgDeg has the largest size and the lowest spectral connectivity.
-  \end{itemize}
+  Reported metrics: size, $\lambda_2$, edge density, NCut, mixing
+  parameter, within-class internal edges ratio, true-class vote
+  share, train-label entropy.
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun. The
+  cluster-quality perspective is intrinsic: it reads only the
+  geometry of the returned subgraph, label-agnostic.
 \end{frame}
 
 \begin{frame}{Hard subset: motivation}
@@ -737,58 +715,38 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 2: hard subset, cluster quality}
-  \scriptsize
-  Medians on the 52 BFS-hard val nodes. Cluster quality first; classification follows.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r r r r r}
-    \toprule
-    Method & Size & $\lambda_2$ & Density & ncut & Mixing & Conduct. \\
-    \midrule
-    AvgDeg              & 33.0 & 0.045 & 0.142 & 0.585 & 0.677 & 0.677 \\
-    BFS depth 1         & 3.0  & \textbf{1.000} & 0.333 & 1.333 & 0.893 & 0.893 \\
-    BP $k=5,\kappa=2$   & 5.0  & 0.691 & \textbf{0.300} & \textbf{1.143} & \textbf{0.889} & \textbf{0.889} \\
-    \bottomrule
-  \end{tabular}
+  Medians on the BFS-hard val nodes (64 on Cora\_ML).
 
   \vfill
 
-  \begin{itemize}
-    \item BFS still returns the most algebraically connected subgraph: the
-      neighbours that defeat the label vote are themselves tightly knit.
-    \item BP returns a slightly larger, slightly denser community and a
-      lower NCut than BFS.
-    \item AvgDeg expands far past the local cluster and its $\lambda_2$
-      collapses to 0.045.
-  \end{itemize}
+  Same metric set as the full test split. The hard subset isolates
+  cases where local labels do not match: cluster quality on these
+  queries shows whether retrieval geometry remains tight even when
+  the depth-1 vote is wrong.
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
 \begin{frame}{Exp 2: cost comparison}
-  \small
-  Averages over the val + test pool (804 eligible queries).
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r}
-    \toprule
-    Method            & Avg oracle queries & Avg community size \\
-    \midrule
-    BFS depth 1       & \textbf{1.0}  & 4.87  \\
-    BP $k=5,\kappa=2$ & 10.97         & 4.98  \\
-    AvgDeg            & 201.95        & 21.20 \\
-    \bottomrule
-  \end{tabular}
+  Averages over the val + test pool from
+  \texttt{cost\_summary.csv}. Cost is the third experimental
+  perspective alongside cluster quality and classification.
 
   \vfill
 
-  \begin{itemize}
-    \item BFS depth 1 issues exactly one query per node and stays compact.
-    \item BP returns a community of comparable size at a tenfold oracle cost,
-      buying density and tunable $\kappa$.
-    \item AvgDeg expands far further and pays two orders of magnitude more
-      oracle queries.
-  \end{itemize}
+  Reported per cell: wall time, oracle queries, total\_bb\_nodes
+  (BP), total\_lp\_solves (BP), total\_columns\_added (BP),
+  total\_cuts\_added (BP), $t$\_lp\_solve, $t$\_pricing, returned
+  community size.
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun. The
+  materialise-frontier solver pays more oracle queries per call than
+  the legacy lazy build; the cost row makes that price explicit
+  against the cluster-quality and classification gains.
 \end{frame}
 
 \begin{frame}{Exp 3: classification prediction rule}
@@ -812,58 +770,36 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 3: full test split, classification}
-  \scriptsize
-  Means over five seeds (42..46), bootstrap 95\% CI with $B=500$ resamples,
-  393 eligible test nodes. Precision, recall, and F1 are macro-averaged.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r r}
-    \toprule
-    Method            & Precision           & Recall              & F1 \\
-    \midrule
-    AvgDeg            & 0.709 [0.687, 0.731] & 0.523 [0.501, 0.546] & 0.537 [0.514, 0.562] \\
-    BFS depth 1       & \textbf{0.825 [0.809, 0.842]} & \textbf{0.813 [0.795, 0.832]} & \textbf{0.810 [0.793, 0.829]} \\
-    BP $k=5,\kappa=2$ & 0.749 [0.729, 0.767] & 0.740 [0.720, 0.759] & 0.737 [0.718, 0.756] \\
-    \bottomrule
-  \end{tabular}
+  Means over five Gurobi seeds (42..46) on the test split (402
+  eligible nodes on Cora\_ML). Bootstrap 95\% CI with $B = 500$
+  resamples paired across methods by query.
 
   \vfill
 
-  \begin{itemize}
-    \item BFS depth 1 leads on every classification metric.
-    \item BP closes most of the F1 gap (0.737) while returning the densest
-      and best-mixed subgraph of the three.
-    \item AvgDeg trades classification accuracy for community size.
-  \end{itemize}
+  Reported: macro precision, recall, F1. Deterministic methods
+  (AvgDeg, BFS) use a single-seed paired CI; BP uses a
+  stratified-by-seed bootstrap. Wilson interval substitutes when
+  bootstrap variance is zero.
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
 \begin{frame}{Exp 3: hard subset, classification}
-  \scriptsize
-  Means over five seeds (42..46), bootstrap 95\% CI ($B=500$), 52 BFS-hard
-  val nodes. BFS depth 1 is 0 by construction.
-
-  \vspace{0.5em}
-
-  \begin{tabular}{l r r r}
-    \toprule
-    Method            & Precision           & Recall              & F1 \\
-    \midrule
-    AvgDeg            & 0.227 [0.205, 0.249] & \textbf{0.315 [0.305, 0.326]} & \textbf{0.196 [0.179, 0.211]} \\
-    BFS depth 1       & 0.000                & 0.000                & 0.000 \\
-    BP $k=5,\kappa=2$ & \textbf{0.239 [0.193, 0.291]} & 0.203 [0.136, 0.285] & 0.169 [0.126, 0.212] \\
-    \bottomrule
-  \end{tabular}
+  Means over five seeds (42..46), bootstrap 95\% CI ($B = 500$) on
+  the BFS-hard val nodes (64 on Cora\_ML). BFS depth 1 is 0 by
+  construction.
 
   \vfill
 
-  \begin{itemize}
-    \item Both AvgDeg and BP move off the BFS-zero baseline on the hard subset.
-    \item BP has higher precision; AvgDeg has higher recall on the
-      cases where retrieval geometry matters.
-    \item Absolute F1 stays under 0.2, indicating the subset is genuinely
-      difficult and the right comparison is to BFS.
-  \end{itemize}
+  The Wilson interval primitive substitutes the bootstrap CI when
+  every replicate yields the same metric value (typical on this
+  subset for BFS, and occasionally for AvgDeg or BP).
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
 \section{Conclusion}
