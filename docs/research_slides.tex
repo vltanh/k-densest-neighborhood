@@ -750,14 +750,20 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 3: tuning on val}
-  For each method, pick the params hash that maximises macro F1 on
-  the val records produced by the unified sweep. AvgDeg has a
-  single cell; BFS picks the best of depths $\{1, 2\}$; BP picks
-  $(k, \kappa)$ from the locked grid using seed 42.
+  Pick the best params per method by macro F1 on val:
+  \begin{itemize}
+    \item AvgDeg: single cell
+    \item BFS: best of depth $\in \{1, 2\}$
+    \item BP: best of $(k, \kappa)$ on the locked grid, seed 42
+  \end{itemize}
 
   \vfill
 
-  Reported: chosen params, val macro precision / recall / F1.
+  Reported:
+  \begin{itemize}
+    \item chosen params per method
+    \item val macro precision, recall, F1
+  \end{itemize}
 
   \vfill
 
@@ -765,16 +771,20 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 3: evaluation on test}
-  Apply the best params per method to the test split (402 eligible
-  nodes on Cora\_ML). Means over five Gurobi seeds (42..46) with
-  bootstrap $95\%$ CI from $B = 500$ resamples paired across methods
-  by query.
+  Apply the best params per method to the test split.
+  \begin{itemize}
+    \item 402 test queries on Cora-ML
+    \item mean over five Gurobi seeds (42..46)
+    \item bootstrap $95\%$ CI from $B = 500$ resamples
+    \item resample indices shared across methods so the CI is paired
+      by query
+    \item deterministic methods (AvgDeg, BFS): single-seed paired CI
+    \item BP: stratified-by-seed bootstrap
+  \end{itemize}
 
   \vfill
 
-  Reported: macro precision, recall, F1. Deterministic methods
-  (AvgDeg, BFS) use a single-seed paired CI; BP uses a
-  stratified-by-seed bootstrap.
+  Reported: macro precision, recall, F1.
 
   \vfill
 
@@ -804,15 +814,15 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 3: evaluation on the hard subset}
-  Apply the best params per method to the BFS-hard val nodes (64 on
-  Cora\_ML). Means over five seeds (42..46), bootstrap $95\%$ CI
-  ($B = 500$). BFS depth 1 is 0 by construction.
-
-  \vfill
-
-  The Wilson interval primitive substitutes the bootstrap CI when
-  every replicate yields the same metric value (typical on this
-  subset for BFS, and occasionally for AvgDeg or BP).
+  Apply the best params per method to the BFS-hard val nodes.
+  \begin{itemize}
+    \item 64 val queries on Cora-ML
+    \item mean over five seeds (42..46)
+    \item bootstrap $95\%$ CI ($B = 500$)
+    \item BFS depth 1 scores 0 by construction
+    \item Wilson interval replaces the bootstrap CI when every
+      replicate gives the same value (typical for BFS here)
+  \end{itemize}
 
   \vfill
 
