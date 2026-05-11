@@ -15,9 +15,10 @@ FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, 
                                                    double tol, int bb_node_limit, double bb_time_limit,
                                                    double bb_gap_tol, int dinkelbach_max_iter,
                                                    double cg_batch_fraction, int cg_min_batch, int cg_max_batch,
-                                                   int kappa)
+                                                   int kappa, double bb_hard_time_limit)
     : oracle(oracle), q(q), k(k), env(env), tol(tol), bb_node_limit(bb_node_limit),
-      bb_time_limit(bb_time_limit), bb_gap_tol(bb_gap_tol), dinkelbach_max_iter(dinkelbach_max_iter),
+      bb_time_limit(bb_time_limit), bb_hard_time_limit(bb_hard_time_limit),
+      bb_gap_tol(bb_gap_tol), dinkelbach_max_iter(dinkelbach_max_iter),
       cg_batch_fraction(cg_batch_fraction), cg_min_batch(cg_min_batch), cg_max_batch(cg_max_batch),
       kappa(std::max(0, kappa)), rmp(nullptr)
 {
@@ -1127,6 +1128,10 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
             return {std::move(local_x_bar), local_lp_obj};
 
+        double solve_elapsed_cg = chrono::duration<double>(t_now - t_start_solve).count();
+        if (bb_hard_time_limit >= 0.0 && solve_elapsed_cg > bb_hard_time_limit)
+            return {std::move(local_x_bar), local_lp_obj};
+
         // Materialise the adjacency of every frontier node we have not yet
         // queried. Pricing must score columns against the true subgraph
         // induced by V_active ∪ F; without this an edge among two F members
@@ -1150,11 +1155,18 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         t1 = chrono::high_resolution_clock::now();
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
+        double lp_time_budget = -1.0;
         if (bb_time_limit >= 0.0)
+            lp_time_budget = max(1e-3, bb_time_limit - effective_time);
+        if (bb_hard_time_limit >= 0.0)
         {
-            double remaining_budget = max(1e-3, bb_time_limit - effective_time);
-            rmp->set(GRB_DoubleParam_TimeLimit, remaining_budget);
+            double hard_remaining = max(
+                1e-3, bb_hard_time_limit - solve_elapsed_cg);
+            if (lp_time_budget < 0.0 || hard_remaining < lp_time_budget)
+                lp_time_budget = hard_remaining;
         }
+        if (lp_time_budget >= 0.0)
+            rmp->set(GRB_DoubleParam_TimeLimit, lp_time_budget);
 
         rmp->optimize();
         stats.total_lp_solves++;
@@ -1361,6 +1373,17 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached ("
                  << bb_time_limit << "s without improvement)." << endl;
             break;
+        }
+
+        if (bb_hard_time_limit >= 0.0)
+        {
+            double solve_elapsed = chrono::duration<double>(t_now - t_start_solve).count();
+            if (solve_elapsed > bb_hard_time_limit)
+            {
+                cout << "[" << get_timestamp() << "]     [!] Hard wall-time cap reached ("
+                     << bb_hard_time_limit << "s); returning current incumbent." << endl;
+                break;
+            }
         }
 
         if (best_int_obj > tol && heuristic_global_ub > -1e8)
@@ -1623,6 +1646,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 {
     auto t_start_global = chrono::high_resolution_clock::now();
+    t_start_solve = t_start_global;
 
     unordered_set<int> best_sol = V_active;
 
@@ -1674,6 +1698,18 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 
         lambda_val = new_density;
         best_sol = sol;
+
+        if (bb_hard_time_limit >= 0.0)
+        {
+            double solve_elapsed = chrono::duration<double>(
+                chrono::high_resolution_clock::now() - t_start_solve).count();
+            if (solve_elapsed > bb_hard_time_limit)
+            {
+                cout << "[" << get_timestamp() << "]   Status            : Hard wall-time cap reached ("
+                     << bb_hard_time_limit << "s); returning current incumbent." << endl;
+                break;
+            }
+        }
     }
 
     auto t_end_global = chrono::high_resolution_clock::now();

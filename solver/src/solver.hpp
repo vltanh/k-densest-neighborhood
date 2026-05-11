@@ -19,6 +19,7 @@ private:
     double tol;
     int bb_node_limit;
     double bb_time_limit;
+    double bb_hard_time_limit;
     double bb_gap_tol;
     int dinkelbach_max_iter;
     double cg_batch_fraction;
@@ -96,7 +97,10 @@ public:
                              double tol = 1e-6, int bb_node_limit = -1, double bb_time_limit = -1.0,
                              double bb_gap_tol = -1.0, int dinkelbach_max_iter = -1,
                              double cg_batch_fraction = 1.0, int cg_min_batch = 0, int cg_max_batch = 50,
-                             int kappa = 0);
+                             int kappa = 0, double bb_hard_time_limit = -1.0);
+    // Solve start wall clock. Public so the Dinkelbach outer loop and the BB
+    // inner loop share the same origin when checking the hard wall-time cap.
+    std::chrono::high_resolution_clock::time_point t_start_solve;
     ~FullBranchAndPriceSolver();
 
     std::pair<std::unordered_set<int>, double> solve();

@@ -145,9 +145,25 @@ def main():
         type=float,
         default=None,
         help=(
-            "Per-call wall-time cap (seconds) appended to BP solver argv via "
-            "--time-limit. Kept outside the params dict so it does not change "
+            "Per-call no-improvement budget (seconds) appended to BP solver "
+            "argv via --time-limit. Soft cap: the solver returns its current "
+            "incumbent when the clock since the last improvement exceeds the "
+            "budget. Kept outside the params dict so it does not change "
             "params_hash and the existing record cache stays valid across runs."
+        ),
+    )
+    parser.add_argument(
+        "--hard-time-limit",
+        type=float,
+        default=None,
+        help=(
+            "Per-call wall-time hard cap (seconds), passed to the C++ solver "
+            "via --hard-time-limit. The solver breaks out of Dinkelbach / "
+            "branch-and-price / column generation when wall time exceeds the "
+            "cap and returns the current incumbent (with a JSON_RESULT line) "
+            "instead of running indefinitely. Backstop in case the "
+            "no-improvement cap is reset by a slow stream of marginal "
+            "incumbent updates."
         ),
     )
     parser.add_argument("--weighting", type=str, default="uniform")
@@ -218,6 +234,8 @@ def main():
                 extra = method_extra_args(fam, params, gurobi_seed=seed if fam == "bp" else None)
                 if fam == "bp" and args.solver_time_limit is not None:
                     extra = list(extra) + ["--time-limit", str(args.solver_time_limit)]
+                if fam == "bp" and args.hard_time_limit is not None:
+                    extra = list(extra) + ["--hard-time-limit", str(args.hard_time_limit)]
                 _run_on_split(
                     query_nodes=val_ids,
                     split_label="val",

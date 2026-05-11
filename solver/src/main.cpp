@@ -31,6 +31,7 @@ void print_usage(const char *prog_name)
          << "  --compute-qualities       Compute final density/internal-edge metrics (may issue extra oracle queries)\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
          << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: -1)\n"
+         << "  --hard-time-limit <float> Hard wall-time cap (seconds) on the whole BP solve; -1 disables (default: -1)\n"
          << "  --node-limit <int>        Max Branch-and-Bound nodes to explore; -1 disables (default: -1)\n"
          << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 0)\n"
          << "  --gap-tol <float>         Early stopping relative gap tolerance; -1 disables (default: -1)\n"
@@ -92,6 +93,7 @@ int main(int argc, char *argv[])
     int gurobi_seed = -1;
 
     double time_limit = -1.0;
+    double hard_time_limit = -1.0;
     int node_limit = -1;
     int max_in_edges = 0;
     double gap_tol = -1.0;
@@ -183,6 +185,8 @@ int main(int argc, char *argv[])
             }
             else if (arg == "--time-limit")
                 time_limit = stod(argv[++i]);
+            else if (arg == "--hard-time-limit")
+                hard_time_limit = stod(argv[++i]);
             else if (arg == "--node-limit")
                 node_limit = stoi(argv[++i]);
             else if (arg == "--max-in-edges")
@@ -385,7 +389,8 @@ int main(int argc, char *argv[])
             auto t_start = chrono::high_resolution_clock::now();
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
-                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch, kappa);
+                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
+                                            kappa, hard_time_limit);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
@@ -441,7 +446,8 @@ int main(int argc, char *argv[])
             auto t_start = chrono::high_resolution_clock::now();
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
-                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch, kappa);
+                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
+                                            kappa, hard_time_limit);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
@@ -591,6 +597,7 @@ int main(int argc, char *argv[])
                 {"io_time_s", io_time_s}};
             j["config"] = {
                 {"time_limit", time_limit},
+                {"hard_time_limit", hard_time_limit},
                 {"node_limit", node_limit},
                 {"max_in_edges", max_in_edges},
                 {"gap_tol", gap_tol},
