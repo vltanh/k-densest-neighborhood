@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { API_BASE_URL, ORACLE_SIM, ORACLE_OPENALEX } from '../constants';
+import { API_BASE_URL, ORACLE_SIM, ORACLE_OPENALEX, VARIANT_BP } from '../constants';
 import { parseLogLine, TELEMETRY_INITIAL } from '../utils/telemetryParser';
 
 const MAX_LOG_LINES = 2000;
@@ -47,7 +47,7 @@ export function useSubgraphExtractor(sessionId) {
     const pf = (v, def) => { const n = parseFloat(v); return isNaN(n) ? def : n; };
 
     const sharedSolver = {
-      variant:            params.variant || 'bp',
+      variant:            params.variant || VARIANT_BP,
       k:                  pi(params.k,               5),
       kappa:              pi(params.kappa,           0),
       baseline_depth:     pi(params.baselineDepth,  -1),
