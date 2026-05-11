@@ -2,14 +2,26 @@ import os
 import subprocess
 import pandas as pd
 import networkx as nx
+import math
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+from pymincut.pygraph import PyGraph
 
 
-def run_solver(q_node, k, edge_csv, bin_path, tmp_dir):
-    """Executes the C++ Branch-and-Price solver for a single query node."""
-    out_csv = os.path.join(tmp_dir, f"out_q{q_node}_k{k}.csv")
+def run_solver(
+    q_node,
+    k,
+    edge_csv,
+    bin_path,
+    tmp_dir,
+    extra_args=None,
+    max_in_edges=0,
+):
+    """Executes the C++ solver for a single query node."""
+    k_suffix = f"k{k}" if k is not None else "nok"
+    out_csv = os.path.join(tmp_dir, f"out_q{q_node}_{k_suffix}.csv")
     cmd = [
         bin_path,
         "--mode",
@@ -18,16 +30,27 @@ def run_solver(q_node, k, edge_csv, bin_path, tmp_dir):
         edge_csv,
         "--query",
         str(q_node),
-        "--k",
-        str(k),
         "--output",
         out_csv,
+        "--max-in-edges",
+        str(max_in_edges),
     ]
+    if k is not None:
+        cmd.extend(["--k", str(k)])
+    if extra_args:
+        cmd.extend(extra_args)
 
+    oracle_queries = math.nan
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError:
-        return q_node, []
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        match = re.search(r"API Queries Made\s*:\s*(\d+)", result.stdout)
+        if match:
+            oracle_queries = int(match.group(1))
+    except subprocess.CalledProcessError as exc:
+        match = re.search(r"API Queries Made\s*:\s*(\d+)", exc.stdout or "")
+        if match:
+            oracle_queries = int(match.group(1))
+        return q_node, [], oracle_queries
 
     neighborhood = []
     if os.path.exists(out_csv):
@@ -38,7 +61,111 @@ def run_solver(q_node, k, edge_csv, bin_path, tmp_dir):
             pass
         os.remove(out_csv)
 
-    return q_node, neighborhood
+    return q_node, neighborhood, oracle_queries
+
+
+def _safe_mean(values):
+    finite = [v for v in values if v is not None and not math.isnan(v)]
+    return sum(finite) / len(finite) if finite else math.nan
+
+
+def compute_mS_cS(neighbors, com):
+    m_count = 0
+    c_count = 0
+    for node in com:
+        for neighbor in neighbors.get(node, []):
+            if neighbor in com:
+                m_count += 1
+            else:
+                c_count += 1
+    return m_count // 2, c_count
+
+
+def compute_mincut(neighbors, com):
+    cluster_edges = set()
+    for node in com:
+        for neighbor in neighbors.get(node, []):
+            if neighbor in com:
+                cluster_edges.add((node, neighbor))
+    sub_graph = PyGraph(list(com), list(cluster_edges))
+    return sub_graph.mincut("noi", "bqueue", False)
+
+
+def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
+    """Compute post-solve quality metrics for the retrieved subgraph."""
+    node_set = set(nodes)
+    n = len(node_set)
+    if n == 0:
+        return {
+            "dir_internal_avg_degree": 0.0,
+            "dir_internal_edge_density": 0.0,
+            "undir_external_expansion": 0.0,
+            "undir_external_conductance": 0.0,
+            "undir_internal_norm_min_cut": math.nan,
+            "undir_internal_norm_min_cut_computed": 0,
+        }
+
+    internal_edges = 0
+    undir_internal_edges, undir_boundary_edges = compute_mS_cS(mincut_neighbors, node_set)
+    undir_external_volume = 2 * undir_internal_edges + undir_boundary_edges
+    full_undir_volume = sum(len(v) for v in mincut_neighbors.values())
+    outside_undir_volume = full_undir_volume - undir_external_volume
+
+    for u in node_set:
+        for v in out_neighbors.get(u, []):
+            if u == v:
+                continue
+            if v in node_set:
+                internal_edges += 1
+
+    dir_internal_avg_degree = internal_edges / n
+    dir_internal_edge_density = internal_edges / (n * (n - 1)) if n > 1 else 0.0
+    undir_external_expansion = undir_boundary_edges / n
+    conductance_denominator = min(undir_external_volume, outside_undir_volume)
+    undir_external_conductance = (
+        undir_boundary_edges / conductance_denominator
+        if conductance_denominator > 0
+        else 0.0
+    )
+
+    undir_internal_norm_min_cut = math.nan
+    min_cut_computed = 0
+    if n >= 2:
+        if undir_internal_edges == 0:
+            undir_internal_norm_min_cut = 0.0
+            min_cut_computed = 1
+        else:
+            try:
+                part_a, part_b, cut_value = compute_mincut(mincut_neighbors, node_set)
+                # For normalization, use volumes inside the induced subgraph.
+                vol_a = sum(
+                    1
+                    for u in part_a
+                    for v in mincut_neighbors.get(u, [])
+                    if v in node_set
+                )
+                vol_b = sum(
+                    1
+                    for u in part_b
+                    for v in mincut_neighbors.get(u, [])
+                    if v in node_set
+                )
+                min_vol = min(vol_a, vol_b)
+                undir_internal_norm_min_cut = (
+                    cut_value / min_vol if min_vol > 0 else 0.0
+                )
+                min_cut_computed = 1
+            except Exception:
+                undir_internal_norm_min_cut = math.nan
+
+    return {
+        "dir_internal_avg_degree": dir_internal_avg_degree,
+        "dir_internal_edge_density": dir_internal_edge_density,
+        "undir_external_expansion": undir_external_expansion,
+        "undir_external_conductance": undir_external_conductance,
+        "undir_internal_norm_min_cut": undir_internal_norm_min_cut,
+        "undir_internal_norm_min_cut_computed": min_cut_computed,
+    }
 
 
 def evaluate_nodes(
@@ -51,6 +178,12 @@ def evaluate_nodes(
     max_workers=8,
     weighting="uniform",
     max_fallback_hops=10,
+    extra_args=None,
+    collect_stats=False,
+    show_progress=True,
+    compute_qualities=False,
+    max_in_edges=0,
+    return_query_nodes=False,
 ):
     """Runs k-densest classification and returns perfectly aligned y_true and y_pred arrays."""
     train_mask = df_nodes["train"].values
@@ -60,30 +193,73 @@ def evaluate_nodes(
     train_labels = labels[train_mask]
     global_majority = Counter(train_labels).most_common(1)[0][0]
 
-    # Build the NetworkX graph once for distance weighting and BFS fallbacks
+    # Build the NetworkX graph once for distance weighting, BFS fallbacks, and qualities.
     df_edges = pd.read_csv(edge_csv)
     G = nx.from_pandas_edgelist(
         df_edges, source="source", target="target", create_using=nx.Graph()
     )
+    G_dir = nx.from_pandas_edgelist(
+        df_edges, source="source", target="target", create_using=nx.DiGraph()
+    )
+    out_neighbors = {node: set(G_dir.successors(node)) for node in G_dir.nodes()}
+    if max_in_edges == 0:
+        fallback_graph = G_dir
+    else:
+        fallback_graph = G
+    mincut_neighbors = {node: set(G.neighbors(node)) for node in G.nodes()}
 
     y_true = []
     y_pred = []
+    evaluated_query_nodes = []
+    pred_sizes = []
+    oracle_query_counts = []
+    quality_values = {
+        "dir_internal_avg_degree": [],
+        "dir_internal_edge_density": [],
+        "undir_external_expansion": [],
+        "undir_external_conductance": [],
+        "undir_internal_norm_min_cut": [],
+    }
+    min_cut_computed = 0
 
     # --- NEW: Initialize the starvation counter ---
     fallback_count = 0
     total_queries = len(query_nodes)
+    eval_label = f"k={k}" if k is not None else "no-k"
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(run_solver, q, k, edge_csv, bin_path, tmp_dir): q
+            executor.submit(
+                run_solver,
+                q,
+                k,
+                edge_csv,
+                bin_path,
+                tmp_dir,
+                extra_args,
+                max_in_edges,
+            ): q
             for q in query_nodes
         }
 
         # as_completed yields out of order, but y_true and y_pred stay pairwise matched
         for future in tqdm(
-            as_completed(futures), total=total_queries, desc=f"Evaluating k={k}"
+            as_completed(futures),
+            total=total_queries,
+            desc=f"Evaluating {eval_label}",
+            disable=not show_progress,
         ):
-            q_node, neighborhood = future.result()
+            q_node, neighborhood, oracle_queries = future.result()
+            pred_sizes.append(len(neighborhood))
+            oracle_query_counts.append(oracle_queries)
+
+            if compute_qualities:
+                qualities = compute_subgraph_quality(
+                    neighborhood, out_neighbors, mincut_neighbors
+                )
+                for key in quality_values:
+                    quality_values[key].append(qualities[key])
+                min_cut_computed += qualities["undir_internal_norm_min_cut_computed"]
 
             # Filter neighborhood to strictly contain Train nodes (EXCLUDING the query node itself)
             train_neighbors = [n for n in neighborhood if train_mask[n] and n != q_node]
@@ -97,7 +273,7 @@ def evaluate_nodes(
                 # ==========================================================
                 try:
                     paths = nx.single_source_shortest_path_length(
-                        G, q_node, cutoff=max_fallback_hops
+                        fallback_graph, q_node, cutoff=max_fallback_hops
                     )
                     reachable_train = {
                         n: d for n, d in paths.items() if train_mask[n] and n != q_node
@@ -142,11 +318,49 @@ def evaluate_nodes(
 
             y_true.append(labels[q_node])
             y_pred.append(pred_label)
+            evaluated_query_nodes.append(q_node)
 
     # --- NEW: Print the telemetry summary before returning ---
     fallback_rate = (fallback_count / total_queries) * 100 if total_queries > 0 else 0
     print(
-        f"\n[Diagnostic] k={k} | Fallback Triggered: {fallback_count}/{total_queries} times ({fallback_rate:.1f}%)"
+        f"\n[Diagnostic] {eval_label} | Fallback Triggered: {fallback_count}/{total_queries} times ({fallback_rate:.1f}%)"
     )
 
+    if collect_stats:
+        stats = {
+            "fallback_count": fallback_count,
+            "fallback_rate": fallback_rate,
+            "avg_pred_size": (sum(pred_sizes) / len(pred_sizes)) if pred_sizes else 0.0,
+            "avg_oracle_queries": _safe_mean(oracle_query_counts),
+            "query_count": total_queries,
+        }
+        if compute_qualities:
+            stats.update(
+                {
+                    "avg_dir_internal_avg_degree": _safe_mean(
+                        quality_values["dir_internal_avg_degree"]
+                    ),
+                    "avg_dir_internal_edge_density": _safe_mean(
+                        quality_values["dir_internal_edge_density"]
+                    ),
+                    "avg_undir_external_expansion": _safe_mean(
+                        quality_values["undir_external_expansion"]
+                    ),
+                    "avg_undir_external_conductance": _safe_mean(
+                        quality_values["undir_external_conductance"]
+                    ),
+                    "avg_undir_internal_norm_min_cut": _safe_mean(
+                        quality_values["undir_internal_norm_min_cut"]
+                    ),
+                    "undir_internal_norm_min_cut_coverage": (
+                        min_cut_computed / total_queries if total_queries > 0 else 0.0
+                    ),
+                }
+            )
+        if return_query_nodes:
+            return evaluated_query_nodes, y_true, y_pred, stats
+        return y_true, y_pred, stats
+
+    if return_query_nodes:
+        return evaluated_query_nodes, y_true, y_pred
     return y_true, y_pred

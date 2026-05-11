@@ -3,6 +3,7 @@ import pandas as pd
 import argparse
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from solver_utils import evaluate_nodes
+from tune_methods import limit_nodes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -14,6 +15,14 @@ if __name__ == "__main__":
     parser.add_argument("--k_max", type=int, default=25)
     parser.add_argument("--k_step", type=int, default=5)
     parser.add_argument("--workers", type=int, default=os.cpu_count())
+    parser.add_argument("--max_in_edges", type=int, default=0)
+    parser.add_argument(
+        "--limit_nodes",
+        type=int,
+        default=0,
+        help="Evaluate at most this many validation nodes. Use 0 for the full split.",
+    )
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--optimize",
         type=str,
@@ -32,11 +41,12 @@ if __name__ == "__main__":
 
     edge_csv = os.path.join("data", args.dataset, "edge.csv")
     node_csv = os.path.join("data", args.dataset, "nodes.csv")
-    tmp_dir = os.path.join("data", args.dataset, "tmp_outputs")
+    tmp_dir = os.path.join("exps", "classification", args.dataset, "tmp_outputs")
     os.makedirs(tmp_dir, exist_ok=True)
 
     df_nodes = pd.read_csv(node_csv)
     val_nodes = df_nodes[df_nodes["val"]]["node_id"].tolist()
+    val_nodes = limit_nodes(val_nodes, args.limit_nodes, args.seed)
 
     print(
         f"--- Sweeping k for {args.dataset} Validation Set ({len(val_nodes)} nodes) ---"
@@ -56,6 +66,7 @@ if __name__ == "__main__":
             tmp_dir,
             args.workers,
             weighting=args.weighting,
+            max_in_edges=args.max_in_edges,
         )
 
         # Calculate all metrics (using macro average for multiclass)
