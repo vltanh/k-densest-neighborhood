@@ -3,7 +3,10 @@ import os
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from unittest.mock import patch
+
+import pandas as pd
 
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "synthetic"))
@@ -19,10 +22,19 @@ from tune_methods import (
 
 
 try:
-    from solver_utils import compute_subgraph_quality, run_solver
+    from solver_utils import (
+        _bfs_with_forbidden,
+        argmax_label,
+        compute_subgraph_quality,
+        evaluate_nodes,
+        run_solver,
+    )
 except ModuleNotFoundError as exc:
     compute_subgraph_quality = None
     run_solver = None
+    evaluate_nodes = None
+    argmax_label = None
+    _bfs_with_forbidden = None
     SOLVER_UTILS_IMPORT_ERROR = exc
 else:
     SOLVER_UTILS_IMPORT_ERROR = None
@@ -238,6 +250,93 @@ class TuningConfigTests(unittest.TestCase):
 
         self.assertEqual(best["bp"]["f1"], 0.7)
         self.assertEqual(best["bfs"]["accuracy"], 0.6)
+
+
+@unittest.skipIf(
+    argmax_label is None,
+    f"solver utility dependencies unavailable: {SOLVER_UTILS_IMPORT_ERROR}",
+)
+class ArgmaxLabelTests(unittest.TestCase):
+    def test_argmax_label_breaks_ties_by_label_value(self):
+        self.assertEqual(argmax_label(Counter({2: 3, 1: 3, 3: 1})), 1)
+
+    def test_argmax_label_returns_none_for_empty_counter(self):
+        self.assertIsNone(argmax_label(Counter()))
+
+    def test_argmax_label_prefers_majority(self):
+        self.assertEqual(argmax_label(Counter({0: 1, 1: 5})), 1)
+
+
+@unittest.skipIf(
+    _bfs_with_forbidden is None,
+    f"solver utility dependencies unavailable: {SOLVER_UTILS_IMPORT_ERROR}",
+)
+class ForbiddenBfsTests(unittest.TestCase):
+    def _line_graph(self):
+        import networkx as nx
+
+        G = nx.DiGraph()
+        G.add_edges_from([(0, 1), (1, 2), (2, 3)])
+        return G
+
+    def test_forbidden_intermediate_blocks_reach(self):
+        G = self._line_graph()
+        distances = _bfs_with_forbidden(G, 0, cutoff=10, forbidden={2})
+        self.assertEqual(distances, {0: 0, 1: 1})
+
+    def test_no_forbidden_returns_all_reachable(self):
+        G = self._line_graph()
+        distances = _bfs_with_forbidden(G, 0, cutoff=10, forbidden=set())
+        self.assertEqual(distances, {0: 0, 1: 1, 2: 2, 3: 3})
+
+
+@unittest.skipIf(
+    evaluate_nodes is None,
+    f"solver utility dependencies unavailable: {SOLVER_UTILS_IMPORT_ERROR}",
+)
+class LeakageGuardTests(unittest.TestCase):
+    def _write_leak_dataset(self, tmpdir):
+        edges = [(0, 1), (1, 2)]
+        pd.DataFrame(edges, columns=["source", "target"]).to_csv(
+            os.path.join(tmpdir, "edge.csv"), index=False
+        )
+        df_nodes = pd.DataFrame(
+            {
+                "node_id": [0, 1, 2, 3, 4],
+                "label": [9, 0, 5, 7, 7],
+                "train": [False, False, True, True, True],
+                "val": [False, False, False, False, False],
+                "test": [True, True, False, False, False],
+            }
+        )
+        return df_nodes, os.path.join(tmpdir, "edge.csv")
+
+    def test_forbidden_test_node_blocks_label_leak(self):
+        with tempfile.TemporaryDirectory() as td:
+            df_nodes, edge_csv = self._write_leak_dataset(td)
+
+            def fake_run_solver(q, k, *args, **kwargs):
+                return q, [], math.nan
+
+            with patch("solver_utils.run_solver", side_effect=fake_run_solver):
+                _, _, y_pred_no = evaluate_nodes(
+                    [0], k=None, edge_csv=edge_csv, df_nodes=df_nodes,
+                    bin_path="solver", tmp_dir=td, max_workers=1,
+                    show_progress=False, return_query_nodes=True,
+                )
+                _, _, y_pred_fb = evaluate_nodes(
+                    [0], k=None, edge_csv=edge_csv, df_nodes=df_nodes,
+                    bin_path="solver", tmp_dir=td, max_workers=1,
+                    show_progress=False, return_query_nodes=True,
+                    forbidden_nodes={1, 2},
+                )
+
+        # Without forbidden, the fallback BFS hops through the test node 1 to
+        # reach the train node 2 and adopts label 5 (the leak).
+        self.assertEqual(y_pred_no[0], 5)
+        # With the forbidden set, BFS cannot use node 1 as a stepping stone, no
+        # train labels are reachable, and the global majority (7) is returned.
+        self.assertEqual(y_pred_fb[0], 7)
 
 
 if __name__ == "__main__":

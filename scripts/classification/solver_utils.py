@@ -1,8 +1,9 @@
 import math
 import os
 import sys
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterable, Optional, Set
 
 import networkx as nx
 import pandas as pd
@@ -14,6 +15,48 @@ from _solver_runner import (  # noqa: E402
     count_internal_directed_edges,
     invoke_solver,
 )
+
+
+def argmax_label(counter: Counter):
+    """Deterministic argmax over label counts. Ties broken by ascending label."""
+    if not counter:
+        return None
+    best = None
+    for label, count in counter.items():
+        key = (-count, label)
+        if best is None or key < best[0]:
+            best = (key, label)
+    return best[1]
+
+
+def _bfs_with_forbidden(
+    graph,
+    source,
+    cutoff: int,
+    forbidden: Optional[Set[int]],
+):
+    """BFS that never visits forbidden nodes (neither destinations nor stepping stones)."""
+    if forbidden is None:
+        forbidden = set()
+    if source in forbidden:
+        return {}
+    distances = {source: 0}
+    queue = deque([source])
+    while queue:
+        node = queue.popleft()
+        depth = distances[node]
+        if depth >= cutoff:
+            continue
+        try:
+            neighbours = graph.neighbors(node)
+        except nx.NetworkXError:
+            continue
+        for nb in neighbours:
+            if nb in distances or nb in forbidden:
+                continue
+            distances[nb] = depth + 1
+            queue.append(nb)
+    return distances
 
 
 def run_solver(
@@ -159,14 +202,16 @@ def evaluate_nodes(
     compute_qualities=False,
     max_in_edges=0,
     return_query_nodes=False,
+    forbidden_nodes: Optional[Iterable[int]] = None,
 ):
     """Runs k-densest classification and returns perfectly aligned y_true and y_pred arrays."""
     train_mask = df_nodes["train"].values
     labels = df_nodes["label"].values
 
-    # Global fallback: Most frequent class in the entire training set
+    forbidden_set: Set[int] = set(int(n) for n in (forbidden_nodes or ()))
+
     train_labels = labels[train_mask]
-    global_majority = Counter(train_labels).most_common(1)[0][0]
+    global_majority = argmax_label(Counter(train_labels))
 
     # Build the NetworkX graph once for distance weighting, BFS fallbacks, and qualities.
     df_edges = pd.read_csv(edge_csv)
@@ -233,32 +278,37 @@ def evaluate_nodes(
                 for key in quality_values:
                     quality_values[key].append(qualities[key])
 
-            # Filter neighborhood to strictly contain Train nodes (EXCLUDING the query node itself)
-            train_neighbors = [n for n in neighborhood if train_mask[n] and n != q_node]
+            # Filter neighborhood to strictly contain Train nodes (excluding query and forbidden nodes)
+            train_neighbors = [
+                n
+                for n in neighborhood
+                if train_mask[n] and n != q_node and n not in forbidden_set
+            ]
 
             if not train_neighbors:
                 # Concentric-BFS fallback: solver returned no training-labelled
                 # neighbours, so vote with the nearest labelled ring instead.
                 fallback_count += 1
                 try:
-                    paths = nx.single_source_shortest_path_length(
-                        fallback_graph, q_node, cutoff=max_fallback_hops
+                    paths = _bfs_with_forbidden(
+                        fallback_graph,
+                        q_node,
+                        max_fallback_hops,
+                        forbidden_set,
                     )
                     reachable_train = {
                         n: d for n, d in paths.items() if train_mask[n] and n != q_node
                     }
 
                     if reachable_train:
-                        # Find the radius of the closest labeled ring
                         min_dist = min(reachable_train.values())
                         nearest_train_nodes = [
                             n for n, d in reachable_train.items() if d == min_dist
                         ]
-
-                        fallback_labels = [labels[n] for n in nearest_train_nodes]
-                        pred_label = Counter(fallback_labels).most_common(1)[0][0]
+                        pred_label = argmax_label(
+                            Counter(labels[n] for n in nearest_train_nodes)
+                        )
                     else:
-                        # Disconnected component or no labels within cutoff
                         pred_label = global_majority
                 except Exception:
                     pred_label = global_majority
@@ -269,18 +319,16 @@ def evaluate_nodes(
                     for n in train_neighbors:
                         try:
                             d = nx.shortest_path_length(G, source=q_node, target=n)
-                            # d is guaranteed >= 1 because we excluded q_node
                             w = 1.0 / d
                         except nx.NetworkXNoPath:
                             w = 0.0
 
                         class_scores[labels[n]] += w
 
-                    pred_label = class_scores.most_common(1)[0][0]
+                    pred_label = argmax_label(class_scores)
 
                 else:  # Uniform weighting
-                    neighbor_labels = [labels[n] for n in train_neighbors]
-                    pred_label = Counter(neighbor_labels).most_common(1)[0][0]
+                    pred_label = argmax_label(Counter(labels[n] for n in train_neighbors))
 
             y_true.append(labels[q_node])
             y_pred.append(pred_label)
