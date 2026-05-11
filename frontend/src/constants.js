@@ -19,7 +19,53 @@ export const ORACLE_MODES = [
   { value: ORACLE_SIM, label: 'Simulation' },
 ];
 
-export const SIM_DATASETS = ['Cora', 'PubMed', 'DBLP'];
+export const SIM_DATASETS = ['Cora', 'PubMed', 'DBLP', 'CiteSeer', 'Cora_ML'];
+
+// ── Solver variants ───────────────────────────────────────────────────────────
+// One row per algorithm the C++ binary supports. `uses` lists the per-variant
+// parameter chips the Sidebar should show; everything else is BP-internal and
+// hidden for non-BP variants to avoid implying the knob does anything.
+export const VARIANT_BP            = 'bp';
+export const VARIANT_AVGDEG        = 'avgdeg';
+export const VARIANT_BFS           = 'bfs';
+export const VARIANT_CONN_GREEDY   = 'conn_greedy';
+export const VARIANT_CONN_AVGDEG   = 'conn_avgdeg';
+
+export const SOLVER_VARIANTS = [
+  {
+    value: VARIANT_BP,
+    label: 'Branch & Price',
+    blurb: 'Exact k-densest with column generation + Dinkelbach.',
+    uses: { k: true, kappa: true, bpInternals: true, timeBudget: true },
+  },
+  {
+    value: VARIANT_AVGDEG,
+    label: 'Avg-Degree (Goldberg)',
+    blurb: 'Exact query-anchored maximum average degree. No size target.',
+    uses: { timeBudget: false },
+  },
+  {
+    value: VARIANT_BFS,
+    label: 'BFS Expansion',
+    blurb: 'Pure breadth-first frontier around the seed. Fast, no quality guarantee.',
+    uses: { bfsDepth: true },
+  },
+  {
+    value: VARIANT_CONN_GREEDY,
+    label: 'Connected Greedy',
+    blurb: 'Greedy size-k that maintains connectivity to the seed.',
+    uses: { k: true, baselineDepth: true },
+  },
+  {
+    value: VARIANT_CONN_AVGDEG,
+    label: 'Exact Connected Avg-Degree',
+    blurb: 'Densest connected subgraph anchored at the seed. ILP-based.',
+    uses: { baselineDepth: true },
+  },
+];
+
+export const variantSpec = (value) =>
+  SOLVER_VARIANTS.find((v) => v.value === value) || SOLVER_VARIANTS[0];
 
 // Curated palette for the common small-class case (<= 10).
 export const CLASS_PALETTE = [

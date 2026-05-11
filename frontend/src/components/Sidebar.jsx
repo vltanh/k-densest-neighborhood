@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Square, Play, ChevronDown } from 'lucide-react';
 import { DispatchView, LogView, StatusBadge } from './TelemetryPanel';
-import { ORACLE_MODES, ORACLE_SIM, SIM_DATASETS } from '../constants';
+import {
+  ORACLE_MODES,
+  ORACLE_SIM,
+  SIM_DATASETS,
+  SOLVER_VARIANTS,
+  VARIANT_BP,
+  variantSpec,
+} from '../constants';
 
 function Tab({ label, active, onClick, badge = null }) {
   return (
@@ -56,9 +63,19 @@ function OracleDropdown({ value, onChange, disabled }) {
 
 export default function Sidebar({ width, fluid = false, hideFeed = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
   const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
+  const setBool = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.checked }));
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [feedTab, setFeedTab] = useState('dispatch');
   const isSim = oracleMode === ORACLE_SIM;
+
+  const variant = params.variant || VARIANT_BP;
+  const spec = variantSpec(variant);
+  const usesK             = !!spec.uses?.k;
+  const usesKappa         = !!spec.uses?.kappa;
+  const usesBfsDepth      = !!spec.uses?.bfsDepth;
+  const usesBaselineDepth = !!spec.uses?.baselineDepth;
+  const usesBpInternals   = !!spec.uses?.bpInternals;
+  const usesTimeBudget    = spec.uses?.timeBudget !== false;
 
   return (
     <div
@@ -167,9 +184,51 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 </div>
               )}
               <div>
-                <label className="field-label">Min Community Size · k</label>
-                <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
+                <label className="field-label">Solver</label>
+                <div className="relative">
+                  <select
+                    value={variant}
+                    disabled={loading}
+                    onChange={(e) => setParams(prev => ({ ...prev, variant: e.target.value }))}
+                    className="field-input appearance-none pr-8"
+                  >
+                    {SOLVER_VARIANTS.map(v => (
+                      <option key={v.value} value={v.value} className="bg-[var(--night)] text-[var(--on-night)]">
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--on-night-faint)]" />
+                </div>
+                {spec.blurb && (
+                  <div className="mt-1.5 text-[11px] leading-snug text-[var(--on-night-faint)] italic">
+                    {spec.blurb}
+                  </div>
+                )}
               </div>
+
+              {usesK && (
+                <div>
+                  <label className="field-label">Min Community Size · k</label>
+                  <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
+                </div>
+              )}
+
+              {usesBfsDepth && (
+                <div>
+                  <label className="field-label">BFS Depth</label>
+                  <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
+                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">hops out from the seed</div>
+                </div>
+              )}
+
+              {usesBaselineDepth && (
+                <div>
+                  <label className="field-label">Frontier Depth</label>
+                  <input type="number" min="-1" step="1" value={params.baselineDepth} onChange={set('baselineDepth')} className="field-input" />
+                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">BFS radius for candidate pool · -1 unbounded</div>
+                </div>
+              )}
             </div>
           )}
 
@@ -189,51 +248,82 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
           {advancedOpen && (
             <div className={`pt-4 ${hideFeed ? '' : 'max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2'} fade-in`}>
               <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+
+              {/* Oracle limits — apply to every variant */}
+              <div className="grid grid-cols-2 gap-x-5 gap-y-5 items-end">
                 <div>
                   <label className="field-label">Max In-Edges</label>
                   <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
+                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
                 </div>
-                <div>
-                  <label className="field-label">Dinkelbach Iter</label>
-                  <input type="number" min="1" max="200" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
-                </div>
+                <label className="flex items-center gap-2.5 pb-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!!params.computeQualities}
+                    onChange={setBool('computeQualities')}
+                    className="accent-[var(--gold)] w-3.5 h-3.5"
+                  />
+                  <span className="field-label !mb-0">Compute Final Qualities</span>
+                </label>
               </div>
 
-              <div className="grid grid-cols-3 gap-x-5 gap-y-5">
-                <div>
-                  <label className="field-label">Time Limit (s)</label>
-                  <input type="number" min="0" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
+              {usesKappa && (
+                <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                  <div>
+                    <label className="field-label">κ · Edge-Connectivity</label>
+                    <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
+                    <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
+                  </div>
                 </div>
-                <div>
-                  <label className="field-label">Node Limit</label>
-                  <input type="number" min="1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
-                </div>
-                <div>
-                  <label className="field-label">Gap Tol</label>
-                  <input type="number" min="0" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
-                </div>
-              </div>
+              )}
 
-              <div className="grid grid-cols-3 gap-x-5 gap-y-5">
-                <div>
-                  <label className="field-label">CG Batch Frac</label>
-                  <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
-                </div>
-                <div>
-                  <label className="field-label">Min Batch</label>
-                  <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
-                </div>
-                <div>
-                  <label className="field-label">Max Batch</label>
-                  <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
-                </div>
-              </div>
+              {usesBpInternals && (
+                <>
+                  <div className="pt-1 eyebrow text-[var(--on-night-faint)]">B&P Tuning</div>
+                  {usesTimeBudget && (
+                    <div className="grid grid-cols-3 gap-x-5 gap-y-5">
+                      <div>
+                        <label className="field-label">Time Limit (s)</label>
+                        <input type="number" min="0" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
+                      </div>
+                      <div>
+                        <label className="field-label">Node Limit</label>
+                        <input type="number" min="1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
+                      </div>
+                      <div>
+                        <label className="field-label">Gap Tol</label>
+                        <input type="number" min="0" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
+                      </div>
+                    </div>
+                  )}
 
-              <div>
-                <label className="field-label">Num Tol</label>
-                <input type="number" min="0" step="0.000001" value={params.tol} onChange={set('tol')} className="field-input" />
-              </div>
+                  <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                    <div>
+                      <label className="field-label">Dinkelbach Iter</label>
+                      <input type="number" min="1" max="200" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
+                    </div>
+                    <div>
+                      <label className="field-label">Num Tol</label>
+                      <input type="number" min="0" step="0.000001" value={params.tol} onChange={set('tol')} className="field-input" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-x-5 gap-y-5">
+                    <div>
+                      <label className="field-label">CG Batch Frac</label>
+                      <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
+                    </div>
+                    <div>
+                      <label className="field-label">Min Batch</label>
+                      <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
+                    </div>
+                    <div>
+                      <label className="field-label">Max Batch</label>
+                      <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
+                    </div>
+                  </div>
+                </>
+              )}
               </div>
             </div>
           )}
@@ -292,8 +382,10 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
             </>
           )}
         </div>
-        <div className="mt-4 eyebrow text-[var(--on-night-faint)]">
-          Session · Active · {isSim ? `${params.dataset}` : 'OpenAlex'}
+        <div className="mt-4 eyebrow text-[var(--on-night-faint)] flex items-center gap-2 flex-wrap">
+          <span>{isSim ? params.dataset : 'OpenAlex'}</span>
+          <span className="rule-dot" />
+          <span className="text-[var(--gold)]">{spec.label}</span>
         </div>
       </footer>
       )}

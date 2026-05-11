@@ -46,41 +46,31 @@ export function useSubgraphExtractor(sessionId) {
     const pi = (v, def) => { const n = parseInt(v);   return isNaN(n) ? def : n; };
     const pf = (v, def) => { const n = parseFloat(v); return isNaN(n) ? def : n; };
 
-    let endpoint;
-    let body;
+    const sharedSolver = {
+      variant:            params.variant || 'bp',
+      k:                  pi(params.k,               5),
+      kappa:              pi(params.kappa,           0),
+      baseline_depth:     pi(params.baselineDepth,  -1),
+      bfs_depth:          pi(params.bfsDepth,        1),
+      compute_qualities:  !!params.computeQualities,
+      time_limit:         pf(params.timeLimit,       60.0),
+      node_limit:         pi(params.nodeLimit,       100000),
+      max_in_edges:       pi(params.maxInEdges,      0),
+      gap_tol:            pf(params.gapTol,          0.0001),
+      dinkelbach_iter:    pi(params.dinkelbachIter,  50),
+      cg_batch_frac:      pf(params.cgBatchFrac,     1.0),
+      cg_min_batch:       pi(params.cgMinBatch,      50),
+      cg_max_batch:       pi(params.cgMaxBatch,      50),
+      tol:                pf(params.tol,             0.000001),
+    };
+
+    let endpoint, body;
     if (mode === ORACLE_SIM) {
       endpoint = '/api/extract-sim';
-      body = {
-        session_id: sessionId,
-        dataset: params.dataset,
-        query_node:      pi(params.queryNode,     0),
-        k:               pi(params.k,             5),
-        time_limit:      pf(params.timeLimit,     60.0),
-        node_limit:      pi(params.nodeLimit,     100000),
-        max_in_edges:    pi(params.maxInEdges,    0),
-        gap_tol:         pf(params.gapTol,        0.0001),
-        dinkelbach_iter: pi(params.dinkelbachIter, 50),
-        cg_batch_frac:   pf(params.cgBatchFrac,   1.0),
-        cg_min_batch:    pi(params.cgMinBatch,    50),
-        cg_max_batch:    pi(params.cgMaxBatch,    50),
-        tol:             pf(params.tol,           0.000001),
-      };
+      body = { session_id: sessionId, dataset: params.dataset, query_node: pi(params.queryNode, 0), ...sharedSolver };
     } else {
       endpoint = '/api/extract';
-      body = {
-        session_id: sessionId,
-        query_node: params.queryNode,
-        k:               pi(params.k,              5),
-        time_limit:      pf(params.timeLimit,      60.0),
-        node_limit:      pi(params.nodeLimit,      100000),
-        max_in_edges:    pi(params.maxInEdges,     0),
-        gap_tol:         pf(params.gapTol,         0.0001),
-        dinkelbach_iter: pi(params.dinkelbachIter, 50),
-        cg_batch_frac:   pf(params.cgBatchFrac,    1.0),
-        cg_min_batch:    pi(params.cgMinBatch,     50),
-        cg_max_batch:    pi(params.cgMaxBatch,     50),
-        tol:             pf(params.tol,            0.000001),
-      };
+      body = { session_id: sessionId, query_node: params.queryNode, ...sharedSolver };
     }
 
     try {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Menu, Play, Square, Network, SlidersHorizontal, Activity, ChevronDown, ChevronUp } from 'lucide-react';
-import { API_BASE_URL, ORACLE_OPENALEX, ORACLE_SIM, SIM_DATASETS } from './constants';
+import { API_BASE_URL, ORACLE_OPENALEX, ORACLE_SIM, SIM_DATASETS, VARIANT_BP } from './constants';
 import { useDragResize } from './hooks/useDragResize';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useSubgraphExtractor } from './hooks/useSubgraphExtractor';
@@ -10,9 +10,13 @@ import PaperLedger from './components/PaperLedger';
 import PaperModal from './components/PaperModal';
 import { DispatchView, LogView } from './components/TelemetryPanel';
 
-const DEFAULT_OPENALEX_PARAMS = {
-  queryNode: 'W2741809807',
+const SHARED_DEFAULTS = {
+  variant: VARIANT_BP,
   k: 5,
+  kappa: 0,
+  baselineDepth: -1,
+  bfsDepth: 1,
+  computeQualities: false,
   timeLimit: 60.0,
   nodeLimit: 100000,
   maxInEdges: 0,
@@ -24,19 +28,15 @@ const DEFAULT_OPENALEX_PARAMS = {
   tol: 0.000001,
 };
 
+const DEFAULT_OPENALEX_PARAMS = {
+  ...SHARED_DEFAULTS,
+  queryNode: 'W2741809807',
+};
+
 const DEFAULT_SIM_PARAMS = {
+  ...SHARED_DEFAULTS,
   dataset: SIM_DATASETS[0],
   queryNode: '0',
-  k: 5,
-  timeLimit: 60.0,
-  nodeLimit: 100000,
-  maxInEdges: 0,
-  gapTol: 0.0001,
-  dinkelbachIter: 50,
-  cgBatchFrac: 1.0,
-  cgMinBatch: 50,
-  cgMaxBatch: 50,
-  tol: 0.000001,
 };
 
 export default function App() {
