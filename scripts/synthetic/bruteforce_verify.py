@@ -686,13 +686,6 @@ def _do_solver_runs(args):
         raise FileNotFoundError(f"run bf_optima first; missing {optima_csv}")
     optima_df = pd.read_csv(optima_csv)
 
-    cells: List[Tuple] = []
-    for m in metas:
-        cells.append((m, "avgdeg", None, None, args))
-        for k in k_set:
-            for kappa in kappa_set:
-                cells.append((m, "bp", k, kappa, args))
-
     out_root = Path(args.exps_dir) / "synthetic" / "bf"
     out_root.mkdir(parents=True, exist_ok=True)
     out_csv = out_root / "solver_runs.csv"
@@ -703,7 +696,74 @@ def _do_solver_runs(args):
         if len(first):
             optima_code_hash = str(first.iloc[0])
 
-    rows: List[dict] = []
+    # Index optima per (n, p, seed, k, kappa) so feasibility lookups are O(1).
+    bp_opt_index: Dict[Tuple[int, float, int, int, int], dict] = {}
+    if "optimum_kind" in optima_df.columns:
+        kappa_df = optima_df[optima_df["optimum_kind"] == "edge_density_kappa"]
+        for row in kappa_df.itertuples(index=False):
+            key = (int(row.n), float(row.p), int(row.seed), int(row.k), int(row.kappa))
+            bp_opt_index[key] = {
+                "opt_value": float(row.opt_value),
+                "opt_size": (int(row.opt_size) if pd.notna(row.opt_size) else None),
+            }
+
+    cells: List[Tuple] = []
+    skipped_rows: List[dict] = []
+    for m in metas:
+        cells.append((m, "avgdeg", None, None, args))
+        with open(m) as f:
+            mj = json.load(f)
+        graph_key = (int(mj["n"]), float(mj["p"]), int(mj["seed"]))
+        for k in k_set:
+            for kappa in kappa_set:
+                key = graph_key + (int(k), int(kappa))
+                bf_opt = bp_opt_index.get(key)
+                # Sentinel score < 0 means no subset containing q with |S| >= k
+                # has edge-connectivity >= kappa. Running the solver here only
+                # exhausts B&B trying to prove infeasibility, so the cell is
+                # recorded as skipped instead of dispatched.
+                if bf_opt is not None and bf_opt["opt_value"] < 0:
+                    skipped_rows.append(
+                        {
+                            "n": mj["n"],
+                            "p": mj["p"],
+                            "seed": mj["seed"],
+                            "method": "bp",
+                            "k": k,
+                            "kappa": kappa,
+                            "opt_value_brute": bf_opt["opt_value"],
+                            "opt_value_solver": float("nan"),
+                            "opt_match": False,
+                            "opt_match_within_tol": False,
+                            "opt_match_size_only": False,
+                            "opt_value_brute_secondary": float("nan"),
+                            "opt_size_brute_secondary": None,
+                            "opt_match_secondary": False,
+                            "opt_match_within_tol_secondary": False,
+                            "brute_actual_kappa": None,
+                            "brute_actual_kappa_secondary": None,
+                            "solver_actual_kappa": None,
+                            "kappa_verified": None,
+                            "kappa_verify_failed": None,
+                            "solver_size": 0,
+                            "brute_size": bf_opt["opt_size"],
+                            "wall_time_s": 0.0,
+                            "total_bb_nodes": None,
+                            "returncode": None,
+                            "solver_build_id": None,
+                            "optima_code_hash": optima_code_hash,
+                            "status": "skipped_bf_infeasible",
+                        }
+                    )
+                    continue
+                cells.append((m, "bp", k, kappa, args))
+
+    print(
+        f"solver_runs: {len(cells)} cells to run, {len(skipped_rows)} cells skipped (BF infeasible)",
+        flush=True,
+    )
+
+    rows: List[dict] = list(skipped_rows)
     tol = float(args.match_tol)
     # Cache (n, p, seed) -> adj_out bitmask so post-checks don't reread edge.csv per cell.
     adj_cache: Dict[Tuple[int, float, int], List[int]] = {}
@@ -811,6 +871,7 @@ def _do_solver_runs(args):
                     "returncode": result["returncode"],
                     "solver_build_id": solver_build_id,
                     "optima_code_hash": optima_code_hash,
+                    "status": "ran",
                 }
             )
             if i % 50 == 0 or i == len(cells):

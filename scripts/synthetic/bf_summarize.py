@@ -22,8 +22,11 @@ import pandas as pd
 def _row_status(row) -> str:
     """Per-row feasibility status. 'feasible' means the row is eligible to be
     counted in the match-rate denominator."""
+    status = row.get("status")
+    if isinstance(status, str) and status.startswith("skipped"):
+        return status
     rc = row.get("returncode")
-    if rc is not None and rc != 0:
+    if pd.notna(rc) and int(rc) != 0:
         return "solver_error"
     method = row["method"]
     k = row.get("k")
@@ -55,6 +58,7 @@ def _summarise(df: pd.DataFrame) -> pd.DataFrame:
         n_solver_error = int((chunk["_status"] == "solver_error").sum())
         n_infeasible_size = int((chunk["_status"] == "infeasible_size").sum())
         n_infeasible_kappa = int((chunk["_status"] == "infeasible_kappa").sum())
+        n_skipped_bf_infeasible = int((chunk["_status"] == "skipped_bf_infeasible").sum())
 
         n_match_primary = int(feasible_chunk["opt_match_within_tol"].sum()) if n_feasible else 0
         match_rate_primary = n_match_primary / n_feasible if n_feasible else 0.0
@@ -77,6 +81,7 @@ def _summarise(df: pd.DataFrame) -> pd.DataFrame:
                 "n_solver_error": n_solver_error,
                 "n_infeasible_size": n_infeasible_size,
                 "n_infeasible_kappa": n_infeasible_kappa,
+                "n_skipped_bf_infeasible": n_skipped_bf_infeasible,
                 "median_wall_time_s": float(feasible_chunk["wall_time_s"].median())
                 if n_feasible
                 else float("nan"),
