@@ -31,7 +31,7 @@ An interactive browser-based explorer powered by the C++ solver and the OpenAlex
 
 ### Features
 
-- Configure the query paper (OpenAlex ID), target community size *k*, and all advanced solver parameters from the sidebar.
+- Configure the query paper (OpenAlex ID), target community size *k*, and the branch-and-price tuning parameters exposed by the backend.
 - Live telemetry panel streams solver log output in real time so you can monitor convergence as it happens.
 - Interactive D3 force-directed graph showing **core** nodes (numbered circles) and **frontier** ghost nodes (their immediate citation neighbourhood).
 - Paper ledger table listing each core paper's title, authors, venue, year, and citation count.
@@ -90,10 +90,14 @@ npm run build   # output in frontend/dist/
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/extract` | Run the solver; request body includes `session_id`, `query_node`, `k`, `max_in_edges`, and all solver tuning fields; streams NDJSON `log`/`result`/`error` packets |
+| `POST` | `/api/extract-sim` | Run the same branch-and-price path against a prepared local CitationFull dataset |
 | `POST` | `/api/stop?session_id=<id>` | Terminate the solver process for the given session |
+| `GET` | `/api/datasets` | List prepared local datasets available to the simulation UI |
 | `GET` | `/api/bibtex?doi=<doi>` | Fetch BibTeX for a paper via its DOI |
 
 The `VITE_API_URL` environment variable overrides the default backend address (`http://127.0.0.1:8000`) for the frontend build.
+
+The browser UI currently runs the default branch-and-price solver path. The C++ CLI also exposes BFS and average-degree baselines for experiments.
 
 ---
 
@@ -133,7 +137,7 @@ is positive, where deg_frac(f) is f's fractional degree into the current LP solu
 
 up to 20 cuts per round, tightening the LP bound before branching.
 
-**Dynamic graph expansion** — nodes are fetched on demand from a pluggable oracle (local CSV or live OpenAlex API). Predecessor and successor lists are retrieved lazily as the active set grows, so the solver works on implicit graphs without loading the entire edge list into memory.
+**Dynamic graph expansion** — nodes are fetched on demand from a pluggable oracle (local CSV or live OpenAlex API). Successor lists and up to `--max-in-edges` predecessors are retrieved lazily as the active set grows, so the solver works on implicit graphs without loading the entire edge list into memory. With the default `--max-in-edges 0`, incoming expansion is disabled.
 
 ### Dependencies
 
@@ -175,16 +179,23 @@ Required arguments:
 Optional arguments:
 
 - `--output <out.csv>`: Save resulting community node IDs to this file (`node_id` column).
-- `--time-limit <float>`: Algorithmic time budget in seconds, excluding network I/O (default: `600.0`). The clock resets each time a new incumbent is found, so this controls *time without improvement* rather than total B&B time.
+- `--time-limit <float>`: Algorithmic time budget in seconds, excluding network I/O (default: `60.0`). The clock resets each time a new incumbent is found, so this controls *time without improvement* rather than total B&B time. Use `-1` to disable it.
 - `--node-limit <int>`: Max B&B nodes to explore per Dinkelbach iteration (default: `100000`).
 - `--max-in-edges <int>`: Max incoming edges to fetch per node (default: `0`). Applies to both `sim` and `openalex` modes.
 - `--gap-tol <float>`: Early-stopping relative gap tolerance for B&B (default: `1e-4`).
 - `--dinkelbach-iter <int>`: Max Dinkelbach iterations (default: `50`).
-- `--cg-batch-frac <float>`: Fraction of the active-set size to add per pricing round (default: `0.1`).
-- `--cg-min-batch <int>`: Minimum columns added per pricing round (default: `5`).
+- `--cg-batch-frac <float>`: Fraction of the active-set size to add per pricing round (default: `1.0`).
+- `--cg-min-batch <int>`: Minimum columns added per pricing round (default: `50`).
 - `--cg-max-batch <int>`: Maximum columns added per pricing round (default: `50`).
 - `--tol <float>`: Numerical tolerance for zero-checks (default: `1e-6`).
 - `--help`, `-h`: Print the help menu and exit.
+
+Solver variant flags:
+- `--bp`: Branch-and-price; uses `--k` and `--kappa`.
+- `--avgdeg`: Exact query-anchored average-degree baseline; does not accept `--k` or `--baseline-depth` from the CLI.
+- `--bfs`: BFS neighborhood baseline; uses `--bfs-depth`.
+- `--conn-greedy`: Connected greedy baseline; uses `--k` and `--baseline-depth`.
+- `--conn-avgdeg`: Exact connected average-degree baseline; uses `--baseline-depth`.
 
 ---
 
@@ -220,6 +231,33 @@ python scripts/synthetic/evaluate_solver.py --gt <gt_comm.csv> --pred <pred_comm
 
 Reports precision, recall, F1, and Jaccard similarity.
 
+### Benchmark Solver Variants
+
+Runs the proposed branch-and-price solver and the baselines on the same planted-community query set, then reports per-run metrics and method-level summaries.
+
+```bash
+python scripts/synthetic/benchmark_solvers.py \
+  --dataset_dir <data/dataset_name> \
+  --k <community_size> \
+  --output_csv <results.csv>
+```
+
+- `--dataset_dir`: Path to a synthetic dataset directory containing `edge.csv` and `gt_comm.csv`.
+- `--k`: Target community size used for every run.
+- `--methods`: Solver variants to include. Defaults to `bp bp_kappa avgdeg bfs`.
+- `--baseline_depth`: BFS depth for `conn_greedy` and `conn_avgdeg`; defaults to `-1` for the full reachable graph.
+- `--bfs_depth`: BFS depth for the BFS baseline; defaults to `1`.
+- `--time_limit`: Per-run solver time limit for the branch-and-price solver.
+- `--node_limit`: Per-run branch-and-bound node limit for the branch-and-price solver.
+- `--query_limit`: Optional cap on the number of query nodes taken from `gt_comm.csv`.
+- `--output_csv`: Optional path to persist the per-run table.
+
+Method meanings:
+- `bp`: proposed branch-and-price solver.
+- `bp_kappa`: proposed solver with kappa-connectivity checks.
+- `avgdeg`: exact query-anchored average-degree baseline over the full local reachable graph exposed by the oracle.
+- `bfs`: BFS baseline with configurable hop depth.
+
 ---
 
 ## Node Classification (CitationFull Datasets)
@@ -244,7 +282,33 @@ Output files written to `data/<dataset>/`:
 
 ### 2. Tune Hyperparameters
 
-Sweeps `k` over the validation split to find the best community size.
+For the current solver variants, use `tune_methods.py`. It evaluates branch-and-price, BFS, and exact average-degree configurations, resumes from partial CSVs, and writes both per-run metrics and selected best settings under `exps/classification/<dataset>/tmp_tune/`.
+
+```bash
+python scripts/classification/tune_methods.py \
+  --dataset <dataset_name> \
+  --family all \
+  --k_values 3,4,5 \
+  --kappa_values 0,1,2 \
+  --bfs_depth_min 1 \
+  --bfs_depth_max 3 \
+  --bp_time_limit_values 60,-1 \
+  --optimize f1 \
+  --weighting distance
+```
+
+- `--family`: Solver family to tune (`all`, `bp`, `avgdeg`, `bfs`; default: `all`).
+- `--k_values`: Comma-separated branch-and-price k values; overrides `--k_min`/`--k_max`.
+- `--kappa_values`: Comma-separated kappa-connectivity settings.
+- `--bp_time_limit_values`: Comma-separated BP time limits; use `-1` to disable the per-call limit.
+- `--config_workers`: Number of configurations evaluated in parallel.
+- `--workers`: Number of query nodes evaluated in parallel per configuration.
+- `--limit_nodes`: Deterministic validation subset size for smoke runs; use `0` for the full split.
+- `--seed`: Seed used by `--limit_nodes`.
+- `--max_in_edges`: Maximum incoming edges to expose per queried node. The default `0` disables incoming expansion; the reported Cora runs used this default.
+- `--force`: Ignore an existing partial CSV and recompute all configurations.
+
+The legacy `tune.py` still sweeps only `k` for the default branch-and-price path:
 
 ```bash
 python scripts/classification/tune.py --dataset <dataset_name> --k_min <min_k> --k_max <max_k> --k_step <step_k> --optimize <metric> --weighting <weight_strategy>
@@ -258,6 +322,7 @@ python scripts/classification/tune.py --dataset <dataset_name> --k_min <min_k> -
 - `--weighting`: Voting weight strategy (`uniform` or `distance`; default: `uniform`).
 - `--bin_path`: Path to the compiled solver binary (default: `./solver/bin/solver`).
 - `--workers`: Number of parallel workers (default: number of CPU cores).
+- `--limit_nodes`: Deterministic validation subset size for smoke runs; use `0` for the full split.
 
 ### 3. Final Evaluation
 
@@ -273,10 +338,32 @@ python scripts/classification/evaluate.py --dataset <dataset_name> --split <spli
 - `--weighting`: Voting weight strategy (`uniform` or `distance`; default: `uniform`).
 - `--bin_path`: Path to the compiled solver binary (default: `./solver/bin/solver`).
 - `--workers`: Number of parallel workers (default: number of CPU cores).
+- `--limit_nodes`: Deterministic split subset size for smoke runs; use `0` for the full split.
+- `--max_in_edges`: Maximum incoming edges to expose per queried node. Keep this at `0` to reproduce the reported outgoing-citation-only Cora experiments.
 
-Reports accuracy, macro precision, recall, F1, and a per-class classification report. When the solver returns a neighborhood with no training nodes (label starvation), a concentric BFS fallback is triggered automatically; the fallback rate is printed at the end of each run.
+Reports accuracy, macro precision, recall, F1, and a per-class classification report. When the solver returns a neighborhood with no training nodes (label starvation), a concentric BFS fallback is triggered automatically; the fallback rate is printed at the end of each run. In the reported Cora fixed-method runs the fallback rate is `0%`, so fallback is a dead path rather than part of the observed method behavior.
 
-### 4. Baseline: Concentric BFS
+For the fixed Cora comparisons used in the paper draft, run:
+
+```bash
+python scripts/classification/evaluate_fixed_methods.py --dataset Cora --split test
+python scripts/classification/evaluate_fixed_methods.py --dataset Cora --split test --subset bfs_depth1_wrong
+```
+
+The full split writes to `exps/classification/Cora/test_fixed/`, while the BFS-hard subset writes to `exps/classification/Cora/test_fixed_bfs_depth1_wrong/`.
+
+### 4. Classification Tests
+
+Run syntax checks and the focused unit tests:
+
+```bash
+conda run -n dcs python -m py_compile scripts/classification/*.py scripts/synthetic/*.py
+conda run -n dcs python -m unittest scripts.classification.test_solver_utils -v
+```
+
+The tuning helper tests use only the standard library plus pandas/scikit-learn already required by the classification scripts. Solver quality tests are skipped automatically when optional graph-analysis dependencies are unavailable.
+
+### 5. Baseline: Concentric BFS
 
 Classifies each node by majority voting over the nearest training-set ring reachable via BFS on the undirected graph.
 
