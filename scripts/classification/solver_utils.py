@@ -1,9 +1,13 @@
+import hashlib
+import json
 import math
 import os
 import sys
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable, Optional, Set
+from dataclasses import dataclass, field
+from threading import Lock
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import networkx as nx
 import pandas as pd
@@ -15,6 +19,72 @@ from _solver_runner import (  # noqa: E402
     count_internal_directed_edges,
     invoke_solver,
 )
+
+
+@dataclass
+class GraphContext:
+    """Per-dataset graph caches shared across (method, params, seed) cells."""
+
+    G: Any
+    G_dir: Any
+    out_neighbors: Dict[int, Set[int]]
+    mincut_neighbors: Dict[int, Set[int]]
+    fallback_graph: Any
+
+
+def build_graph_context(edge_csv: str, max_in_edges: int = 0) -> GraphContext:
+    df_edges = pd.read_csv(edge_csv)
+    G = nx.from_pandas_edgelist(
+        df_edges, source="source", target="target", create_using=nx.Graph()
+    )
+    G_dir = nx.from_pandas_edgelist(
+        df_edges, source="source", target="target", create_using=nx.DiGraph()
+    )
+    out_neighbors = {node: set(G_dir.successors(node)) for node in G_dir.nodes()}
+    mincut_neighbors = {node: set(G.neighbors(node)) for node in G.nodes()}
+    fallback_graph = G_dir if max_in_edges == 0 else G
+    return GraphContext(
+        G=G,
+        G_dir=G_dir,
+        out_neighbors=out_neighbors,
+        mincut_neighbors=mincut_neighbors,
+        fallback_graph=fallback_graph,
+    )
+
+
+def params_hash(params: dict) -> str:
+    payload = json.dumps(params or {}, sort_keys=True).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _record_key(record: dict) -> Tuple:
+    method = record.get("method")
+    keys = [
+        record.get("query_node"),
+        method,
+        record.get("params_hash"),
+        record.get("dataset"),
+        record.get("split_hash"),
+    ]
+    if method == "bp":
+        keys.append(record.get("seed"))
+    return tuple(keys)
+
+
+def _records_from_ndjson(path: str) -> List[dict]:
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
 
 
 def argmax_label(counter: Counter):
@@ -186,6 +256,80 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
     }
 
 
+def run_one_query(
+    q_node: int,
+    method: str,
+    k: Optional[int],
+    edge_csv: str,
+    bin_path: str,
+    extra_args: Optional[Iterable[str]] = None,
+    max_in_edges: int = 0,
+    json_output_path: Optional[str] = None,
+) -> dict:
+    """Single-query solver invocation. Returns the parsed solver dict."""
+    cmd_extra: List[str] = list(extra_args) if extra_args else []
+    cmd_extra += ["--max-in-edges", str(max_in_edges)]
+    if k is not None and "--k" not in cmd_extra:
+        cmd_extra += ["--k", str(k)]
+    return invoke_solver(
+        bin_path=bin_path,
+        edge_csv=edge_csv,
+        query=q_node,
+        extra_args=cmd_extra,
+        as_int_nodes=True,
+        json_output_path=json_output_path,
+    )
+
+
+def _classify_query(
+    q_node: int,
+    neighborhood: List[int],
+    train_mask,
+    labels,
+    forbidden_set: Set[int],
+    weighting: str,
+    G,
+    fallback_graph,
+    max_fallback_hops: int,
+    global_majority,
+) -> Tuple[Any, bool]:
+    train_neighbors = [
+        n
+        for n in neighborhood
+        if train_mask[n] and n != q_node and n not in forbidden_set
+    ]
+    if not train_neighbors:
+        try:
+            paths = _bfs_with_forbidden(
+                fallback_graph, q_node, max_fallback_hops, forbidden_set
+            )
+            reachable_train = {
+                n: d for n, d in paths.items() if train_mask[n] and n != q_node
+            }
+            if reachable_train:
+                min_dist = min(reachable_train.values())
+                nearest = [n for n, d in reachable_train.items() if d == min_dist]
+                pred_label = argmax_label(Counter(labels[n] for n in nearest))
+            else:
+                pred_label = global_majority
+        except Exception:
+            pred_label = global_majority
+        return pred_label, True
+
+    if weighting == "distance":
+        class_scores: Counter = Counter()
+        for n in train_neighbors:
+            try:
+                d = nx.shortest_path_length(G, source=q_node, target=n)
+                w = 1.0 / d
+            except nx.NetworkXNoPath:
+                w = 0.0
+            class_scores[labels[n]] += w
+        return argmax_label(class_scores), False
+
+    return argmax_label(Counter(labels[n] for n in train_neighbors)), False
+
+
 def evaluate_nodes(
     query_nodes,
     k,
@@ -203,136 +347,192 @@ def evaluate_nodes(
     max_in_edges=0,
     return_query_nodes=False,
     forbidden_nodes: Optional[Iterable[int]] = None,
+    graph_context: Optional[GraphContext] = None,
+    records_path: Optional[str] = None,
+    dataset_name: Optional[str] = None,
+    seed: Optional[int] = None,
+    method: Optional[str] = None,
+    params: Optional[dict] = None,
+    split_hash: Optional[str] = None,
+    keep_solver_dumps: bool = False,
+    query_split: Optional[str] = None,
 ):
-    """Runs k-densest classification and returns perfectly aligned y_true and y_pred arrays."""
+    """Runs k-densest classification and returns aligned y_true / y_pred arrays.
+
+    When records_path is set, per-query lean records are appended to
+    records.ndjson under that directory; heavy solver dumps are written under
+    solver_dumps/ when keep_solver_dumps is True. Existing matching records on
+    disk short-circuit re-solving for deterministic methods (and for BP when
+    the seed matches).
+    """
     train_mask = df_nodes["train"].values
     labels = df_nodes["label"].values
 
     forbidden_set: Set[int] = set(int(n) for n in (forbidden_nodes or ()))
-
     train_labels = labels[train_mask]
     global_majority = argmax_label(Counter(train_labels))
 
-    # Build the NetworkX graph once for distance weighting, BFS fallbacks, and qualities.
-    df_edges = pd.read_csv(edge_csv)
-    G = nx.from_pandas_edgelist(
-        df_edges, source="source", target="target", create_using=nx.Graph()
-    )
-    G_dir = nx.from_pandas_edgelist(
-        df_edges, source="source", target="target", create_using=nx.DiGraph()
-    )
-    out_neighbors = {node: set(G_dir.successors(node)) for node in G_dir.nodes()}
-    if max_in_edges == 0:
-        fallback_graph = G_dir
-    else:
-        fallback_graph = G
-    mincut_neighbors = {node: set(G.neighbors(node)) for node in G.nodes()}
+    ctx = graph_context or build_graph_context(edge_csv, max_in_edges)
+    G = ctx.G
+    fallback_graph = ctx.fallback_graph
+    out_neighbors = ctx.out_neighbors
+    mincut_neighbors = ctx.mincut_neighbors
 
-    y_true = []
-    y_pred = []
-    evaluated_query_nodes = []
-    pred_sizes = []
-    oracle_query_counts = []
-    quality_values = {
+    p_hash = params_hash(params or {})
+    method_name = method or ("bp" if k is not None else "unknown")
+
+    cached_records: Dict[Tuple, dict] = {}
+    records_file_path: Optional[str] = None
+    solver_dumps_dir: Optional[str] = None
+    if records_path is not None:
+        os.makedirs(records_path, exist_ok=True)
+        records_file_path = os.path.join(records_path, "records.ndjson")
+        if keep_solver_dumps:
+            solver_dumps_dir = os.path.join(records_path, "solver_dumps")
+            os.makedirs(solver_dumps_dir, exist_ok=True)
+        for rec in _records_from_ndjson(records_file_path):
+            cached_records[_record_key(rec)] = rec
+
+    record_lock = Lock()
+
+    def _make_lookup_key(q_node: int) -> Tuple:
+        method_for_seed = method_name
+        seed_part = seed if method_for_seed == "bp" else None
+        return (
+            int(q_node),
+            method_name,
+            p_hash,
+            dataset_name,
+            split_hash,
+            *([seed_part] if method_for_seed == "bp" else []),
+        )
+
+    def _resolve(q_node: int):
+        key = _make_lookup_key(q_node)
+        cached = cached_records.get(key)
+        if cached is not None:
+            return cached, True
+        solver_dump_path: Optional[str] = None
+        if solver_dumps_dir is not None:
+            seed_tag = "noseed" if (seed is None or method_name != "bp") else f"s{seed}"
+            dump_name = f"{q_node}_{method_name}_{p_hash[-12:]}_{seed_tag}.json"
+            solver_dump_path = os.path.join(solver_dumps_dir, dump_name)
+
+        result = run_one_query(
+            q_node=q_node,
+            method=method_name,
+            k=k,
+            edge_csv=edge_csv,
+            bin_path=bin_path,
+            extra_args=extra_args,
+            max_in_edges=max_in_edges,
+            json_output_path=solver_dump_path,
+        )
+        neighborhood = result["pred_nodes"] if result["returncode"] == 0 else []
+        oracle_queries = result["oracle_queries"]
+        wall_time = result.get("wall_time")
+        qualities_local = None
+        if compute_qualities:
+            qualities_local = compute_subgraph_quality(
+                neighborhood, out_neighbors, mincut_neighbors
+            )
+        record = {
+            "dataset": dataset_name,
+            "method": method_name,
+            "params": params or {},
+            "params_hash": p_hash,
+            "seed": seed if method_name == "bp" else None,
+            "split_hash": split_hash,
+            "query_node": int(q_node),
+            "query_split": query_split,
+            "query_label": int(labels[q_node]) if q_node < len(labels) else None,
+            "size": len(neighborhood),
+            "neighborhood": [int(n) for n in neighborhood],
+            "oracle_queries": (
+                None if isinstance(oracle_queries, float) and math.isnan(oracle_queries)
+                else int(oracle_queries)
+            ),
+            "wall_time_s": wall_time,
+            "qualities": qualities_local,
+            "solver_dump_path": (
+                os.path.relpath(solver_dump_path, records_path)
+                if solver_dump_path is not None
+                else None
+            ),
+            "returncode": result["returncode"],
+        }
+        return record, False
+
+    y_true: List = []
+    y_pred: List = []
+    evaluated_query_nodes: List = []
+    records_out: List[dict] = []
+    pred_sizes: List[int] = []
+    oracle_query_counts: List = []
+    quality_values: Dict[str, List] = {
         "dir_internal_avg_degree": [],
         "dir_internal_edge_density": [],
         "undir_external_expansion": [],
         "undir_external_conductance": [],
         "undir_internal_ncut": [],
     }
-
     fallback_count = 0
     total_queries = len(query_nodes)
     eval_label = f"k={k}" if k is not None else "no-k"
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                run_solver,
-                q,
-                k,
-                edge_csv,
-                bin_path,
-                tmp_dir,
-                extra_args,
-                max_in_edges,
-            ): q
-            for q in query_nodes
-        }
-
-        # as_completed yields out of order, but y_true and y_pred stay pairwise matched
+        futures = {executor.submit(_resolve, q): q for q in query_nodes}
         for future in tqdm(
             as_completed(futures),
             total=total_queries,
             desc=f"Evaluating {eval_label}",
             disable=not show_progress,
         ):
-            q_node, neighborhood, oracle_queries = future.result()
+            record, from_cache = future.result()
+            q_node = record["query_node"]
+            neighborhood = record.get("neighborhood") or []
             pred_sizes.append(len(neighborhood))
-            oracle_query_counts.append(oracle_queries)
+            oracle_query_counts.append(record["oracle_queries"])
 
             if compute_qualities:
-                qualities = compute_subgraph_quality(
-                    neighborhood, out_neighbors, mincut_neighbors
-                )
-                for key in quality_values:
-                    quality_values[key].append(qualities[key])
-
-            # Filter neighborhood to strictly contain Train nodes (excluding query and forbidden nodes)
-            train_neighbors = [
-                n
-                for n in neighborhood
-                if train_mask[n] and n != q_node and n not in forbidden_set
-            ]
-
-            if not train_neighbors:
-                # Concentric-BFS fallback: solver returned no training-labelled
-                # neighbours, so vote with the nearest labelled ring instead.
-                fallback_count += 1
-                try:
-                    paths = _bfs_with_forbidden(
-                        fallback_graph,
-                        q_node,
-                        max_fallback_hops,
-                        forbidden_set,
+                qualities_local = record.get("qualities")
+                if qualities_local is None:
+                    qualities_local = compute_subgraph_quality(
+                        neighborhood, out_neighbors, mincut_neighbors
                     )
-                    reachable_train = {
-                        n: d for n, d in paths.items() if train_mask[n] and n != q_node
-                    }
+                    record["qualities"] = qualities_local
+                for key in quality_values:
+                    quality_values[key].append(qualities_local.get(key, math.nan))
 
-                    if reachable_train:
-                        min_dist = min(reachable_train.values())
-                        nearest_train_nodes = [
-                            n for n, d in reachable_train.items() if d == min_dist
-                        ]
-                        pred_label = argmax_label(
-                            Counter(labels[n] for n in nearest_train_nodes)
-                        )
-                    else:
-                        pred_label = global_majority
-                except Exception:
-                    pred_label = global_majority
+            pred_label, fb = _classify_query(
+                q_node,
+                neighborhood,
+                train_mask,
+                labels,
+                forbidden_set,
+                weighting,
+                G,
+                fallback_graph,
+                max_fallback_hops,
+                global_majority,
+            )
+            if fb:
+                fallback_count += 1
+            record["predicted_label"] = (
+                int(pred_label) if pred_label is not None else None
+            )
+            record["fallback_used"] = fb
 
-            else:
-                if weighting == "distance":
-                    class_scores = Counter()
-                    for n in train_neighbors:
-                        try:
-                            d = nx.shortest_path_length(G, source=q_node, target=n)
-                            w = 1.0 / d
-                        except nx.NetworkXNoPath:
-                            w = 0.0
+            if records_file_path is not None and not from_cache:
+                lean = {k_: v for k_, v in record.items() if k_ != "neighborhood"}
+                with record_lock:
+                    with open(records_file_path, "a") as f:
+                        f.write(json.dumps(lean) + "\n")
 
-                        class_scores[labels[n]] += w
-
-                    pred_label = argmax_label(class_scores)
-
-                else:  # Uniform weighting
-                    pred_label = argmax_label(Counter(labels[n] for n in train_neighbors))
-
-            y_true.append(labels[q_node])
+            y_true.append(int(labels[q_node]))
             y_pred.append(pred_label)
             evaluated_query_nodes.append(q_node)
+            records_out.append(record)
 
     fallback_rate = (fallback_count / total_queries) * 100 if total_queries > 0 else 0
     print(
@@ -346,6 +546,7 @@ def evaluate_nodes(
             "avg_pred_size": (sum(pred_sizes) / len(pred_sizes)) if pred_sizes else 0.0,
             "avg_oracle_queries": _safe_mean(oracle_query_counts),
             "query_count": total_queries,
+            "records": records_out,
         }
         if compute_qualities:
             stats.update(

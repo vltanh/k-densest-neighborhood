@@ -315,10 +315,15 @@ class LeakageGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             df_nodes, edge_csv = self._write_leak_dataset(td)
 
-            def fake_run_solver(q, k, *args, **kwargs):
-                return q, [], math.nan
+            def fake_run_one_query(*args, **kwargs):
+                return {
+                    "returncode": 0,
+                    "pred_nodes": [],
+                    "oracle_queries": math.nan,
+                    "wall_time": None,
+                }
 
-            with patch("solver_utils.run_solver", side_effect=fake_run_solver):
+            with patch("solver_utils.run_one_query", side_effect=fake_run_one_query):
                 _, _, y_pred_no = evaluate_nodes(
                     [0], k=None, edge_csv=edge_csv, df_nodes=df_nodes,
                     bin_path="solver", tmp_dir=td, max_workers=1,
