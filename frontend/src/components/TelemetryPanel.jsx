@@ -91,7 +91,8 @@ export function DispatchView({ telemetry, loading }) {
   const bestObjDisplay  = telemetry.incumbent ? fmtFloat(telemetry.incumbent.obj, 4) : null;
   const bestSizeDisplay = telemetry.incumbent ? fmtInt(telemetry.incumbent.size) : null;
   const showFinalBlock =
-    telemetry.density != null || telemetry.solverTime != null || telemetry.status === 'converged';
+    telemetry.density != null || telemetry.solverTime != null || telemetry.status === 'converged' ||
+    telemetry.qualities != null;
   const showLiveBlock =
     telemetry.iteration != null || telemetry.lambda != null || telemetry.incumbent != null ||
     telemetry.startedAt != null || telemetry.bbNodes != null || telemetry.lpSolves != null;
@@ -115,14 +116,24 @@ export function DispatchView({ telemetry, loading }) {
 
         {showFinalBlock && (
           <div className="telemetry-grid border-t border-[var(--rule-night)] pt-3 mt-3 pb-1 fade-in">
-            <Stat label="Density"  value={fmtFloat(telemetry.density, 6)} accent />
-            <Stat label="Size"     value={fmtInt(telemetry.size)} accent />
-            <Stat label="Solve"    value={telemetry.solverTime != null ? `${telemetry.solverTime.toFixed(3)}s` : null} />
-            <Stat label="Iters"    value={fmtInt(telemetry.iteration)} />
-            <Stat label="B&B"      value={fmtInt(telemetry.bbNodes || null)} />
-            <Stat label="LP"       value={fmtInt(telemetry.lpSolves || null)} />
-            <Stat label="Cols Gen" value={fmtInt(telemetry.columnsGenerated)} />
-            <Stat label="BQP Cuts" value={fmtInt(telemetry.cutsAdded)} />
+            <Stat label="Avg Int Degree"  value={fmtFloat(telemetry.qualities?.avg_internal_degree, 4)} accent />
+            <Stat label="Edge Density"    value={fmtFloat(telemetry.qualities?.edge_density, 4)} accent />
+            <Stat label="Ext Conductance" value={fmtFloat(telemetry.qualities?.ext_conductance, 4)} accent />
+            <Stat label="Int NCut"        value={fmtFloat(telemetry.qualities?.int_ncut, 4)} accent />
+            <Stat label="Size"            value={fmtInt(telemetry.size)} />
+            <Stat label="Solve"           value={telemetry.solverTime != null ? `${telemetry.solverTime.toFixed(3)}s` : null} />
+            {!!telemetry.bbNodes && (
+              <Stat label="B&B" value={fmtInt(telemetry.bbNodes)} />
+            )}
+            {!!telemetry.lpSolves && (
+              <Stat label="LP" value={fmtInt(telemetry.lpSolves)} />
+            )}
+            {telemetry.columnsGenerated != null && (
+              <Stat label="Cols Gen" value={fmtInt(telemetry.columnsGenerated)} />
+            )}
+            {telemetry.cutsAdded != null && (
+              <Stat label="BQP Cuts" value={fmtInt(telemetry.cutsAdded)} />
+            )}
           </div>
         )}
       </div>

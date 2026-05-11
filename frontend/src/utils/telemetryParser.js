@@ -46,6 +46,7 @@ export const TELEMETRY_INITIAL = Object.freeze({
   columnsGenerated: null, // final
   cutsAdded: null,        // final
   solverTime: null,       // final (seconds)
+  qualities: null,        // { avg_internal_degree, edge_density, ext_conductance, int_ncut }
   startedAt: null,        // epoch ms
   finishedAt: null,       // epoch ms
   blacklisted: [],        // [{ id, phase, reason }] — nodes dropped by the solver

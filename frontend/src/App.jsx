@@ -16,7 +16,6 @@ const SHARED_DEFAULTS = {
   kappa: 0,
   baselineDepth: -1,
   bfsDepth: 1,
-  computeQualities: false,
   timeLimit: 60.0,
   nodeLimit: 100000,
   maxInEdges: 0,

@@ -63,7 +63,6 @@ function OracleDropdown({ value, onChange, disabled }) {
 
 export default function Sidebar({ width, fluid = false, hideFeed = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
   const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
-  const setBool = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.checked }));
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [feedTab, setFeedTab] = useState('dispatch');
   const isSim = oracleMode === ORACLE_SIM;
@@ -232,6 +231,14 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 </div>
               )}
 
+              {usesKappa && (
+                <div>
+                  <label className="field-label">κ · Edge-Connectivity</label>
+                  <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
+                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
+                </div>
+              )}
+
               {usesBfsDepth && (
                 <div>
                   <label className="field-label">BFS Depth</label>
@@ -268,32 +275,11 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
               <div className="space-y-5">
 
               {/* Oracle limits — apply to every variant */}
-              <div className="grid grid-cols-2 gap-x-5 gap-y-5 items-end">
-                <div>
-                  <label className="field-label">Max In-Edges</label>
-                  <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
-                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
-                </div>
-                <label className="flex items-center gap-2.5 pb-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={!!params.computeQualities}
-                    onChange={setBool('computeQualities')}
-                    className="accent-[var(--gold)] w-3.5 h-3.5"
-                  />
-                  <span className="field-label !mb-0">Compute Final Qualities</span>
-                </label>
+              <div>
+                <label className="field-label">Max In-Edges</label>
+                <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
+                <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
               </div>
-
-              {usesKappa && (
-                <div className="grid grid-cols-2 gap-x-5 gap-y-5">
-                  <div>
-                    <label className="field-label">κ · Edge-Connectivity</label>
-                    <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
-                    <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
-                  </div>
-                </div>
-              )}
 
               {usesBpInternals && (
                 <>

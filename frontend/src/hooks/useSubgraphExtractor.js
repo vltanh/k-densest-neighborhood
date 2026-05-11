@@ -27,6 +27,8 @@ export function useSubgraphExtractor(sessionId) {
         setGraphData(packet.content);
       } else if (packet.type === 'meta') {
         setMeta(packet.content);
+      } else if (packet.type === 'qualities') {
+        setTelemetry(prev => ({ ...prev, qualities: packet.content }));
       } else if (packet.type === 'error') {
         setError(packet.content);
         setTelemetry(prev => ({ ...prev, status: 'error', finishedAt: Date.now() }));
@@ -52,7 +54,6 @@ export function useSubgraphExtractor(sessionId) {
       kappa:              pi(params.kappa,           0),
       baseline_depth:     pi(params.baselineDepth,  -1),
       bfs_depth:          pi(params.bfsDepth,        1),
-      compute_qualities:  !!params.computeQualities,
       time_limit:         pf(params.timeLimit,       60.0),
       node_limit:         pi(params.nodeLimit,       100000),
       max_in_edges:       pi(params.maxInEdges,      0),
