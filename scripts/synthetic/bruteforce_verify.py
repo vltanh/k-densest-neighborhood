@@ -423,7 +423,7 @@ def _compute_optima_one(meta_path: Path, k_set: List[int]):
     return rows
 
 
-def _run_solver_cell(meta_path: Path, method: str, k: Optional[int], args):
+def _run_solver_cell(meta_path: Path, method: str, k: Optional[int], kappa: Optional[int], args):
     with open(meta_path) as f:
         meta = json.load(f)
     edge_csv = str(meta_path.with_name("edge.csv"))
@@ -432,12 +432,15 @@ def _run_solver_cell(meta_path: Path, method: str, k: Optional[int], args):
     if method == "avgdeg":
         extra += ["--avgdeg"]
     elif method == "bp":
-        extra += ["--bp", "--k", str(k), "--kappa", "0", "--gurobi-seed", str(args.gurobi_seed)]
+        extra += ["--bp", "--k", str(k), "--kappa", str(kappa), "--gurobi-seed", str(args.gurobi_seed)]
     if args.time_limit is not None:
         extra += ["--time-limit", str(args.time_limit)]
     extra += ["--compute-qualities"]
 
-    method_dir = method if k is None else f"{method}_k{k}"
+    if method == "bp":
+        method_dir = f"bp_k{k}_kappa{kappa}"
+    else:
+        method_dir = method
     dump_path = meta_path.parent / "solver_dumps" / f"{method_dir}.json"
     dump_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -450,7 +453,7 @@ def _run_solver_cell(meta_path: Path, method: str, k: Optional[int], args):
         json_output_path=str(dump_path),
     )
     wall = time.perf_counter() - started
-    return meta, method, k, result, wall
+    return meta, method, k, kappa, result, wall
 
 
 def _solver_runs_one(args_tuple):
@@ -503,6 +506,7 @@ def _do_solver_runs(args):
     if not metas:
         raise FileNotFoundError(f"no meta.json under {root}/synthetic/bf/n{args.n}")
     k_set = [int(x) for x in args.k_values.split(",")]
+    kappa_set = [int(x) for x in args.kappa_values.split(",")]
     optima_csv = Path(args.exps_dir) / "synthetic" / "bf" / "optima.csv"
     if not optima_csv.exists():
         raise FileNotFoundError(f"run bf_optima first; missing {optima_csv}")
@@ -510,9 +514,10 @@ def _do_solver_runs(args):
 
     cells: List[Tuple] = []
     for m in metas:
-        cells.append((m, "avgdeg", None, args))
+        cells.append((m, "avgdeg", None, None, args))
         for k in k_set:
-            cells.append((m, "bp", k, args))
+            for kappa in kappa_set:
+                cells.append((m, "bp", k, kappa, args))
 
     out_root = Path(args.exps_dir) / "synthetic" / "bf"
     out_root.mkdir(parents=True, exist_ok=True)
@@ -523,7 +528,7 @@ def _do_solver_runs(args):
     with ProcessPoolExecutor(max_workers=args.max_workers) as exe:
         futures = {exe.submit(_solver_runs_one, cell): cell for cell in cells}
         for i, fut in enumerate(as_completed(futures), 1):
-            meta, method, k, result, wall = fut.result()
+            meta, method, k, kappa, result, wall = fut.result()
             payload = result.get("solver_json") or {}
             stats = payload.get("stats") or {}
             qualities = payload.get("qualities") or {}
@@ -546,6 +551,8 @@ def _do_solver_runs(args):
             opt_set = set(int(n) for n in opt_nodes)
             opt_match = solver_nodes_set == opt_set
             opt_match_size_only = solver_size == opt_size
+            kappa_verified = payload.get("kappa_verified")
+            kappa_verify_failed = payload.get("kappa_verify_failed")
             rows.append(
                 {
                     "n": meta["n"],
@@ -553,11 +560,14 @@ def _do_solver_runs(args):
                     "seed": meta["seed"],
                     "method": method,
                     "k": k,
+                    "kappa": kappa,
                     "opt_value_brute": opt_value,
                     "opt_value_solver": solver_value,
                     "opt_match": opt_match,
                     "opt_match_within_tol": within_tol,
                     "opt_match_size_only": opt_match_size_only,
+                    "kappa_verified": kappa_verified,
+                    "kappa_verify_failed": kappa_verify_failed,
                     "solver_size": solver_size,
                     "brute_size": opt_size,
                     "wall_time_s": wall,
@@ -590,15 +600,16 @@ def main():
 
     opt = sub.add_parser("bf_optima", help="brute-force optima per graph")
     opt.add_argument("--n", type=int, default=25)
-    opt.add_argument("--k-values", type=str, default="2,3,5,8")
+    opt.add_argument("--k-values", type=str, default="3,4,5,6,7,8,9,10")
     opt.add_argument("--data-dir", type=str, default="data")
     opt.add_argument("--exps-dir", type=str, default="exps")
     opt.add_argument("--max-workers", type=int, default=4)
     opt.set_defaults(func=_do_optima)
 
-    runs = sub.add_parser("bf_solver_runs", help="run solver across (method, k)")
+    runs = sub.add_parser("bf_solver_runs", help="run solver across (method, k, kappa)")
     runs.add_argument("--n", type=int, default=25)
-    runs.add_argument("--k-values", type=str, default="2,3,5,8")
+    runs.add_argument("--k-values", type=str, default="3,4,5,6,7,8,9,10")
+    runs.add_argument("--kappa-values", type=str, default="0,1,2,3,4")
     runs.add_argument("--data-dir", type=str, default="data")
     runs.add_argument("--exps-dir", type=str, default="exps")
     runs.add_argument("--bin-path", type=str, default="./solver/bin/solver")

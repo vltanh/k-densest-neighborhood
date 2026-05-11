@@ -13,7 +13,7 @@ import pandas as pd
 
 
 def _summarise(df: pd.DataFrame) -> pd.DataFrame:
-    group_cols = ["method", "k", "p"]
+    group_cols = ["method", "k", "kappa", "p"] if "kappa" in df.columns else ["method", "k", "p"]
     rows = []
     for keys, chunk in df.groupby(group_cols, dropna=False):
         if not isinstance(keys, tuple):
