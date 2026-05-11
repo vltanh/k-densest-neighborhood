@@ -653,8 +653,15 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Exp 2/3: validation sweep on Cora\_ML}
-  Sweep grid (locked):
+\begin{frame}{Exp 2: scope}
+  \textbf{Intrinsic perspective on val + test combined.}
+  Cluster quality and cost are label-agnostic and read the geometry
+  of the returned subgraph; aggregating over the val + test union
+  uses every query the solver was asked to retrieve.
+
+  \vfill
+
+  Grid (locked):
   \begin{itemize}
     \item BFS depth $\in \{1, 2\}$
     \item BP $k \in \{3, 4, 5\}$, $\kappa \in \{0, 1, 2\}$
@@ -662,18 +669,11 @@ University of Illinois Urbana-Champaign \\
     \item Five Gurobi seeds for BP $(42..46)$; deterministic methods once
     \item No time, node, gap, or Dinkelbach limit
   \end{itemize}
-
-  \vfill
-
-  \textbf{Placeholder.} Numbers pending the unified pipeline rerun
-  with the materialise-frontier solver. Best per-family settings come
-  from \texttt{aggregate\_classification.py} (val macro F1) joined to
-  \texttt{aggregate\_cluster\_quality.py} and \texttt{aggregate\_cost.py}.
 \end{frame}
 
-\begin{frame}{Exp 2: full test split, cluster quality}
-  Median values across the val + test pool from
-  \texttt{cluster\_quality\_summary.csv} at the tuned hyperparameters.
+\begin{frame}{Exp 2: cluster quality on val + test}
+  Median per $(\mathrm{method}, k, \kappa)$ cell over the val + test
+  union from \texttt{cluster\_quality\_summary.csv}.
 
   \vfill
 
@@ -683,61 +683,17 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{Placeholder.} Numbers pending pipeline rerun. The
-  cluster-quality perspective is intrinsic: it reads only the
-  geometry of the returned subgraph, label-agnostic.
-\end{frame}
-
-\begin{frame}{Hard subset: motivation}
-  The full test split mixes two regimes.
-
-  \vfill
-
-  \begin{itemize}
-    \item Easy regime:
-    \begin{itemize}
-      \item one-hop citation labels are already correct
-      \item BFS depth 1 is hard to beat
-    \end{itemize}
-    \item Hard regime:
-    \begin{itemize}
-      \item one-hop BFS predicts the wrong label
-      \item local labels are misleading
-      \item retrieval geometry has to compensate
-    \end{itemize}
-  \end{itemize}
-
-  \vfill
-
-  \textbf{BFS-hard validation subset:} 52 / 411 eligible val nodes where
-  the BFS depth 1 vote disagrees with the ground-truth label. The subset is
-  hash-pinned in \texttt{split\_meta.json}.
-\end{frame}
-
-\begin{frame}{Exp 2: hard subset, cluster quality}
-  Medians on the BFS-hard val nodes (64 on Cora\_ML).
-
-  \vfill
-
-  Same metric set as the full test split. The hard subset isolates
-  cases where local labels do not match: cluster quality on these
-  queries shows whether retrieval geometry remains tight even when
-  the depth-1 vote is wrong.
-
-  \vfill
-
   \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
-\begin{frame}{Exp 2: cost comparison}
-  Averages over the val + test pool from
-  \texttt{cost\_summary.csv}. Cost is the third experimental
-  perspective alongside cluster quality and classification.
+\begin{frame}{Exp 2: cost on val + test}
+  Median per $(\mathrm{method}, k, \kappa)$ cell over the val + test
+  union from \texttt{cost\_summary.csv}.
 
   \vfill
 
-  Reported per cell: wall time, oracle queries, total\_bb\_nodes
-  (BP), total\_lp\_solves (BP), total\_columns\_added (BP),
+  Reported: wall time, oracle queries, total\_bb\_nodes (BP),
+  total\_lp\_solves (BP), total\_columns\_added (BP),
   total\_cuts\_added (BP), $t$\_lp\_solve, $t$\_pricing, returned
   community size.
 
@@ -745,51 +701,82 @@ University of Illinois Urbana-Champaign \\
 
   \textbf{Placeholder.} Numbers pending pipeline rerun. The
   materialise-frontier solver pays more oracle queries per call than
-  the legacy lazy build; the cost row makes that price explicit
-  against the cluster-quality and classification gains.
+  the legacy lazy build; this slide makes the price explicit.
 \end{frame}
 
-\begin{frame}{Exp 3: classification prediction rule}
+\begin{frame}{Exp 3: scope and prediction rule}
+  \textbf{Extrinsic perspective: tune on val, evaluate on test and on
+  the BFS-hard val subset.}
+
+  \vfill
+
   For each val or test query $q$:
   \begin{itemize}
     \item Retrieve the community around $q$ from the chosen solver.
     \item Uniform majority over the train-labelled nodes in the
-    community.
-    \item Ties broken deterministically by ascending label value
+    community; ties broken deterministically by ascending label
     (\texttt{argmax\_label}).
-    \item If no train neighbour is present in the community, fall back
-    to a BFS walk that \emph{forbids} every val and test node as a
-    stepping stone (no label leakage across splits).
-    \item Last resort if BFS reaches no train label: global majority of
-    the train pool.
+    \item Fallback: BFS that \emph{forbids} every val and test node
+    as a stepping stone.
+    \item Last resort: global majority of the train pool.
   \end{itemize}
-
-  \vfill
-
-  All Cora\_ML runs use \texttt{max\_in\_edges = 0}.
 \end{frame}
 
-\begin{frame}{Exp 3: full test split, classification}
-  Means over five Gurobi seeds (42..46) on the test split (402
-  eligible nodes on Cora\_ML). Bootstrap 95\% CI with $B = 500$
-  resamples paired across methods by query.
+\begin{frame}{Exp 3: tuning on val}
+  For each method, pick the params hash that maximises macro F1 on
+  the val records produced by the unified sweep. AvgDeg has a
+  single cell; BFS picks the best of depths $\{1, 2\}$; BP picks
+  $(k, \kappa)$ from the locked grid using seed 42.
 
   \vfill
 
-  Reported: macro precision, recall, F1. Deterministic methods
-  (AvgDeg, BFS) use a single-seed paired CI; BP uses a
-  stratified-by-seed bootstrap. Wilson interval substitutes when
-  bootstrap variance is zero.
+  Reported: chosen params, val macro precision / recall / F1.
 
   \vfill
 
   \textbf{Placeholder.} Numbers pending pipeline rerun.
 \end{frame}
 
-\begin{frame}{Exp 3: hard subset, classification}
-  Means over five seeds (42..46), bootstrap 95\% CI ($B = 500$) on
-  the BFS-hard val nodes (64 on Cora\_ML). BFS depth 1 is 0 by
-  construction.
+\begin{frame}{Exp 3: evaluation on test}
+  Apply the best params per method to the test split (402 eligible
+  nodes on Cora\_ML). Means over five Gurobi seeds (42..46) with
+  bootstrap $95\%$ CI from $B = 500$ resamples paired across methods
+  by query.
+
+  \vfill
+
+  Reported: macro precision, recall, F1. Deterministic methods
+  (AvgDeg, BFS) use a single-seed paired CI; BP uses a
+  stratified-by-seed bootstrap.
+
+  \vfill
+
+  \textbf{Placeholder.} Numbers pending pipeline rerun.
+\end{frame}
+
+\begin{frame}{Exp 3: hard subset motivation}
+  The full test split mixes two regimes.
+
+  \vfill
+
+  \begin{itemize}
+    \item \emph{Easy regime.} One-hop citation labels are already
+    correct; BFS depth 1 is hard to beat.
+    \item \emph{Hard regime.} One-hop BFS predicts the wrong label;
+    retrieval geometry has to compensate.
+  \end{itemize}
+
+  \vfill
+
+  \textbf{BFS-hard validation subset:} val nodes where the BFS
+  depth-1 vote disagrees with the ground-truth label (64 on
+  Cora\_ML). The subset is hash-pinned in \texttt{split\_meta.json}.
+\end{frame}
+
+\begin{frame}{Exp 3: evaluation on the hard subset}
+  Apply the best params per method to the BFS-hard val nodes (64 on
+  Cora\_ML). Means over five seeds (42..46), bootstrap $95\%$ CI
+  ($B = 500$). BFS depth 1 is 0 by construction.
 
   \vfill
 
