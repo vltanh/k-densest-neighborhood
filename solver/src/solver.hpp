@@ -81,9 +81,9 @@ public:
     SolverStats stats;
 
     FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
-                             double tol = 1e-6, int bb_node_limit = 100000, double bb_time_limit = 60.0,
-                             double bb_gap_tol = 1e-4, int dinkelbach_max_iter = 50,
-                             double cg_batch_fraction = 1.0, int cg_min_batch = 50, int cg_max_batch = 50,
+                             double tol = 1e-6, int bb_node_limit = -1, double bb_time_limit = -1.0,
+                             double bb_gap_tol = -1.0, int dinkelbach_max_iter = -1,
+                             double cg_batch_fraction = 1.0, int cg_min_batch = 0, int cg_max_batch = 50,
                              int kappa = 0);
     ~FullBranchAndPriceSolver();
 

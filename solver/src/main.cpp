@@ -28,13 +28,13 @@ void print_usage(const char *prog_name)
          << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n\n"
          << "  --compute-qualities       Compute final density/internal-edge metrics (may issue extra oracle queries)\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
-         << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: 60.0)\n"
-         << "  --node-limit <int>        Max Branch-and-Bound nodes to explore; -1 disables (default: 100000)\n"
+         << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: -1)\n"
+         << "  --node-limit <int>        Max Branch-and-Bound nodes to explore; -1 disables (default: -1)\n"
          << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 0)\n"
-         << "  --gap-tol <float>         Early stopping relative gap tolerance (default: 1e-4)\n"
-         << "  --dinkelbach-iter <int>   Max Dinkelbach iterations; -1 disables (default: 50)\n"
+         << "  --gap-tol <float>         Early stopping relative gap tolerance; -1 disables (default: -1)\n"
+         << "  --dinkelbach-iter <int>   Max Dinkelbach iterations; -1 disables (default: -1)\n"
          << "  --cg-batch-frac <float>   Fraction of active set to price per iteration (default: 1.0)\n"
-         << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 50)\n"
+         << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 0)\n"
          << "  --cg-max-batch <int>      Maximum columns to add per pricing round (default: 50)\n"
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
          << "  --k <int>                 Target subgraph size (REQUIRED for --bp; k >= 2)\n"
@@ -88,13 +88,13 @@ int main(int argc, char *argv[])
     string output_file = "";
     bool compute_qualities = false;
 
-    double time_limit = 60.0;
-    int node_limit = 100000;
+    double time_limit = -1.0;
+    int node_limit = -1;
     int max_in_edges = 0;
-    double gap_tol = 1e-4;
-    int dinkelbach_iter = 50;
+    double gap_tol = -1.0;
+    int dinkelbach_iter = -1;
     double cg_batch_frac = 1.0;
-    int cg_min_batch = 50;
+    int cg_min_batch = 0;
     int cg_max_batch = 50;
     double tol = 1e-6;
     int kappa = 0;

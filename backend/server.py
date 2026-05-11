@@ -37,13 +37,13 @@ class SolverParams(BaseModel):
     baseline_depth: int = Field(default=-1, description="BFS-frontier depth for conn-* baselines (-1 = unbounded)")
     bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
 
-    time_limit: Optional[float] = 60.0
-    node_limit: Optional[int] = 100000
+    time_limit: Optional[float] = -1.0
+    node_limit: Optional[int] = -1
     max_in_edges: Optional[int] = 0
-    gap_tol: Optional[float] = 1e-4
-    dinkelbach_iter: Optional[int] = 50
+    gap_tol: Optional[float] = -1.0
+    dinkelbach_iter: Optional[int] = -1
     cg_batch_frac: Optional[float] = 1.0
-    cg_min_batch: Optional[int] = 50
+    cg_min_batch: Optional[int] = 0
     cg_max_batch: Optional[int] = 50
     tol: Optional[float] = 1e-6
 
