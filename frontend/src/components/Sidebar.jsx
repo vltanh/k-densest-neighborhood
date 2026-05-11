@@ -224,18 +224,21 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 )}
               </div>
 
-              {usesK && (
-                <div>
-                  <label className="field-label">Min Community Size · k</label>
-                  <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
-                </div>
-              )}
-
-              {usesKappa && (
-                <div>
-                  <label className="field-label">κ · Edge-Connectivity</label>
-                  <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
-                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
+              {(usesK || usesKappa) && (
+                <div className={`grid gap-x-5 gap-y-5 ${usesK && usesKappa ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                  {usesK && (
+                    <div>
+                      <label className="field-label">Min Community Size · k</label>
+                      <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
+                    </div>
+                  )}
+                  {usesKappa && (
+                    <div>
+                      <label className="field-label">κ · Edge-Connectivity</label>
+                      <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
+                      <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
+                    </div>
+                  )}
                 </div>
               )}
 
