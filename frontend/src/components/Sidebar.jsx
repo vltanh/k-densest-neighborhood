@@ -141,6 +141,24 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                   )}
                 </div>
               )}
+              {!hideHeader && isSim && (
+                <div>
+                  <label className="field-label">Dataset</label>
+                  <div className="relative">
+                    <select
+                      value={params.dataset}
+                      disabled={loading}
+                      onChange={(e) => setParams(prev => ({ ...prev, dataset: e.target.value }))}
+                      className="field-input appearance-none pr-8"
+                    >
+                      {SIM_DATASETS.map(d => (
+                        <option key={d} value={d} className="bg-[var(--night)] text-[var(--on-night)]">{d}</option>
+                      ))}
+                    </select>
+                    <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--on-night-faint)]" />
+                  </div>
+                </div>
+              )}
               {isSim ? (
                 <div>
                   <label htmlFor="seed-input" className="field-label flex justify-between items-baseline">
