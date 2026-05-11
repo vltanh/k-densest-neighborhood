@@ -572,17 +572,16 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Classification protocol}
-  Dataset: CitationFull Cora-ML.
+  Dataset: CitationFull Cora-ML (lead dataset).
 
   \vfill
 
   \begin{itemize}
-    \item 2,995 nodes
-    \item 8,416 directed edges
-    \item 7 labels
-    \item train: 1,746 cited papers
-    \item val: 624 pure source papers
-    \item test: 625 pure source papers
+    \item 2,995 nodes, 8,416 directed edges, 7 labels
+    \item val + test: 1,249 pure-source papers split 624 / 625 (seed 42)
+    \item train: every remaining node (1,746 on Cora\_ML)
+    \item eligible val: 411; eligible test: 393 (one-hop $\ge 2$ filter)
+    \item hard subset: 52 eligible val nodes where BFS depth 1 votes wrong
   \end{itemize}
 
   \vfill
@@ -590,18 +589,16 @@ University of Illinois Urbana-Champaign \\
   Prediction:
   \begin{itemize}
     \item retrieve community around query node
-    \item vote over training nodes in the community
-    \item distance-weighted voting: weight $1/d$
-    \item all reported runs use \texttt{max\_in\_edges = 0}
+    \item uniform majority over train nodes in the community
+    \item ties broken deterministically by ascending label
+    \item fallback BFS forbids val and test as stepping stones
+    \item all reported Cora\_ML runs use \texttt{max\_in\_edges = 0}
   \end{itemize}
 
   \vfill
 
-  \textbf{Fallback note} observed Cora-ML fallback rate is 0\%.
-
-  \vfill
-
-  \textbf{Conn. column} normalized internal min-cut of the selected support.
+  \textbf{Splits + eligible + hard subset are hash-pinned in
+  \texttt{split\_meta.json}.}
 \end{frame}
 
 \begin{frame}{Methods compared}
