@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ArrowUp, ArrowDown } from 'lucide-react';
+import { ORACLE_SIM, classColor } from '../constants';
 
-export default function PaperLedger({ nodes, queryNode, loading, error, hoveredNode, setHoveredNode, clickedNode, onDetails, onBib, heightPct }) {
+export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loading, error, hoveredNode, setHoveredNode, clickedNode, onDetails, onBib, heightPct }) {
+  const isSim = oracleMode === ORACLE_SIM;
   const [sortConfig, setSortConfig] = useState({ key: 'displayNum', direction: 'asc' });
 
   useEffect(() => {
@@ -23,7 +25,7 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
       let aVal = a[sortConfig.key];
       let bVal = b[sortConfig.key];
 
-      if (sortConfig.key === 'year' || sortConfig.key === 'citations') {
+      if (['year', 'citations', 'label', 'degree', 'rawId', 'displayNum'].includes(sortConfig.key)) {
         aVal = (aVal === 'N/A' || aVal == null) ? -1 : parseInt(aVal);
         bVal = (bVal === 'N/A' || bVal == null) ? -1 : parseInt(bVal);
       } else if (typeof aVal === 'string') {
@@ -37,6 +39,15 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
     });
   }, [nodes, sortConfig]);
 
+  const classStats = useMemo(() => {
+    if (!isSim) return null;
+    const counts = {};
+    sortedNodes.forEach(n => {
+      counts[n.label] = (counts[n.label] || 0) + 1;
+    });
+    return counts;
+  }, [isSim, sortedNodes]);
+
   const renderSortIcon = (columnKey) => {
     if (sortConfig.key !== columnKey) return <span className="w-3 inline-block" />;
     return sortConfig.direction === 'asc'
@@ -44,38 +55,74 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
       : <ArrowDown size={11} className="inline ml-1 text-[var(--vermillion)]" />;
   };
 
-  const renderTh = (columnKey, title, className = '') => (
-    <th
-      key={columnKey}
-      onClick={() => requestSort(columnKey)}
-      className={`px-5 py-4 eyebrow text-left text-[var(--ink-dim)] hover:text-[var(--ink)] cursor-pointer select-none transition-colors ${className}`}
-    >
-      <div className="flex items-center">
-        {title} {renderSortIcon(columnKey)}
-      </div>
-    </th>
-  );
+  const renderTh = (columnKey, title, className = '') => {
+    const isActive = sortConfig.key === columnKey;
+    const ariaSort = !isActive ? 'none' : (sortConfig.direction === 'asc' ? 'ascending' : 'descending');
+    return (
+      <th
+        key={columnKey}
+        aria-sort={ariaSort}
+        scope="col"
+        className={`px-5 py-4 eyebrow text-left text-[var(--ink-dim)] ${className}`}
+      >
+        <button
+          type="button"
+          onClick={() => requestSort(columnKey)}
+          className="flex items-center hover:text-[var(--ink)] transition-colors cursor-pointer select-none"
+        >
+          {title} {renderSortIcon(columnKey)}
+        </button>
+      </th>
+    );
+  };
+
+  const splitBadge = (split) => {
+    const colors = {
+      train: 'bg-[var(--ink)]/10 text-[var(--ink)] border-[var(--ink)]/30',
+      val:   'bg-[var(--vermillion)]/10 text-[var(--vermillion)] border-[var(--vermillion)]/40',
+      test:  'bg-[var(--gold)]/15 text-[var(--ink)] border-[var(--gold)]/50',
+      unlabeled: 'bg-transparent text-[var(--ink-faint)] border-[var(--rule-paper-2)]',
+    };
+    return (
+      <span className={`inline-block px-2 py-0.5 border text-[10px] font-mono uppercase tracking-[0.12em] ${colors[split] || colors.unlabeled}`}>
+        {split}
+      </span>
+    );
+  };
 
   return (
     <div
       style={{ height: `${heightPct}%` }}
       className="overflow-y-auto scrollbar-paper relative bg-[var(--paper)] border-t border-[var(--rule-paper-2)]"
     >
-      {/* Ledger masthead */}
       {sortedNodes.length > 0 && (
-        <div className="px-7 pt-7 pb-4 flex items-end justify-between border-b border-[var(--rule-paper)]">
-          <div>
-            <div className="eyebrow text-[var(--ink-dim)] flex items-center">
-              <span>Plate II</span><span className="rule-dot" /><span>The Register</span>
+        <div className="px-7 pt-7 pb-4 max-[900px]:px-4 max-[900px]:pt-3 max-[900px]:pb-2 flex items-end justify-between gap-3 border-b border-[var(--rule-paper)]">
+          <div className="min-w-0">
+            <div className="eyebrow text-[var(--ink-dim)] flex items-center max-[900px]:hidden">
+              <span>Plate II</span><span className="rule-dot" />
+              <span>{isSim ? `The Register · ${meta?.dataset || 'sim'}` : 'The Register'}</span>
             </div>
-            <h2 className="font-display text-[36px] leading-none mt-1.5 text-[var(--ink)]">
-              Table of Contents
+            <h2 className="font-display text-[36px] max-[900px]:text-[15px] max-[900px]:tracking-normal leading-none mt-1.5 max-[900px]:mt-0 text-[var(--ink)]">
+              {isSim ? 'Core Nodes' : 'Table of Contents'}
             </h2>
-            <p className="text-[14px] text-[var(--ink-soft)] mt-1.5 italic">
-              {sortedNodes.length} {sortedNodes.length === 1 ? 'paper' : 'papers'} in the densest block
+            <p className="text-[14px] max-[900px]:text-[11px] text-[var(--ink-soft)] mt-1.5 max-[900px]:mt-0.5 italic truncate">
+              {sortedNodes.length} {sortedNodes.length === 1 ? 'node' : 'nodes'} in the densest block
             </p>
           </div>
-          <div className="eyebrow text-[var(--ink-faint)]">— click column to sort —</div>
+          {isSim && classStats ? (
+            <div className="flex items-center gap-3 overflow-x-auto scrollbar-paper max-w-[55%]">
+              {Object.entries(classStats)
+                .sort((a, b) => b[1] - a[1] || parseInt(a[0]) - parseInt(b[0]))
+                .map(([lbl, cnt]) => (
+                  <div key={lbl} className="flex items-center gap-1.5 shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: classColor(parseInt(lbl), meta?.numClasses) }} />
+                    <span className="text-[12px] font-mono tnum text-[var(--ink-soft)]">c{lbl}·{cnt}</span>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="eyebrow text-[var(--ink-faint)] max-[900px]:hidden">— click column to sort —</div>
+          )}
         </div>
       )}
 
@@ -84,11 +131,23 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
           <thead className="sticky top-0 z-10 bg-[var(--paper)]/95 backdrop-blur border-b border-[var(--rule-paper-2)]">
             <tr>
               {renderTh('displayNum', '№', 'w-16')}
-              {renderTh('year', 'Year', 'w-20')}
-              {renderTh('title', 'Title · Authors')}
-              {renderTh('journal', 'Venue', 'w-52')}
-              {renderTh('citations', 'Cites', 'w-20')}
-              <th className="px-5 py-4 w-36" />
+              {isSim ? (
+                <>
+                  {renderTh('rawId', 'Node ID', 'w-28')}
+                  {renderTh('label', 'Class', 'w-28')}
+                  {renderTh('split', 'Split', 'w-24')}
+                  {renderTh('degree', 'Degree', 'w-24')}
+                  <th className="px-5 py-4" />
+                </>
+              ) : (
+                <>
+                  {renderTh('year', 'Year', 'w-20')}
+                  {renderTh('title', 'Title · Authors')}
+                  {renderTh('journal', 'Venue', 'w-52')}
+                  {renderTh('citations', 'Cites', 'w-20')}
+                  <th className="px-5 py-4 w-36" />
+                </>
+              )}
             </tr>
           </thead>
         )}
@@ -125,43 +184,70 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
                     )}
                   </div>
                 </td>
-                <td className="px-5 py-5 align-top">
-                  <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.year}</span>
-                </td>
-                <td className="px-5 py-5 align-top max-w-0">
-                  <div className="text-[16px] font-semibold leading-[1.3] text-[var(--ink)] mb-1.5">
-                    {node.title}
-                  </div>
-                  <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
-                    {node.author}
-                  </div>
-                </td>
-                <td className="px-5 py-5 align-top">
-                  <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
-                    {node.journal}
-                  </div>
-                </td>
-                <td className="px-5 py-5 align-top">
-                  <span className="font-mono tnum text-[14px] text-[var(--ink)]">
-                    {node.citations ? node.citations.toLocaleString() : '—'}
-                  </span>
-                </td>
-                <td className="px-5 py-5 align-top">
-                  <div className="flex items-center gap-3 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => onDetails(node)}
-                      className="eyebrow text-[var(--ink)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--ink)] hover:border-[var(--vermillion)] pb-0.5"
-                    >
-                      Read
-                    </button>
-                    <button
-                      onClick={() => onBib(node.doi)}
-                      className="eyebrow text-[var(--ink-dim)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--rule-paper-2)] hover:border-[var(--vermillion)] pb-0.5"
-                    >
-                      .bib
-                    </button>
-                  </div>
-                </td>
+
+                {isSim ? (
+                  <>
+                    <td className="px-5 py-5 align-top">
+                      <span className="font-mono tnum text-[15px] text-[var(--ink)]">{node.rawId}</span>
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-4 h-4 rounded-full border border-[var(--ink)]/20"
+                          style={{ backgroundColor: classColor(node.label, meta?.numClasses) }}
+                        />
+                        <span className="font-mono tnum text-[14px] text-[var(--ink)]">c{node.label}</span>
+                      </div>
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      {splitBadge(node.split)}
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.degree ?? '—'}</span>
+                    </td>
+                    <td className="px-5 py-5 align-top" />
+                  </>
+                ) : (
+                  <>
+                    <td className="px-5 py-5 align-top">
+                      <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.year}</span>
+                    </td>
+                    <td className="px-5 py-5 align-top max-w-0">
+                      <div className="text-[16px] font-semibold leading-[1.3] text-[var(--ink)] mb-1.5">
+                        {node.title}
+                      </div>
+                      <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                        {node.author}
+                      </div>
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                        {node.journal}
+                      </div>
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      <span className="font-mono tnum text-[14px] text-[var(--ink)]">
+                        {node.citations ? node.citations.toLocaleString() : '—'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-5 align-top">
+                      <div className="flex items-center gap-3 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => onDetails(node)}
+                          className="eyebrow text-[var(--ink)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--ink)] hover:border-[var(--vermillion)] pb-0.5"
+                        >
+                          Read
+                        </button>
+                        <button
+                          onClick={() => onBib(node.doi)}
+                          className="eyebrow text-[var(--ink-dim)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--rule-paper-2)] hover:border-[var(--vermillion)] pb-0.5"
+                        >
+                          .bib
+                        </button>
+                      </div>
+                    </td>
+                  </>
+                )}
               </tr>
             );
           })}
@@ -173,10 +259,19 @@ export default function PaperLedger({ nodes, queryNode, loading, error, hoveredN
           <div className="text-center max-w-xl">
             <div className="eyebrow text-[var(--ink-dim)]">Colophon</div>
             <p className="text-[18px] text-[var(--ink-soft)] leading-relaxed mt-4 italic">
-              The register is empty. Once the solver finishes its round,
-              the papers of the densest block will be typeset here — numbered,
-              sorted, and ready to read.
+              {isSim
+                ? 'The register is empty. Pick a dataset and node, and the densest block will be typeset here — colored by class label.'
+                : 'The register is empty. Once the solver finishes its round, the papers of the densest block will be typeset here — numbered, sorted, and ready to read.'}
             </p>
+          </div>
+        </div>
+      )}
+
+      {nodes.length === 0 && error && (
+        <div className="h-full flex items-center justify-center py-16 px-8">
+          <div className="max-w-xl border-l-4 border-[var(--ember)] bg-[var(--paper-2)] px-5 py-4">
+            <div className="eyebrow text-[var(--ember)]">Erratum</div>
+            <p className="text-[15px] text-[var(--ink)] leading-snug mt-2">{error}</p>
           </div>
         </div>
       )}

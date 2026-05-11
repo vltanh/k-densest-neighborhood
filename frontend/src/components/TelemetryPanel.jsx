@@ -92,12 +92,16 @@ export function DispatchView({ telemetry, loading }) {
   const bestSizeDisplay = telemetry.incumbent ? fmtInt(telemetry.incumbent.size) : null;
   const showFinalBlock =
     telemetry.density != null || telemetry.solverTime != null || telemetry.status === 'converged';
+  const showLiveBlock =
+    telemetry.iteration != null || telemetry.lambda != null || telemetry.incumbent != null ||
+    telemetry.startedAt != null || telemetry.bbNodes != null || telemetry.lpSolves != null;
 
   return (
-    <div className="flex flex-col flex-grow min-h-0 overflow-x-hidden fade-in">
-      {/* Fixed-height KPI grids at the top */}
+    <div className="flex flex-col flex-grow min-h-0 overflow-x-hidden fade-in telemetry-container">
+      {/* KPI grids — reflow 4→2 cols under 380px via container query */}
       <div className="shrink-0">
-        <div className="grid grid-cols-4 gap-x-4 border-t border-b border-[var(--rule-night)] py-3">
+        {showLiveBlock && (
+        <div className="telemetry-grid pb-3">
           <Stat label="Iter"      value={fmtInt(telemetry.iteration)} accent />
           <Stat label="λ"         value={fmtFloat(telemetry.lambda, 6)} accent />
           <Stat label="Best Obj"  value={bestObjDisplay} accent />
@@ -107,9 +111,10 @@ export function DispatchView({ telemetry, loading }) {
           <Stat label="B&B"       value={fmtInt(telemetry.bbNodes || null)} />
           <Stat label="LP"        value={fmtInt(telemetry.lpSolves || null)} />
         </div>
+        )}
 
         {showFinalBlock && (
-          <div className="grid grid-cols-4 gap-x-4 border-b border-[var(--rule-night)] py-3 fade-in">
+          <div className="telemetry-grid border-t border-[var(--rule-night)] pt-3 mt-3 pb-1 fade-in">
             <Stat label="Density"  value={fmtFloat(telemetry.density, 6)} accent />
             <Stat label="Size"     value={fmtInt(telemetry.size)} accent />
             <Stat label="Solve"    value={telemetry.solverTime != null ? `${telemetry.solverTime.toFixed(3)}s` : null} />
@@ -194,23 +199,17 @@ export function LogView({ logs, loading }) {
   };
 
   return (
-    <div className="flex flex-col flex-grow min-h-0 border border-[var(--rule-night)] bg-[var(--night)] overflow-hidden relative scan-line">
-      <div className="px-3 py-2.5 eyebrow text-[var(--on-night-faint)] flex items-center justify-between border-b border-[var(--rule-night)] shrink-0">
-        <div className="flex items-center gap-2">
-          <span>solver.log</span>
-          <span className="text-[var(--on-night-faint)] normal-case tnum font-mono text-[12px]">{logs.length}</span>
-        </div>
-        {!stickToBottom && logs.length > 0 && (
-          <button
-            type="button"
-            onClick={jumpToBottom}
-            className="flex items-center gap-1 text-[11px] text-[var(--gold)] hover:text-[var(--on-night)] transition-colors normal-case tracking-normal"
-            title="Resume auto-scroll"
-          >
-            <ChevronDown size={12} /> latest
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col flex-grow min-h-0 overflow-hidden relative scan-line">
+      {!stickToBottom && logs.length > 0 && (
+        <button
+          type="button"
+          onClick={jumpToBottom}
+          className="absolute top-2 right-3 z-20 flex items-center gap-1 text-[11px] text-[var(--gold)] hover:text-[var(--on-night)] bg-[var(--night-2)]/90 backdrop-blur border border-[var(--rule-night)] px-2 py-1 transition-colors normal-case tracking-normal"
+          title="Resume auto-scroll"
+        >
+          <ChevronDown size={12} /> latest
+        </button>
+      )}
       <div
         ref={containerRef}
         onScroll={onScroll}

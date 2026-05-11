@@ -1,19 +1,28 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import * as d3 from 'd3';
-import { ZoomIn, ZoomOut, Maximize, Download } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Download, Layers, X } from 'lucide-react';
+import { ORACLE_SIM, classColor } from '../constants';
 
-// Palette locked to the design system — blue edition.
+// Palette — azure chrome + ember hot accent for seed.
 const COL_INK      = '#0B1A2E';
-const COL_VERMIL   = '#3A7CE3';  // seed — saturated azure
-const COL_GOLD     = '#7EB9E8';  // core ring highlight — ice blue
+const COL_EMBER    = '#D97757';  // seed — warm hot accent
+const COL_ICE      = '#7EB9E8';  // core ring highlight — ice blue
 const COL_INK_SOFT = '#4D6585';
 const COL_GHOST    = '#AFC0D6';
 const COL_GHOST_LN = '#8297B2';
 const COL_CORE     = '#1B3A66';  // core fill — deep navy
 
-export default function GraphView({ graphData, queryNode, error, hoveredNode, setHoveredNode, setClickedNode, heightPct }) {
+export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct }) {
+  const isSim = oracleMode === ORACLE_SIM;
+  const numClasses = meta?.numClasses ?? null;
+  const coreFill = (d) => {
+    if (d.type !== 'core') return COL_GHOST;
+    if (isSim) return classColor(d.label, numClasses);
+    return COL_CORE;
+  };
   const svgRef = useRef();
   const zoomBehaviorRef = useRef(null);
+  const [legendOpen, setLegendOpen] = useState(true);
 
   const stats = useMemo(() => {
     const v = graphData.nodes.filter(n => n.type === 'core').length;
@@ -21,6 +30,18 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
     const density = v > 1 ? (e / (v * (v - 1))).toFixed(4) : '0.0000';
     return { v, e, density, ghosts: graphData.nodes.length - v };
   }, [graphData]);
+
+  const presentClasses = useMemo(() => {
+    if (!isSim) return [];
+    const counts = new Map();
+    graphData.nodes.forEach(n => {
+      if (n.type !== 'core' || n.label == null || n.label < 0) return;
+      counts.set(n.label, (counts.get(n.label) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .map(([label, count]) => ({ label, count }));
+  }, [graphData, isSim]);
 
   const handleZoom = (factor) => {
     if (svgRef.current && zoomBehaviorRef.current)
@@ -35,18 +56,33 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
     const blob = new Blob([new XMLSerializer().serializeToString(svgRef.current)], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url; link.download = `kdensest_${queryNode}.svg`;
+    const prefix = isSim ? `kdensest_${meta?.dataset || 'sim'}` : 'kdensest';
+    link.href = url; link.download = `${prefix}_${queryNode}.svg`;
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
+
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const el = svgRef.current;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setSize(prev => (prev.w === r.width && prev.h === r.height) ? prev : { w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    const r = el.getBoundingClientRect();
+    setSize({ w: r.width, h: r.height });
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
     if (!graphData.nodes.length) return;
-
-    const { width, height } = svg.node().getBoundingClientRect();
+    const { w: width, h: height } = size;
+    if (width === 0 || height === 0) return;
 
     const getEpoch = (n) => {
       if (n.date && n.date !== 'N/A') return new Date(n.date).getTime();
@@ -55,7 +91,12 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
     };
 
     const coreNodes = graphData.nodes.filter(n => n.type === 'core');
-    coreNodes.sort((a, b) => getEpoch(a) - getEpoch(b));
+    if (isSim) {
+      // Sort by class label, then node id — groups same-class cores together
+      coreNodes.sort((a, b) => (a.label - b.label) || (a.rawId - b.rawId));
+    } else {
+      coreNodes.sort((a, b) => getEpoch(a) - getEpoch(b));
+    }
 
     const rankMap = new Map();
     coreNodes.forEach((n, i) => rankMap.set(n.id, i));
@@ -70,7 +111,7 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
         const rank = rankMap.get(copy.id);
         copy.targetX = startX + rank * xSpacing;
         copy.x = copy.targetX;
-        copy.y = height / 2 + (rank % 2 === 0 ? 1 : -1) * (100 + Math.random() * 60);
+        copy.y = height / 2 + (rank % 2 === 0 ? 1 : -1) * (160 + Math.random() * 120);
       } else {
         copy.y = height / 2;
         copy.targetX = width / 2;
@@ -97,8 +138,13 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
 
     const g = svg.append('g');
 
-    const initialScale = totalWidth > width ? width / (totalWidth + 200) : 1;
-    const initialTransform = d3.zoomIdentity.translate(width/2 - (width/2 * initialScale), height/2 - (height/2 * initialScale)).scale(initialScale);
+    const totalHeight = 2 * (160 + 120) + 80;
+    const scaleX = (totalWidth + 200) > width ? width / (totalWidth + 200) : 1;
+    const scaleY = totalHeight > height ? height / totalHeight : 1;
+    const initialScale = Math.min(scaleX, scaleY, 1);
+    const initialTransform = d3.zoomIdentity
+      .translate(width/2 - (width/2 * initialScale), height/2 - (height/2 * initialScale))
+      .scale(initialScale);
 
     const zoom = d3.zoom().scaleExtent([0.05, 4]).on('zoom', (e) => g.attr('transform', e.transform));
     svg.call(zoom);
@@ -107,10 +153,10 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
 
     const simulation = d3.forceSimulation(nodes)
       .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'core' ? 120 : 40))
-      .force('charge', d3.forceManyBody().strength(d => d.type === 'core' ? -1200 : -20))
-      .force('y', d3.forceY(height / 2).strength(0.02))
-      .force('x', d3.forceX(d => d.type === 'core' ? d.targetX : width/2).strength(d => d.type === 'core' ? 0.8 : 0.01))
-      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 35 : 8));
+      .force('charge', d3.forceManyBody().strength(d => d.type === 'core' ? -1800 : -25))
+      .force('y', d3.forceY(height / 2).strength(0.012))
+      .force('x', d3.forceX(d => d.type === 'core' ? d.targetX : width/2).strength(d => d.type === 'core' ? 0.35 : 0.01))
+      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 38 : 8));
 
     const link = g.append('g').selectAll('line').data(links).join('line')
       .attr('stroke', d => d.type === 'core' ? COL_INK_SOFT : COL_GHOST_LN)
@@ -119,11 +165,24 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
       .attr('stroke-dasharray', d => d.type === 'core' ? 'none' : '2,4')
       .attr('marker-end', d => d.type === 'core' ? 'url(#arrow-core)' : 'url(#arrow-ghost)');
 
+    // Seed halo — single pulsing ring, behind node. One cue, not five.
+    const seedHalo = g.append('g').selectAll('g')
+      .data(nodes.filter(n => n.id === queryNode))
+      .join('g')
+      .attr('class', 'seed-halo');
+    seedHalo.append('circle')
+      .attr('class', 'seed-halo-pulse')
+      .attr('r', 32)
+      .attr('fill', 'none')
+      .attr('stroke', COL_EMBER)
+      .attr('stroke-width', 2)
+      .attr('stroke-opacity', 0.7);
+
     const node = g.append('g').selectAll('circle').data(nodes).join('circle')
       .attr('class', 'graph-node')
       .attr('r', d => d.type === 'core' ? 24 : 4)
-      .attr('fill', d => d.type === 'core' ? (d.id === queryNode ? COL_VERMIL : COL_CORE) : COL_GHOST)
-      .attr('stroke', d => d.type === 'core' ? COL_GOLD : 'none')
+      .attr('fill', coreFill)
+      .attr('stroke', d => d.type === 'core' ? (d.id === queryNode ? COL_EMBER : COL_ICE) : 'none')
       .attr('stroke-width', d => d.type === 'core' ? 1.5 : 0)
       .style('cursor', 'pointer')
       .call(d3.drag()
@@ -158,55 +217,85 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
       });
       node.attr('cx', d => d.x).attr('cy', d => d.y);
       labels.attr('x', d => d.x).attr('y', d => d.y);
+      seedHalo.attr('transform', d => `translate(${d.x}, ${d.y})`);
     });
 
-    return () => simulation.stop();
+    // Animate the pulse ring — pause when tab hidden to save battery.
+    let pulseTimer = null;
+    const startPulse = () => {
+      if (pulseTimer) return;
+      pulseTimer = d3.interval((elapsed) => {
+        const t = (elapsed % 1800) / 1800;
+        const r = 28 + t * 22;
+        const op = 0.65 * (1 - t);
+        seedHalo.select('.seed-halo-pulse').attr('r', r).attr('stroke-opacity', op);
+      }, 30);
+    };
+    const stopPulse = () => { if (pulseTimer) { pulseTimer.stop(); pulseTimer = null; } };
+    const onVis = () => document.hidden ? stopPulse() : startPulse();
+    startPulse();
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      simulation.stop();
+      stopPulse();
+      document.removeEventListener('visibilitychange', onVis);
+    };
     // queryNode is intentionally NOT in deps — typing in the Seed Paper ID
     // field should not rebuild the simulation (which caused a jitter on every
     // keystroke). Seed highlighting is handled by the lightweight effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphData, setHoveredNode, setClickedNode]);
+  }, [graphData, setHoveredNode, setClickedNode, isSim, size]);
 
   // Re-paint the seed node fill without touching the simulation.
   useEffect(() => {
     if (!svgRef.current) return;
-    d3.select(svgRef.current).selectAll('.graph-node')
-      .attr('fill', d => d.type === 'core' ? (d.id === queryNode ? COL_VERMIL : COL_CORE) : COL_GHOST);
-  }, [queryNode]);
+    const svg = d3.select(svgRef.current);
+    svg.selectAll('.graph-node')
+      .attr('fill', coreFill)
+      .attr('stroke', d => d.type === 'core' ? (d.id === queryNode ? COL_EMBER : COL_ICE) : 'none')
+      .attr('stroke-width', d => d.type === 'core' ? 1.5 : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryNode, isSim]);
 
   useEffect(() => {
     if (!svgRef.current) return;
     d3.select(svgRef.current).selectAll('.graph-node')
       .transition().duration(200)
-      .attr('stroke', d => d.id === hoveredNode ? COL_VERMIL : (d.type === 'core' ? COL_GOLD : 'none'))
+      .attr('stroke', d => {
+        if (d.id === hoveredNode) return COL_EMBER;
+        if (d.type !== 'core') return 'none';
+        return d.id === queryNode ? COL_EMBER : COL_ICE;
+      })
       .attr('stroke-width', d => d.id === hoveredNode ? 3 : (d.type === 'core' ? 1.5 : 0))
       .attr('r', d => d.type === 'core' ? (d.id === hoveredNode ? 28 : 24) : 4);
-  }, [hoveredNode]);
+  }, [hoveredNode, queryNode]);
 
   return (
     <div style={{ height: `${heightPct}%` }} className="w-full relative overflow-hidden texture-grid">
-      {/* Decorative corner marks */}
+      {/* Corner marks — owned here only, not in modals */}
       <div className="absolute top-0 left-0 w-4 h-4 border-l border-t border-[var(--ink)] pointer-events-none" />
       <div className="absolute top-0 right-0 w-4 h-4 border-r border-t border-[var(--ink)] pointer-events-none" />
       <div className="absolute bottom-0 left-0 w-4 h-4 border-l border-b border-[var(--ink)] pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-4 h-4 border-r border-b border-[var(--ink)] pointer-events-none" />
 
       {/* ═══ EDITORIAL HEADER STRIP ═══════════════════════════════════════ */}
-      <div className="absolute top-5 left-6 right-6 flex items-start justify-between pointer-events-none z-10">
-        <div className="pointer-events-auto">
+      <div className="absolute top-5 left-6 right-6 max-[900px]:top-3 max-[900px]:left-4 max-[900px]:right-4 flex items-start justify-between gap-4 pointer-events-none z-10">
+        <div className="pointer-events-auto max-[900px]:hidden">
           <div className="eyebrow text-[var(--ink-dim)] flex items-center">
-            <span>Plate I</span><span className="rule-dot" /><span>Community Atlas</span>
+            <span>Plate I</span><span className="rule-dot" />
+            <span>{isSim ? `Community Atlas · ${meta?.dataset || 'sim'}` : 'Community Atlas'}</span>
           </div>
-          <h2 className="font-display text-[36px] leading-none mt-1.5 text-[var(--ink)]">
+          <h2 className="type-hero text-[var(--ink)] mt-1.5">
             The Dense Neighbourhood
           </h2>
-          <p className="text-[14px] text-[var(--ink-soft)] mt-1.5 italic">
-            sorted chronologically, west to east
+          <p className="type-sub text-[var(--ink-soft)] mt-2">
+            {isSim ? 'colored by class label, grouped by class' : 'sorted chronologically, west to east'}
           </p>
         </div>
 
         {graphData.nodes.length > 0 && (
-          <div className="pointer-events-auto flex items-stretch gap-5 fade-in">
+          <div className="pointer-events-auto ml-auto flex items-stretch gap-3 md:gap-5 fade-in">
             <StatCell label="Core" value={stats.v} />
             <Divider />
             <StatCell label="Frontier" value={stats.ghosts} muted />
@@ -224,21 +313,44 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
         <button onClick={exportSVG}             className="btn-chrome" title="Export SVG"><Download size={15}/></button>
       </div>
 
-      {/* ═══ LEGEND ═══════════════════════════════════════════════════════ */}
+      {/* ═══ LEGEND DRAWER — collapsible, bottom-left ═════════════════════ */}
       {graphData.nodes.length > 0 && (
-        <div className="absolute bottom-5 left-6 flex items-center gap-5 z-10 pointer-events-none">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-[var(--vermillion)]" />
-            <span className="text-[var(--ink-soft)] text-[13px] italic">seed</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-[#1B3A66] ring-1 ring-[var(--gold)]" />
-            <span className="text-[var(--ink-soft)] text-[13px] italic">core member</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#AFC0D6]" />
-            <span className="text-[var(--ink-soft)] text-[13px] italic">frontier</span>
-          </div>
+        <div className="absolute bottom-5 left-6 max-[900px]:bottom-auto max-[900px]:top-3 max-[900px]:left-3 z-10 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => setLegendOpen(o => !o)}
+            className="inline-flex items-center gap-2 eyebrow text-[var(--ink-dim)] hover:text-[var(--ink)] bg-[var(--paper)]/90 backdrop-blur border border-[var(--rule-paper-2)] px-3 py-2 transition-colors"
+            title={legendOpen ? 'Hide legend' : 'Show legend'}
+          >
+            <Layers size={12} />
+            <span>{isSim ? `Classes · ${presentClasses.length}${numClasses ? `/${numClasses}` : ''}` : 'Legend'}</span>
+          </button>
+          {legendOpen && (
+            <div className="mt-2 bg-[var(--paper)]/95 backdrop-blur border border-[var(--rule-paper-2)] px-4 py-3 max-w-[640px] max-[900px]:max-w-[min(calc(100vw-2rem),240px)] fade-in">
+              {!isSim ? (
+                <div className="flex items-center gap-5">
+                  <LegendDot color="#1B3A66" ring="var(--ember)" label="seed" />
+                  <LegendDot color="#1B3A66" ring="var(--ice)" label="core member" />
+                  <LegendDot color="#AFC0D6" size={8} label="frontier" />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 pb-2 border-b border-[var(--rule-paper)]">
+                    <span className="w-3 h-3 rounded-full border-2 border-[var(--ember)]" style={{ boxSizing: 'border-box' }} />
+                    <span className="text-[12px] font-mono tnum text-[var(--ink-soft)]">seed · ember ring</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5 max-h-40 overflow-y-auto scrollbar-paper pr-2">
+                    {presentClasses.map(({ label, count }) => (
+                      <div key={label} className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: classColor(label, numClasses) }} />
+                        <span className="text-[11px] font-mono tnum text-[var(--ink-soft)]">c{label}·{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -253,19 +365,20 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center max-w-lg px-8">
             <div className="eyebrow text-[var(--ink-dim)]">An invitation</div>
-            <h3 className="font-display text-[48px] leading-[0.95] mt-3 text-[var(--ink)]">
+            <h3 className="font-display text-[48px] max-[900px]:text-[26px] leading-[0.95] mt-3 text-[var(--ink)]">
               Pick a paper.<br />
               <span className="text-[var(--vermillion)] italic font-normal">Read its block.</span>
             </h3>
-            <p className="text-[16px] text-[var(--ink-soft)] mt-5 leading-relaxed">
-              Configure your parameters to the left — the explorer will find the densest
-              community around your seed paper and typeset it below.
+            <p className="text-[16px] max-[900px]:text-[13px] text-[var(--ink-soft)] mt-5 leading-relaxed">
+              <span className="max-[900px]:hidden">Configure your parameters to the left — the explorer will find the densest
+              community around your seed paper and typeset it below.</span>
+              <span className="hidden max-[900px]:inline">Tap the gear to configure, then Run.</span>
             </p>
           </div>
         </div>
       )}
 
-      <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing outline-none" />
+      <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing outline-none" style={{ touchAction: 'none' }} />
     </div>
   );
 }
@@ -273,6 +386,20 @@ export default function GraphView({ graphData, queryNode, error, hoveredNode, se
 // ── Small display helpers ──────────────────────────────────────────────────────
 const Divider = () => (
   <div className="w-px self-stretch bg-[var(--rule-paper-2)] my-1" />
+);
+
+const LegendDot = ({ color, label, ring = null, size = 12 }) => (
+  <div className="flex items-center gap-2">
+    <span
+      className="rounded-full inline-block"
+      style={{
+        width: size, height: size,
+        backgroundColor: color,
+        boxShadow: ring ? `0 0 0 1px ${ring}` : 'none',
+      }}
+    />
+    <span className="text-[13px] text-[var(--ink-soft)] italic">{label}</span>
+  </div>
 );
 
 const StatCell = ({ label, value, muted = false, accent = false, mono = false }) => (

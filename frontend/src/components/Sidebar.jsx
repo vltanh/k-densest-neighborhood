@@ -1,11 +1,8 @@
 import { useState } from 'react';
-import { Square, Play } from 'lucide-react';
+import { Square, Play, ChevronDown } from 'lucide-react';
 import { DispatchView, LogView, StatusBadge } from './TelemetryPanel';
+import { ORACLE_MODES, ORACLE_SIM, SIM_DATASETS } from '../constants';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tab — a minimal underline tab for the night-side chrome.
-// Active: gold baseline + high-contrast label. Inactive: faint label.
-// ─────────────────────────────────────────────────────────────────────────────
 function Tab({ label, active, onClick, badge = null }) {
   return (
     <button
@@ -34,49 +31,141 @@ function TabBar({ children }) {
   );
 }
 
-export default function Sidebar({ width, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
+function OracleDropdown({ value, onChange, disabled }) {
+  const current = ORACLE_MODES.find(m => m.value === value) || ORACLE_MODES[0];
+  return (
+    <div className="relative inline-block">
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none bg-transparent border border-[var(--rule-night)] hover:border-[var(--gold)] text-[var(--on-night)] text-[11px] uppercase tracking-[0.16em] pl-3 pr-7 py-1.5 font-mono cursor-pointer focus:outline-none focus:border-[var(--gold)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Switch oracle backend"
+      >
+        {ORACLE_MODES.map(m => (
+          <option key={m.value} value={m.value} className="bg-[var(--night)] text-[var(--on-night)]">
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--on-night-faint)]" />
+      <span className="sr-only">{current.label}</span>
+    </div>
+  );
+}
+
+export default function Sidebar({ width, fluid = false, hideFeed = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
   const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
-  const [configTab, setConfigTab] = useState('query');   // 'query' | 'advanced'
-  const [feedTab, setFeedTab] = useState('dispatch');    // 'dispatch' | 'log'
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [feedTab, setFeedTab] = useState('dispatch');
+  const isSim = oracleMode === ORACLE_SIM;
 
   return (
     <div
-      style={{ width: `${width}px` }}
-      className="texture-night text-[var(--on-night)] flex flex-col h-full overflow-hidden shrink-0 z-20 relative"
+      style={fluid ? { width: '100%' } : { width: `${width}px` }}
+      className={`texture-night text-[var(--on-night)] flex flex-col h-full ${hideFeed ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'} shrink-0 z-20 relative`}
     >
-      {/* Hairline outer frame */}
       <div className="absolute inset-0 pointer-events-none border-r border-[var(--rule-night)]" />
 
-      {/* ═══ HEADER ══════════════════════════════════════════════════ */}
+      {/* HEADER */}
+      {!hideHeader && (
       <header className="px-7 pt-8 pb-6 shrink-0 relative">
-        <h1 className="font-display text-[26px] leading-tight text-[var(--on-night)] lowercase">
-          k-densest subgraph explorer
-        </h1>
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="font-display text-[26px] leading-tight text-[var(--on-night)] lowercase">
+            k-densest subgraph explorer
+          </h1>
+          <OracleDropdown value={oracleMode} onChange={onOracleChange} disabled={loading} />
+        </div>
+        {isSim && (
+          <div className="mt-2 text-[11px] tracking-[0.14em] uppercase text-[var(--gold)] font-mono">
+            Simulation · annotated citation graphs
+          </div>
+        )}
       </header>
+      )}
 
-      {/* Running status marquee — height reserved even when idle */}
       <div className="h-[3px] shrink-0 relative">
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-[var(--rule-night)]" />
         {loading && <div className="absolute inset-0 marquee-bar" />}
       </div>
 
-      {/* ═══ CONFIG — Query / Advanced tabs ══════════════════════════ */}
+      {/* CONFIG */}
       <section className="px-7 pt-5 shrink-0">
-        <TabBar>
-          <Tab label="Query" active={configTab === 'query'} onClick={() => setConfigTab('query')} />
-          <Tab label="Advanced" active={configTab === 'advanced'} onClick={() => setConfigTab('advanced')} />
-        </TabBar>
-
-        <div className="pt-5 pb-6">
-          {configTab === 'query' && (
+        <div className="pb-5">
+          {(
             <div className="space-y-5 fade-in">
-              <div>
-                <label className="field-label flex justify-between items-baseline">
-                  <span>Seed Paper ID</span>
-                  <span className="text-[var(--gold)] normal-case tracking-normal text-[11px] italic">entry point</span>
-                </label>
-                <input type="text" value={params.queryNode} onChange={set('queryNode')} className="field-input" />
-              </div>
+              {hideHeader && (
+                <div>
+                  <label className="field-label">Dataset</label>
+                  <select
+                    value={isSim ? `sim:${params.dataset}` : 'openalex'}
+                    disabled={loading}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === 'openalex') {
+                        onOracleChange(ORACLE_MODES[0].value);
+                      } else if (v.startsWith('sim:')) {
+                        const ds = v.slice(4);
+                        onOracleChange(ORACLE_SIM);
+                        setParams(prev => ({ ...prev, dataset: ds }));
+                      }
+                    }}
+                    className="field-input"
+                  >
+                    <option value="openalex" className="bg-[var(--night)] text-[var(--on-night)]">OpenAlex</option>
+                    {SIM_DATASETS.map(d => (
+                      <option key={d} value={`sim:${d}`} className="bg-[var(--night)] text-[var(--on-night)]">[S] {d}</option>
+                    ))}
+                  </select>
+                  {isSim && (
+                    <div className="mt-1.5 text-[11px] text-[var(--gold)] italic">
+                      [S] = simulated · annotated citation graph
+                    </div>
+                  )}
+                </div>
+              )}
+              {isSim ? (
+                <div>
+                  <label htmlFor="seed-input" className="field-label flex justify-between items-baseline">
+                    <span>Query Node ID</span>
+                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-[var(--on-night-faint)]">
+                      press <kbd className="kbd-hint" style={{ background: 'var(--night-3)', color: 'var(--on-night-dim)', borderColor: 'var(--rule-night-2)' }}>/</kbd>
+                    </span>
+                  </label>
+                  <input
+                    id="seed-input"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={params.queryNode}
+                    onChange={set('queryNode')}
+                    className="field-input"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="seed-input" className="field-label flex justify-between items-baseline">
+                    <span>Seed Paper ID</span>
+                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-[var(--on-night-faint)]">
+                      press <kbd className="kbd-hint" style={{ background: 'var(--night-3)', color: 'var(--on-night-dim)', borderColor: 'var(--rule-night-2)' }}>/</kbd>
+                    </span>
+                  </label>
+                  <input
+                    id="seed-input"
+                    type="text"
+                    value={params.queryNode}
+                    onChange={set('queryNode')}
+                    placeholder="W2741809807"
+                    pattern="W\d+"
+                    className="field-input"
+                  />
+                  {params.queryNode && !/^W\d+$/.test(params.queryNode) && (
+                    <div className="mt-1 text-[11px] text-[var(--ember)] italic">
+                      expected OpenAlex work ID (e.g. W2741809807)
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="field-label">Min Community Size · k</label>
                 <input type="number" min="2" step="1" value={params.k} onChange={set('k')} className="field-input" />
@@ -84,13 +173,26 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
             </div>
           )}
 
-          {configTab === 'advanced' && (
-            <div className="max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2 fade-in">
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen(v => !v)}
+          className="w-full flex items-center justify-between py-3 border-t border-[var(--rule-night)] eyebrow text-[var(--on-night-dim)] hover:text-[var(--on-night)] transition-colors"
+          aria-expanded={advancedOpen}
+        >
+          <span>Advanced</span>
+          <ChevronDown size={13} className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        <div className="pb-6">
+          {advancedOpen && (
+            <div className={`pt-4 ${hideFeed ? '' : 'max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2'} fade-in`}>
               <div className="space-y-5">
               <div className="grid grid-cols-2 gap-x-5 gap-y-5">
                 <div>
                   <label className="field-label">Max In-Edges</label>
-                  <input type="number" min="0" step="500" value={params.maxInEdges} onChange={set('maxInEdges')} className="field-input" />
+                  <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
                 </div>
                 <div>
                   <label className="field-label">Dinkelbach Iter</label>
@@ -120,7 +222,7 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
                 </div>
                 <div>
                   <label className="field-label">Min Batch</label>
-                  <input type="number" min="1" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
+                  <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
                 </div>
                 <div>
                   <label className="field-label">Max Batch</label>
@@ -138,7 +240,8 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
         </div>
       </section>
 
-      {/* ═══ FEED — Dispatch / Log tabs ══════════════════════════════ */}
+      {/* FEED */}
+      {!hideFeed && (
       <section className="px-7 pb-6 flex flex-col flex-grow overflow-hidden min-h-0">
         <TabBar>
           <Tab label="Dispatch" active={feedTab === 'dispatch'} onClick={() => setFeedTab('dispatch')} />
@@ -165,19 +268,22 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
           {feedTab === 'log' && <LogView logs={logs} loading={loading} />}
         </div>
       </section>
+      )}
 
-      {/* ═══ FOOTER / ACTION ═════════════════════════════════════════ */}
+      {/* FOOTER */}
+      {!hideFooter && (
       <footer className="px-7 pt-5 pb-7 shrink-0 border-t border-[var(--rule-night)] bg-[var(--night-2)] relative">
         <div className="flex items-center gap-3">
           {!loading ? (
-            <button onClick={onExtract} className="btn-press">
+            <button onClick={onExtract} className="btn-press" title="Extract Community (⌘/Ctrl + Enter)">
               <Play size={13} fill="currentColor" />
-              <span>Extract Community</span>
+              <span>Extract</span>
+              <span className="kbd">⌘↵</span>
             </button>
           ) : (
             <>
               <button disabled className="btn-press">
-                <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-[var(--gold)] inline-block" />
+                <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-[var(--ice)] inline-block" />
                 <span>Computing</span>
               </button>
               <button onClick={onStop} className="btn-stop" title="Stop">
@@ -187,9 +293,12 @@ export default function Sidebar({ width, params, setParams, logs, telemetry, loa
           )}
         </div>
         <div className="mt-4 eyebrow text-[var(--on-night-faint)]">
-          Session · Active
+          Session · Active · {isSim ? `${params.dataset}` : 'OpenAlex'}
         </div>
       </footer>
+      )}
+
+      {hideFeed && <div className="flex-grow" />}
     </div>
   );
 }

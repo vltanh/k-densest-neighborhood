@@ -11,16 +11,11 @@ export default function PaperModal({ content, onClose }) {
       onClick={onClose}
     >
       <div
-        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[10px_10px_0_0_var(--ink)] border border-[var(--ink)] fade-in"
+        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[0_12px_40px_-8px_rgba(11,26,46,0.35)] border border-[var(--ink)] fade-in"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* corner ticks */}
-        <div className="absolute top-0 left-0 w-3 h-3 border-l-2 border-t-2 border-[var(--vermillion)] pointer-events-none" />
-        <div className="absolute top-0 right-0 w-3 h-3 border-r-2 border-t-2 border-[var(--vermillion)] pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-3 h-3 border-l-2 border-b-2 border-[var(--vermillion)] pointer-events-none" />
-        <div className="absolute bottom-0 right-0 w-3 h-3 border-r-2 border-b-2 border-[var(--vermillion)] pointer-events-none" />
-
-        {/* Header */}
+        {/* Header — single ember hairline on top marks modal identity without corner fleet */}
+        <div className="h-[3px] shrink-0 bg-[var(--ember)]" />
         <div className="px-8 pt-7 pb-5 shrink-0 border-b border-[var(--rule-paper-2)] flex justify-between items-start">
           <div>
             <div className="eyebrow text-[var(--ink-dim)]">
@@ -29,12 +24,13 @@ export default function PaperModal({ content, onClose }) {
               {content.type === 'loading_bib' && 'Dispatch · in transit'}
               {content.type === 'error'       && 'Erratum'}
             </div>
-            <h3 className="font-display text-[28px] leading-none mt-1 text-[var(--ink)]">
+            <h3 className="type-plate mt-1 text-[var(--ink)]">
               {content.type === 'abstract'    && 'Paper in Full'}
               {content.type === 'bibtex'      && 'BibTeX Record'}
               {content.type === 'loading_bib' && 'Fetching from the registry…'}
               {content.type === 'error'       && 'Something went amiss'}
             </h3>
+            <p className="text-[11px] text-[var(--ink-faint)] mt-2 italic">press Esc to close</p>
           </div>
           <button
             onClick={onClose}
