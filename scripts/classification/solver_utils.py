@@ -542,38 +542,44 @@ def evaluate_nodes(
         ):
             record, from_cache = future.result()
             q_node = record["query_node"]
-            neighborhood = record.get("neighborhood") or []
-            pred_sizes.append(len(neighborhood))
-            oracle_query_counts.append(record["oracle_queries"])
+            neighborhood = record.get("neighborhood")
+            pred_sizes.append(record.get("size") or (len(neighborhood) if neighborhood else 0))
+            oracle_query_counts.append(record.get("oracle_queries"))
 
             if compute_qualities:
                 qualities_local = record.get("qualities")
-                if qualities_local is None:
+                if qualities_local is None and neighborhood is not None:
                     qualities_local = compute_subgraph_quality(
                         neighborhood, out_neighbors, mincut_neighbors
                     )
                     record["qualities"] = qualities_local
+                if qualities_local is None:
+                    qualities_local = {}
                 for key in quality_values:
                     quality_values[key].append(qualities_local.get(key, math.nan))
 
-            pred_label, fb = _classify_query(
-                q_node,
-                neighborhood,
-                train_mask,
-                labels,
-                forbidden_set,
-                weighting,
-                G,
-                fallback_graph,
-                max_fallback_hops,
-                global_majority,
-            )
+            if from_cache and record.get("predicted_label") is not None:
+                pred_label = record["predicted_label"]
+                fb = bool(record.get("fallback_used"))
+            else:
+                pred_label, fb = _classify_query(
+                    q_node,
+                    neighborhood or [],
+                    train_mask,
+                    labels,
+                    forbidden_set,
+                    weighting,
+                    G,
+                    fallback_graph,
+                    max_fallback_hops,
+                    global_majority,
+                )
+                record["predicted_label"] = (
+                    int(pred_label) if pred_label is not None else None
+                )
+                record["fallback_used"] = fb
             if fb:
                 fallback_count += 1
-            record["predicted_label"] = (
-                int(pred_label) if pred_label is not None else None
-            )
-            record["fallback_used"] = fb
 
             if records_file_path is not None and not from_cache:
                 lean = {k_: v for k_, v in record.items() if k_ != "neighborhood"}
