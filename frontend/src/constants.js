@@ -28,8 +28,6 @@ export const SIM_DATASETS = ['Cora', 'PubMed', 'DBLP', 'CiteSeer', 'Cora_ML'];
 export const VARIANT_BP            = 'bp';
 export const VARIANT_AVGDEG        = 'avgdeg';
 export const VARIANT_BFS           = 'bfs';
-export const VARIANT_CONN_GREEDY   = 'conn_greedy';
-export const VARIANT_CONN_AVGDEG   = 'conn_avgdeg';
 
 export const SOLVER_VARIANTS = [
   {
@@ -49,18 +47,6 @@ export const SOLVER_VARIANTS = [
     label: 'BFS Expansion',
     blurb: 'Pure breadth-first frontier around the seed. Fast, no quality guarantee.',
     uses: { bfsDepth: true },
-  },
-  {
-    value: VARIANT_CONN_GREEDY,
-    label: 'Connected Greedy',
-    blurb: 'Greedy size-k that maintains connectivity to the seed.',
-    uses: { k: true, baselineDepth: true },
-  },
-  {
-    value: VARIANT_CONN_AVGDEG,
-    label: 'Exact Connected Avg-Degree',
-    blurb: 'Densest connected subgraph anchored at the seed. ILP-based.',
-    uses: { baselineDepth: true },
   },
 ];
 

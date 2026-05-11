@@ -72,7 +72,6 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
   const usesK             = !!spec.uses?.k;
   const usesKappa         = !!spec.uses?.kappa;
   const usesBfsDepth      = !!spec.uses?.bfsDepth;
-  const usesBaselineDepth = !!spec.uses?.baselineDepth;
   const usesBpInternals   = !!spec.uses?.bpInternals;
   const usesTimeBudget    = spec.uses?.timeBudget !== false;
 
@@ -247,14 +246,6 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                   <label className="field-label">BFS Depth</label>
                   <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
                   <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">hops out from the seed</div>
-                </div>
-              )}
-
-              {usesBaselineDepth && (
-                <div>
-                  <label className="field-label">Frontier Depth</label>
-                  <input type="number" min="-1" step="1" value={params.baselineDepth} onChange={set('baselineDepth')} className="field-input" />
-                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">BFS radius for candidate pool · -1 unbounded</div>
                 </div>
               )}
             </div>

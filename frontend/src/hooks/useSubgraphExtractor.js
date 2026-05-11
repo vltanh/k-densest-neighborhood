@@ -52,7 +52,6 @@ export function useSubgraphExtractor(sessionId) {
       variant:            params.variant || VARIANT_BP,
       k:                  pi(params.k,               5),
       kappa:              pi(params.kappa,           0),
-      baseline_depth:     pi(params.baselineDepth,  -1),
       bfs_depth:          pi(params.bfsDepth,        1),
       time_limit:         pf(params.timeLimit,       60.0),
       node_limit:         pi(params.nodeLimit,       100000),

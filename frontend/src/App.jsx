@@ -14,7 +14,6 @@ const SHARED_DEFAULTS = {
   variant: VARIANT_BP,
   k: 5,
   kappa: 0,
-  baselineDepth: -1,
   bfsDepth: 1,
   timeLimit: -1,
   nodeLimit: -1,
