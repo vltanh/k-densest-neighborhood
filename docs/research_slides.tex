@@ -242,9 +242,10 @@ University of Illinois Urbana-Champaign \\
   \vfill
 
   \begin{itemize}
-    \item \textbf{Simulation oracle:} read local CSV edge list
-    \item \textbf{OpenAlex oracle:} fetch predecessors and successors live
-    \item Each query reveals one node's 1-hop citation neighborhood
+    \item each oracle call exposes one paper's 1-hop citation
+      neighborhood
+    \item the solver pulls more papers only when pricing decides
+      they help
   \end{itemize}
 
   \vfill
@@ -254,7 +255,8 @@ University of Illinois Urbana-Champaign \\
     \item $A$: active nodes in the restricted master problem
     \item $F$: frontier nodes discovered but not active
     \item cached in/out adjacency lists
-    \item pending edges whose endpoint variables are not both created yet
+    \item pending edges whose endpoint variables are not both
+      created yet
   \end{itemize}
 \end{frame}
 
@@ -827,6 +829,31 @@ University of Illinois Urbana-Champaign \\
   \vfill
 
   \textbf{Placeholder.} Numbers pending pipeline rerun.
+\end{frame}
+
+\section{OpenAlex frontend}
+
+\begin{frame}{From simulation to live citation graph}
+  \begin{itemize}
+    \item the experiments so far ran on a local CSV of Cora-ML
+    \item the same solver speaks to OpenAlex, an open citation
+      database
+    \item one query returns a paper's outgoing references and (capped)
+      incoming citations
+    \item every node materialised by the solver is fetched live
+    \item lazy oracle means the user pays only for the papers BP
+      actually wants
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Web frontend}
+  \begin{itemize}
+    \item enter a paper as the query
+    \item watch the active set and frontier evolve as the solver runs
+    \item dense community + boundary citations rendered as a graph
+    \item per-paper metadata pulled live from OpenAlex
+    \item useful as a reading-list builder for a single query paper
+  \end{itemize}
 \end{frame}
 
 \section{Conclusion}
