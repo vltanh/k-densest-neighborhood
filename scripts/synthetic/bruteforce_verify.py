@@ -300,8 +300,11 @@ def brute_force_optima(
     Returns argmax records for the avg-degree and edge-density objectives.
 
     For every result, both an unconstrained variant and a connected-only
-    variant (undirected projection) are returned, since the solver always
-    returns a connected subgraph in practice.
+    variant (undirected projection) are returned for avg-degree. The
+    unconstrained edge-density cell is omitted: extending a connected
+    densest subgraph of size >= k with a disconnected node strictly dilutes
+    density on m/(n*(n-1)) so the unconstrained optimum at |S| >= k always
+    equals the connected-only optimum (best_bp_kappa[k][0]).
     """
     bit_q = 1 << q
     k_list = sorted(set(int(k) for k in k_set))
@@ -313,8 +316,9 @@ def brute_force_optima(
 
     best_avg = (-1.0, -1, -1, 0, None)  # (score, size, m, mask, actual_kappa)
     best_avg_conn = (-1.0, -1, -1, 0, None)
-    best_bp = {k: (-1.0, -1, -1, 0, None) for k in k_list}
-    # best_bp_kappa[k][kappa] = (score, size, m, mask, actual_kappa). kappa=0 = connected.
+    # best_bp_kappa[k][kappa] = (score, size, m, mask, actual_kappa). kappa=0
+    # means "connected, no edge-connectivity threshold". kappa>=1 means
+    # lambda(S) >= kappa.
     best_bp_kappa = {k: {kp: (-1.0, -1, -1, 0, None) for kp in kappa_list} for k in k_list}
 
     full = 1 << n
@@ -334,11 +338,6 @@ def brute_force_optima(
         avg = m / sz
         if avg > best_avg[0]:
             best_avg = (avg, sz, m, s, None)
-        for k in k_list:
-            if sz >= k:
-                ed = m / (sz * (sz - 1))
-                if ed > best_bp[k][0]:
-                    best_bp[k] = (ed, sz, m, s, None)
 
         could_improve_avg_conn = avg > best_avg_conn[0]
         could_improve_bp_any_kappa = False
@@ -415,17 +414,9 @@ def brute_force_optima(
             "nodes": _mask_to_nodes(best_avg_conn[3]),
             "actual_kappa": best_avg_conn[4],
         },
-        "bp": {},
         "bp_kappa": {},
     }
     for k in k_list:
-        out["bp"][k] = {
-            "score": best_bp[k][0],
-            "size": best_bp[k][1],
-            "internal_edges": best_bp[k][2],
-            "nodes": _mask_to_nodes(best_bp[k][3]),
-            "actual_kappa": best_bp[k][4],
-        }
         out["bp_kappa"][k] = {}
         for kp in kappa_list:
             out["bp_kappa"][k][kp] = {
@@ -532,19 +523,6 @@ def _compute_optima_one(meta_path: Path, k_set: List[int], kappa_set: List[int])
         }
     )
     for k in k_set:
-        rows.append(
-            {
-                **common,
-                "optimum_kind": "edge_density",
-                "k": k,
-                "kappa": None,
-                "opt_value": optima["bp"][k]["score"],
-                "opt_size": optima["bp"][k]["size"],
-                "actual_kappa": optima["bp"][k]["actual_kappa"],
-                "opt_nodes_json": json.dumps(optima["bp"][k]["nodes"]),
-                "enumerate_time_s": elapsed,
-            }
-        )
         kappa_cells = optima["bp_kappa"].get(k, {})
         for kp in sorted(kappa_cells.keys()):
             rows.append(
@@ -612,16 +590,15 @@ def _extract_opt_row(row: dict):
 
 def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int], kappa: Optional[int]):
     """Return ((primary_value, primary_size, primary_nodes, primary_actual_kappa),
-    (secondary_value, secondary_size, secondary_nodes, secondary_actual_kappa)).
+    (secondary_value, secondary_size, secondary_nodes, secondary_actual_kappa) | None).
 
     Primary follows the solver's actual feasibility region:
       - avgdeg: unconstrained avg-degree optimum (|S| >= 2, contains q, possibly disconnected).
-      - bp + kappa = 0: unconstrained edge-density optimum at |S| >= k.
-      - bp + kappa >= 1: edge-density optimum with edge-connectivity >= kappa.
-    Secondary is the connected-only counterpart kept for cross-check:
-      - avgdeg: avg-degree optimum on connected sets only.
-      - bp + kappa = 0: edge-density optimum on connected sets only (edge_density_kappa[k][0]).
-      - bp + kappa >= 1: same as primary (no secondary distinct from it).
+      - bp + any kappa: edge_density_kappa[k][kappa]. kappa = 0 means "connected
+        and contains q with |S| >= k"; on m / (n*(n-1)) this equals the
+        unconstrained optimum at |S| >= k.
+    Secondary is the connected-only counterpart kept for cross-check on avgdeg
+    only; for BP the primary and the only meaningful baseline coincide.
     """
     target_kappa = 0 if (kappa is None or pd.isna(kappa)) else int(kappa)
     primary = None
@@ -636,23 +613,12 @@ def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int], 
         elif method == "bp":
             if k is None:
                 continue
-            if target_kappa == 0:
-                if kind == "edge_density" and int(row["k"]) == int(k):
-                    primary = _extract_opt_row(row)
-                elif (
-                    kind == "edge_density_kappa"
-                    and int(row["k"]) == int(k)
-                    and int(row["kappa"]) == 0
-                ):
-                    secondary = _extract_opt_row(row)
-            else:
-                if (
-                    kind == "edge_density_kappa"
-                    and int(row["k"]) == int(k)
-                    and int(row["kappa"]) == target_kappa
-                ):
-                    primary = _extract_opt_row(row)
-                    secondary = primary
+            if (
+                kind == "edge_density_kappa"
+                and int(row["k"]) == int(k)
+                and int(row["kappa"]) == target_kappa
+            ):
+                primary = _extract_opt_row(row)
     if primary is None:
         raise KeyError(f"optimum not found for method={method}, k={k}, kappa={kappa}")
     return primary, secondary
@@ -668,11 +634,28 @@ def _do_generate(args):
     print(f"wrote {len(p_values) * len(seeds)} graphs under {root}/synthetic/bf/n{args.n}")
 
 
+def _filter_metas_by_seed(metas: List[Path], seeds_arg: Optional[str]) -> List[Path]:
+    if not seeds_arg:
+        return metas
+    wanted = set(int(x) for x in seeds_arg.split(",") if x.strip())
+    out: List[Path] = []
+    for m in metas:
+        try:
+            with open(m) as f:
+                seed = int(json.load(f).get("seed"))
+        except Exception:
+            continue
+        if seed in wanted:
+            out.append(m)
+    return out
+
+
 def _do_optima(args):
     root = Path(args.data_dir)
     k_set = [int(x) for x in args.k_values.split(",")]
     kappa_set = [int(x) for x in args.kappa_values.split(",")]
     metas = sorted((root / "synthetic" / "bf" / f"n{args.n}").rglob("meta.json"))
+    metas = _filter_metas_by_seed(metas, getattr(args, "seeds", None))
     if not metas:
         raise FileNotFoundError(f"no meta.json found under {root}/synthetic/bf/n{args.n}")
     out_root = Path(args.exps_dir) / "synthetic" / "bf"
@@ -693,6 +676,7 @@ def _do_optima(args):
 def _do_solver_runs(args):
     root = Path(args.data_dir)
     metas = sorted((root / "synthetic" / "bf" / f"n{args.n}").rglob("meta.json"))
+    metas = _filter_metas_by_seed(metas, getattr(args, "seeds", None))
     if not metas:
         raise FileNotFoundError(f"no meta.json under {root}/synthetic/bf/n{args.n}")
     k_set = [int(x) for x in args.k_values.split(",")]
@@ -860,6 +844,12 @@ def main():
     opt.add_argument("--data-dir", type=str, default="data")
     opt.add_argument("--exps-dir", type=str, default="exps")
     opt.add_argument("--max-workers", type=int, default=4)
+    opt.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Comma-separated graph seeds (e.g. 0,1,2,3,4). Default: every meta.json found.",
+    )
     opt.set_defaults(func=_do_optima)
 
     runs = sub.add_parser("bf_solver_runs", help="run solver across (method, k, kappa)")
@@ -873,6 +863,12 @@ def main():
     runs.add_argument("--time-limit", type=float, default=-1.0)
     runs.add_argument("--max-workers", type=int, default=4)
     runs.add_argument("--match-tol", type=float, default=1e-9)
+    runs.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Comma-separated graph seeds (e.g. 0,1,2,3,4). Default: every meta.json found.",
+    )
     runs.set_defaults(func=_do_solver_runs)
 
     verify = sub.add_parser("verify", help="legacy tiny-graph demo")

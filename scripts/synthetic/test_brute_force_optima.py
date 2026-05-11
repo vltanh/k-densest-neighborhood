@@ -36,9 +36,8 @@ class BruteForceOptimaTests(unittest.TestCase):
         adj = _build(3, [(0, 1), (1, 2), (0, 2)])
         opt = brute_force_optima(adj, 3, q=0, k_set=[2], kappa_set=[0, 1, 2])
         # K3 is a clique: density = 1.0. {0,1} is also a clique (density 1.0)
-        # and is enumerated first, so the bit-mask iterator's first-found tie
-        # keeps the 2-node set; size and node count reflect that.
-        self.assertAlmostEqual(opt["bp"][2]["score"], 1.0)
+        # and is enumerated first.
+        self.assertAlmostEqual(opt["bp_kappa"][2][0]["score"], 1.0)
         # avg_degree on K3 = 6 (directed edges) / 3 (nodes) = 2.0.
         self.assertAlmostEqual(opt["avgdeg"]["score"], 2.0)
         # kappa>=1 with k=2: {0,1} is connected (lambda=1); pick that or {0,1,2}.
@@ -50,8 +49,9 @@ class BruteForceOptimaTests(unittest.TestCase):
     def test_k4_optima(self):
         adj = _build(4, [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)])
         opt = brute_force_optima(adj, 4, q=0, k_set=[2, 3, 4], kappa_set=[0, 1, 2, 3])
-        # Every clique inside K4 has density 1.0.
-        self.assertAlmostEqual(opt["bp"][4]["score"], 1.0)
+        # Every clique inside K4 has density 1.0; kappa=0 (connected only)
+        # equals the unconstrained optimum.
+        self.assertAlmostEqual(opt["bp_kappa"][4][0]["score"], 1.0)
         # avg_degree of K4 = 12 / 4 = 3.0.
         self.assertAlmostEqual(opt["avgdeg"]["score"], 3.0)
         # K4 has edge-connectivity 3; kappa=3 feasible.
@@ -62,11 +62,11 @@ class BruteForceOptimaTests(unittest.TestCase):
         # K4 minus edge (2, 3): 5 undirected edges = 10 directed.
         adj = _build(4, [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3)])
         opt = brute_force_optima(adj, 4, q=0, k_set=[3, 4], kappa_set=[0, 1, 2, 3])
-        # m=10, n=4: density = 10/12.
-        self.assertAlmostEqual(opt["bp"][4]["score"], 10.0 / 12.0)
+        # m=10, n=4: density = 10/12 (this graph is connected).
+        self.assertAlmostEqual(opt["bp_kappa"][4][0]["score"], 10.0 / 12.0)
         # Subsets of size 3 containing 0: {0,1,2}, {0,1,3}, {0,2,3}; the first
-        # two are K3 (density 1.0). Best score is 1.0.
-        self.assertAlmostEqual(opt["bp"][3]["score"], 1.0)
+        # two are K3 (density 1.0).
+        self.assertAlmostEqual(opt["bp_kappa"][3][0]["score"], 1.0)
         # kappa=2 on the full 4-set is feasible (every pair has 2 edge-disjoint
         # paths). Density remains 10/12.
         self.assertAlmostEqual(opt["bp_kappa"][4][2]["score"], 10.0 / 12.0)
@@ -80,9 +80,9 @@ class BruteForceOptimaTests(unittest.TestCase):
         adj = _build(4, [(0, 1), (0, 2), (1, 2), (0, 3), (1, 3)])
         opt = brute_force_optima(adj, 4, q=0, k_set=[3, 4], kappa_set=[0, 1, 2])
         # Full set density = 10 / 12.
-        self.assertAlmostEqual(opt["bp"][4]["score"], 10.0 / 12.0)
+        self.assertAlmostEqual(opt["bp_kappa"][4][0]["score"], 10.0 / 12.0)
         # k=3: subsets {0,1,2} and {0,1,3} are K3 with density 1.0.
-        self.assertAlmostEqual(opt["bp"][3]["score"], 1.0)
+        self.assertAlmostEqual(opt["bp_kappa"][3][0]["score"], 1.0)
         # avg_degree on full set = 10 / 4 = 2.5
         self.assertAlmostEqual(opt["avgdeg"]["score"], 2.5)
 
