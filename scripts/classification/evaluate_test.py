@@ -103,8 +103,8 @@ def main():
     parser.add_argument(
         "--subset",
         type=str,
-        default="eligible_test",
-        choices=["eligible_test", "bfs_depth1_wrong"],
+        default="test",
+        choices=["test", "bfs_depth1_wrong"],
     )
     parser.add_argument("--weighting", type=str, default="uniform")
     parser.add_argument("--max-fallback-hops", type=int, default=10)
@@ -119,41 +119,35 @@ def main():
 
     from collections import defaultdict
 
-    adj_und = defaultdict(set)
-    for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
-        if s == t:
-            continue
-        adj_und[s].add(t)
-        adj_und[t].add(s)
-
-    if args.subset == "eligible_test":
-        test_ids = df_nodes[df_nodes["test"]]["node_id"].astype(int).tolist()
-        target_nodes = [int(q) for q in test_ids if len(adj_und.get(q, ())) >= 2]
-        expected_hash = meta.eligible["test"]["hash"]
-        if sha256_node_set(target_nodes) != expected_hash:
-            raise ValueError("eligible.test hash mismatch with split_meta.json")
-        split_hash = expected_hash
+    if args.subset == "test":
+        target_nodes = [int(q) for q in df_nodes[df_nodes["test"]]["node_id"].astype(int).tolist()]
+        split_hash = meta.splits["test"]["hash"]
         query_split = "test"
     else:
         if meta.hard_subset is None:
             raise ValueError("split_meta.json carries no hard_subset; rerun prepare_data")
-        # Recompute hard_subset from split_meta + eligible.val to verify.
+        # Recompute hard_subset from splits.val to verify.
         from collections import Counter
         from solver_utils import argmax_label
+
+        out_adj = defaultdict(set)
+        for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
+            if s == t:
+                continue
+            out_adj[s].add(t)
 
         train_mask = df_nodes["train"].values
         labels = df_nodes["label"].values
         global_majority = argmax_label(Counter(labels[train_mask]))
         val_ids = df_nodes[df_nodes["val"]]["node_id"].astype(int).tolist()
-        eligible_val = [int(q) for q in val_ids if len(adj_und.get(q, ())) >= 2]
 
         def _bfs1(q):
-            train_neighbours = [n for n in adj_und.get(q, ()) if n != q and train_mask[n]]
+            train_neighbours = [n for n in out_adj.get(q, ()) if n != q and train_mask[n]]
             if not train_neighbours:
                 return global_majority
             return argmax_label(Counter(labels[n] for n in train_neighbours))
 
-        hard = [int(q) for q in eligible_val if _bfs1(q) != labels[q]]
+        hard = [int(q) for q in val_ids if _bfs1(q) != labels[q]]
         if sha256_node_set(hard) != meta.hard_subset["hash"]:
             raise ValueError("hard_subset hash mismatch with split_meta.json")
         target_nodes = hard

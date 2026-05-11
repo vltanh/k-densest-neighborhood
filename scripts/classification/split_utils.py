@@ -19,7 +19,6 @@ class SplitMeta:
     num_nodes: int
     num_edges: int
     splits: dict
-    eligible: dict
     hard_subset: Optional[dict]
     edges_hash: str
     library_versions: dict
@@ -57,7 +56,6 @@ def load_split_meta(dataset: str, data_dir: str = "data") -> SplitMeta:
         num_nodes=payload["num_nodes"],
         num_edges=payload["num_edges"],
         splits=payload["splits"],
-        eligible=payload["eligible"],
         hard_subset=payload.get("hard_subset"),
         edges_hash=payload["edges_hash"],
         library_versions=payload.get("library_versions", {}),
@@ -73,41 +71,27 @@ def write_split_meta(
     train_ids: List[int],
     val_ids: List[int],
     test_ids: List[int],
-    eligible_val_ids: List[int],
-    eligible_test_ids: List[int],
     hard_subset_ids: Optional[List[int]],
     edges_hash: str,
     library_versions: dict,
     data_dir: str = "data",
 ) -> dict:
     payload = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "dataset_name": dataset_name,
         "seed": seed,
         "num_nodes": num_nodes,
         "num_edges": num_edges,
+        "pool_criterion": "pure_source_with_outdegree_geq_2",
         "splits": {
             "train": {"size": len(train_ids), "hash": sha256_node_set(train_ids)},
             "val": {"size": len(val_ids), "hash": sha256_node_set(val_ids)},
             "test": {"size": len(test_ids), "hash": sha256_node_set(test_ids)},
         },
-        "eligible": {
-            "criterion": "undirected_1hop_neighbors_geq_2",
-            "val": {
-                "size": len(eligible_val_ids),
-                "hash": sha256_node_set(eligible_val_ids),
-                "n_filtered": len(val_ids) - len(eligible_val_ids),
-            },
-            "test": {
-                "size": len(eligible_test_ids),
-                "hash": sha256_node_set(eligible_test_ids),
-                "n_filtered": len(test_ids) - len(eligible_test_ids),
-            },
-        },
         "hard_subset": None
         if hard_subset_ids is None
         else {
-            "criterion": "bfs_depth1_label_vote_wrong",
+            "criterion": "bfs_depth1_label_vote_wrong_outgoing",
             "split": "val",
             "size": len(hard_subset_ids),
             "hash": sha256_node_set(hard_subset_ids),

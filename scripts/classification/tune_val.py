@@ -121,26 +121,13 @@ def main():
     df_edges = pd.read_csv(os.path.join(args.data_dir, args.dataset, "edge.csv"))
     meta = assert_split_meta_matches(args.dataset, df_nodes, df_edges, args.data_dir)
 
-    from collections import defaultdict
-    from split_utils import sha256_node_set
-
-    adj_und = defaultdict(set)
-    for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
-        if s == t:
-            continue
-        adj_und[s].add(t)
-        adj_und[t].add(s)
-    val_ids = df_nodes[df_nodes["val"]]["node_id"].astype(int).tolist()
-    eligible_val = [int(q) for q in val_ids if len(adj_und.get(q, ())) >= 2]
-    if sha256_node_set(eligible_val) != meta.eligible["val"]["hash"]:
-        raise ValueError("eligible.val hash mismatch with split_meta.json")
-
+    val_ids = [int(q) for q in df_nodes[df_nodes["val"]]["node_id"].astype(int).tolist()]
     forbidden = set(
         df_nodes[df_nodes["val"] | df_nodes["test"]]["node_id"].astype(int).tolist()
     )
 
     print(
-        f"{args.dataset}: eligible.val = {len(eligible_val)} nodes; forbidden = {len(forbidden)} nodes"
+        f"{args.dataset}: val pool = {len(val_ids)} nodes; forbidden = {len(forbidden)} nodes"
     )
 
     ctx = build_graph_context(
@@ -181,7 +168,7 @@ def main():
             os.makedirs(records_dir, exist_ok=True)
             with tempfile.TemporaryDirectory() as td:
                 y_true, y_pred, stats = evaluate_nodes(
-                    eligible_val,
+                    val_ids,
                     k=k,
                     edge_csv=os.path.join(args.data_dir, args.dataset, "edge.csv"),
                     df_nodes=df_nodes,
@@ -198,7 +185,7 @@ def main():
                     seed=args.seed if fam == "bp" else None,
                     method=fam,
                     params=params,
-                    split_hash=meta.eligible["val"]["hash"],
+                    split_hash=meta.splits["val"]["hash"],
                     keep_solver_dumps=args.keep_solver_dumps,
                     query_split="val",
                     collect_stats=True,
@@ -210,7 +197,7 @@ def main():
                 "dataset": args.dataset,
                 "method": fam,
                 "seed": args.seed if fam == "bp" else None,
-                "split_hash": meta.eligible["val"]["hash"],
+                "split_hash": meta.splits["val"]["hash"],
                 "weighting": args.weighting,
                 "optimize_target": "f1",
                 "params_hash": p_hash,
@@ -239,7 +226,7 @@ def main():
                     "params_hash": p_hash,
                     "extra_args": extra,
                     "k": k,
-                    "split_hash": meta.eligible["val"]["hash"],
+                    "split_hash": meta.splits["val"]["hash"],
                     "f1": scores["f1"],
                     "precision": scores["precision"],
                     "recall": scores["recall"],

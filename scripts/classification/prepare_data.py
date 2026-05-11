@@ -22,18 +22,20 @@ def _argmax_label(counter: Counter):
     return min(((-count, label) for label, count in counter.items()))[1]
 
 
-def _undirected_adjacency(df_edges: pd.DataFrame):
-    adj = defaultdict(set)
+def _adjacencies(df_edges: pd.DataFrame):
+    out_adj = defaultdict(set)
+    und_adj = defaultdict(set)
     for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
         if s == t:
             continue
-        adj[s].add(t)
-        adj[t].add(s)
-    return adj
+        out_adj[s].add(t)
+        und_adj[s].add(t)
+        und_adj[t].add(s)
+    return out_adj, und_adj
 
 
-def _bfs_depth1_predict(q_node, adj_und, train_mask, labels, global_majority):
-    neighbors = adj_und.get(q_node, ())
+def _bfs_depth1_predict(q_node, out_adj, train_mask, labels, global_majority):
+    neighbors = out_adj.get(q_node, ())
     train_neighbors = [n for n in neighbors if n != q_node and train_mask[n]]
     if not train_neighbors:
         return global_majority
@@ -84,23 +86,26 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     all_citing_nodes = set(df_edges["source"].astype(int).unique())
     pure_sources = sorted(all_citing_nodes - cited_nodes)
 
+    out_adj, _ = _adjacencies(df_edges)
+    pool = sorted(q for q in pure_sources if len(out_adj.get(q, ())) >= 2)
+
     print(f"Total Nodes: {data.num_nodes}")
-    print(f"Cited papers (Train): {len(cited_nodes)}")
-    print(f"New papers (Val/Test): {len(pure_sources)}")
+    print(f"Pure-source candidates: {len(pure_sources)}")
+    print(f"Pool after out-degree >= 2 filter: {len(pool)}")
 
     rng = np.random.default_rng(seed)
-    pure_sources = list(pure_sources)
-    rng.shuffle(pure_sources)
-    split_idx = int(len(pure_sources) * 0.5)
-    val_nodes = sorted(pure_sources[:split_idx])
-    test_nodes = sorted(pure_sources[split_idx:])
+    pool = list(pool)
+    rng.shuffle(pool)
+    split_idx = int(len(pool) * 0.5)
+    val_nodes = sorted(pool[:split_idx])
+    test_nodes = sorted(pool[split_idx:])
 
     df_nodes = pd.DataFrame(
         {"node_id": range(data.num_nodes), "label": data.y.numpy().astype(int)}
     )
-    df_nodes["train"] = df_nodes["node_id"].isin(cited_nodes)
     df_nodes["val"] = df_nodes["node_id"].isin(val_nodes)
     df_nodes["test"] = df_nodes["node_id"].isin(test_nodes)
+    df_nodes["train"] = ~(df_nodes["val"] | df_nodes["test"])
 
     df_nodes.to_csv(node_csv, index=False)
     print(f"Exported masks to {node_csv}")
@@ -111,15 +116,11 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     labels = df_nodes["label"].values
     train_mask = df_nodes["train"].values
 
-    adj_und = _undirected_adjacency(df_edges)
-    eligible_val = [q for q in val_ids if len(adj_und.get(q, ())) >= 2]
-    eligible_test = [q for q in test_ids if len(adj_und.get(q, ())) >= 2]
-
     global_majority = _argmax_label(Counter(labels[train_mask]))
 
     hard_subset = [
-        q for q in eligible_val
-        if _bfs_depth1_predict(q, adj_und, train_mask, labels, global_majority) != labels[q]
+        q for q in val_ids
+        if _bfs_depth1_predict(q, out_adj, train_mask, labels, global_majority) != labels[q]
     ]
 
     edges_iter = zip(
@@ -136,8 +137,6 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
         train_ids=train_ids,
         val_ids=val_ids,
         test_ids=test_ids,
-        eligible_val_ids=eligible_val,
-        eligible_test_ids=eligible_test,
         hard_subset_ids=hard_subset,
         edges_hash=edges_hash,
         library_versions=_library_versions(),
@@ -145,8 +144,8 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     )
     print(
         f"split_meta.json: train={payload['splits']['train']['size']}, "
-        f"val={payload['splits']['val']['size']} (eligible {payload['eligible']['val']['size']}), "
-        f"test={payload['splits']['test']['size']} (eligible {payload['eligible']['test']['size']}), "
+        f"val={payload['splits']['val']['size']}, "
+        f"test={payload['splits']['test']['size']}, "
         f"hard_subset={payload['hard_subset']['size']}"
     )
 
