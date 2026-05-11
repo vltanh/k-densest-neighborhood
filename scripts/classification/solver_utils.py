@@ -1,6 +1,5 @@
 import math
 import os
-import subprocess  # re-exported for tests that patch solver_utils.subprocess.run
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,8 +13,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _solver_runner import (  # noqa: E402
     count_internal_directed_edges,
     invoke_solver,
-    parse_oracle_queries,
-    read_predicted_nodes,
 )
 
 
@@ -28,39 +25,26 @@ def run_solver(
     extra_args=None,
     max_in_edges=0,
 ):
-    """Executes the C++ solver for a single query node."""
-    k_suffix = f"k{k}" if k is not None else "nok"
-    out_csv = os.path.join(tmp_dir, f"out_q{q_node}_{k_suffix}.csv")
-    cmd = [
-        bin_path,
-        "--mode",
-        "sim",
-        "--input",
-        edge_csv,
-        "--query",
-        str(q_node),
-        "--output",
-        out_csv,
-        "--max-in-edges",
-        str(max_in_edges),
-    ]
+    """Executes the C++ solver for a single query node.
+
+    Returns (q_node, neighborhood_int, oracle_queries). tmp_dir is retained for
+    backwards-compatible call sites; the solver no longer writes a CSV output.
+    """
+    cmd_extra = list(extra_args) if extra_args else []
+    cmd_extra += ["--max-in-edges", str(max_in_edges)]
     if k is not None:
-        cmd.extend(["--k", str(k)])
-    if extra_args:
-        cmd.extend(extra_args)
+        cmd_extra += ["--k", str(k)]
 
-    oracle_queries = math.nan
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        oracle_queries = parse_oracle_queries(result.stdout)
-    except subprocess.CalledProcessError as exc:
-        oracle_queries = parse_oracle_queries(exc.stdout or "")
-        return q_node, [], oracle_queries
-
-    neighborhood = read_predicted_nodes(out_csv, as_int=True)
-    if os.path.exists(out_csv):
-        os.remove(out_csv)
-    return q_node, neighborhood, oracle_queries
+    result = invoke_solver(
+        bin_path=bin_path,
+        edge_csv=edge_csv,
+        query=q_node,
+        extra_args=cmd_extra,
+        as_int_nodes=True,
+    )
+    if result["returncode"] != 0:
+        return q_node, [], result["oracle_queries"]
+    return q_node, result["pred_nodes"], result["oracle_queries"]
 
 
 def _safe_mean(values):

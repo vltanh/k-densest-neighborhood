@@ -1,36 +1,50 @@
 """Shared C++ solver invocation + graph metric helpers used by both
 classification and synthetic benchmark scripts. Single source of truth for the
-sim-mode argv and the post-run CSV parse so the four ad-hoc wrappers stay
-gated identically to backend/server.py:_variant_argv and solver/src/main.cpp.
+sim-mode argv and the JSON_RESULT: stdout parse so the wrappers stay gated
+identically to backend/server.py:_variant_argv and solver/src/main.cpp.
 """
 
+import json
 import math
 import os
 import re
 import subprocess
-import tempfile
 import time
-from typing import Optional, Sequence, Tuple
+import warnings
+from typing import Optional, Sequence
 
 import pandas as pd
 
 
-def base_sim_argv(bin_path: str, edge_csv: str, query: str, output_csv: str) -> list:
-    return [
+def base_sim_argv(bin_path: str, edge_csv: str, query: str, output_csv: Optional[str] = None) -> list:
+    argv = [
         bin_path,
         "--mode", "sim",
         "--input", edge_csv,
         "--query", str(query),
-        "--output", output_csv,
     ]
+    if output_csv is not None:
+        argv += ["--output", output_csv]
+    return argv
 
 
 _QUERIES_PATTERN = re.compile(r"API Queries Made\s*:\s*(\d+)")
+_JSON_RESULT_PATTERN = re.compile(r"^JSON_RESULT:(.*)$", re.MULTILINE)
 
 
 def parse_oracle_queries(output: str) -> float:
     match = _QUERIES_PATTERN.search(output or "")
     return int(match.group(1)) if match else math.nan
+
+
+def parse_solver_json(stdout: str) -> Optional[dict]:
+    match = _JSON_RESULT_PATTERN.search(stdout or "")
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
 
 
 def read_predicted_nodes(path: str, as_int: bool = False) -> list:
@@ -51,27 +65,26 @@ def invoke_solver(
     bin_path: str,
     edge_csv: str,
     query: str,
-    output_csv: Optional[str] = None,
     extra_args: Optional[Sequence[str]] = None,
     capture_wall_time: bool = False,
     as_int_nodes: bool = False,
     check: bool = False,
+    json_output_path: Optional[str] = None,
 ) -> dict:
-    """Spawns the C++ solver in sim mode, returns the parsed result.
+    """Spawns the C++ solver in sim mode and returns the parsed JSON payload.
 
-    Result keys: returncode, stdout, stderr, pred_nodes, oracle_queries,
-    wall_time (if capture_wall_time). When output_csv is None a NamedTemporaryFile
-    is used and cleaned up before returning.
+    The binary always receives --emit-json (and --json-output if json_output_path
+    is set). Result keys: returncode, stdout, stderr, pred_nodes, oracle_queries,
+    lambda_trajectory, kappa_verified, kappa_verify_failed, stats, qualities,
+    solver_json, wall_time (if capture_wall_time). When the JSON_RESULT: line is
+    absent, the function emits a warning and falls back to the legacy regex.
     """
-    owns_tmp = output_csv is None
-    if owns_tmp:
-        tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        tmp.close()
-        output_csv = tmp.name
-
-    cmd = base_sim_argv(bin_path, edge_csv, query, output_csv)
+    cmd = base_sim_argv(bin_path, edge_csv, query)
     if extra_args:
         cmd += list(extra_args)
+    cmd.append("--emit-json")
+    if json_output_path is not None:
+        cmd += ["--json-output", str(json_output_path)]
 
     started = time.perf_counter() if capture_wall_time else None
     try:
@@ -86,18 +99,55 @@ def invoke_solver(
 
     wall = (time.perf_counter() - started) if started is not None else None
 
-    pred = read_predicted_nodes(output_csv, as_int=as_int_nodes) if rc == 0 else []
+    payload: Optional[dict]
+    if json_output_path is not None and os.path.exists(json_output_path):
+        try:
+            with open(json_output_path) as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            payload = parse_solver_json(stdout)
+    else:
+        payload = parse_solver_json(stdout)
 
-    if owns_tmp and os.path.exists(output_csv):
-        os.remove(output_csv)
+    if payload is None and rc == 0:
+        warnings.warn(
+            "Solver returned no JSON_RESULT line; falling back to regex parse. "
+            "The solver binary may be stale; rebuild via solver/build.sh.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
-    result = {
-        "returncode": rc,
-        "stdout": stdout,
-        "stderr": stderr,
-        "pred_nodes": pred,
-        "oracle_queries": parse_oracle_queries(stdout),
-    }
+    if payload is not None:
+        nodes = payload.get("nodes", []) or []
+        pred = [int(n) for n in nodes] if as_int_nodes else [str(n) for n in nodes]
+        oracle_queries = (payload.get("oracle") or {}).get("queries_made", math.nan)
+        result = {
+            "returncode": rc,
+            "stdout": stdout,
+            "stderr": stderr,
+            "pred_nodes": pred,
+            "oracle_queries": oracle_queries,
+            "lambda_trajectory": payload.get("lambda_trajectory") or [],
+            "kappa_verified": payload.get("kappa_verified"),
+            "kappa_verify_failed": payload.get("kappa_verify_failed"),
+            "stats": payload.get("stats"),
+            "qualities": payload.get("qualities"),
+            "solver_json": payload,
+        }
+    else:
+        result = {
+            "returncode": rc,
+            "stdout": stdout,
+            "stderr": stderr,
+            "pred_nodes": [],
+            "oracle_queries": parse_oracle_queries(stdout),
+            "lambda_trajectory": [],
+            "kappa_verified": None,
+            "kappa_verify_failed": None,
+            "stats": None,
+            "qualities": None,
+            "solver_json": None,
+        }
     if wall is not None:
         result["wall_time"] = wall
     return result

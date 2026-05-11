@@ -68,14 +68,20 @@ class SolverCommandTests(unittest.TestCase):
         calls = []
 
         class Result:
-            stdout = "API Queries Made : 0\n"
+            returncode = 0
+            stdout = (
+                'JSON_RESULT:{"nodes":[],"oracle":{"queries_made":0},'
+                '"lambda_trajectory":[],"kappa_verified":null,'
+                '"kappa_verify_failed":null,"stats":null,"qualities":null}\n'
+            )
+            stderr = ""
 
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             return Result()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("solver_utils.subprocess.run", side_effect=fake_run):
+            with patch("_solver_runner.subprocess.run", side_effect=fake_run):
                 run_solver(
                     q_node=7,
                     k=5,
@@ -89,6 +95,7 @@ class SolverCommandTests(unittest.TestCase):
         self.assertIn("--max-in-edges", calls[0])
         idx = calls[0].index("--max-in-edges")
         self.assertEqual(calls[0][idx + 1], "25")
+        self.assertIn("--emit-json", calls[0])
 
     def test_synthetic_benchmark_does_not_pass_rejected_flags_to_bfs(self):
         calls = []
