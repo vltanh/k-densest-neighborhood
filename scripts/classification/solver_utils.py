@@ -101,7 +101,6 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             "undir_external_expansion": 0.0,
             "undir_external_conductance": 0.0,
             "undir_internal_ncut": math.nan,
-            "undir_internal_ncut_computed": 0,
         }
 
     undir_internal_edges, undir_boundary_edges = compute_mS_cS(mincut_neighbors, node_set)
@@ -122,13 +121,11 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
     )
 
     undir_internal_ncut = math.nan
-    ncut_computed = 0
     if n >= 2:
         if undir_internal_edges == 0:
             # Disconnected induced subgraph: empty cut, no internal volume on
             # one side. Conventional choice is 0 (perfectly cuttable).
             undir_internal_ncut = 0.0
-            ncut_computed = 1
         else:
             try:
                 part_a, part_b, cut_value = compute_mincut(mincut_neighbors, node_set)
@@ -150,7 +147,6 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
                     )
                 else:
                     undir_internal_ncut = 0.0
-                ncut_computed = 1
             except Exception:
                 undir_internal_ncut = math.nan
 
@@ -160,7 +156,6 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
         "undir_external_expansion": undir_external_expansion,
         "undir_external_conductance": undir_external_conductance,
         "undir_internal_ncut": undir_internal_ncut,
-        "undir_internal_ncut_computed": ncut_computed,
     }
 
 
@@ -216,7 +211,6 @@ def evaluate_nodes(
         "undir_external_conductance": [],
         "undir_internal_ncut": [],
     }
-    ncut_computed = 0
 
     fallback_count = 0
     total_queries = len(query_nodes)
@@ -254,7 +248,6 @@ def evaluate_nodes(
                 )
                 for key in quality_values:
                     quality_values[key].append(qualities[key])
-                ncut_computed += qualities["undir_internal_ncut_computed"]
 
             # Filter neighborhood to strictly contain Train nodes (EXCLUDING the query node itself)
             train_neighbors = [n for n in neighborhood if train_mask[n] and n != q_node]
@@ -339,9 +332,6 @@ def evaluate_nodes(
                     ),
                     "avg_undir_internal_ncut": _safe_mean(
                         quality_values["undir_internal_ncut"]
-                    ),
-                    "undir_internal_ncut_coverage": (
-                        ncut_computed / total_queries if total_queries > 0 else 0.0
                     ),
                 }
             )

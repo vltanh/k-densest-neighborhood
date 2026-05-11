@@ -19,7 +19,6 @@ QUALITY_COLUMNS = {
     "avg_undir_external_expansion",
     "avg_undir_external_conductance",
     "avg_undir_internal_ncut",
-    "undir_internal_ncut_coverage",
 }
 
 

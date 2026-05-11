@@ -56,7 +56,6 @@ class SolverQualityTests(unittest.TestCase):
 
         # Path 0-1-2-3, min cut isolates a leaf: cut=1, vol_a=1, vol_b=5.
         # NCut = 1 * (1+5) / (1*5) = 1.2.
-        self.assertEqual(qualities["undir_internal_ncut_computed"], 1)
         self.assertTrue(math.isclose(qualities["undir_internal_ncut"], 1.2))
 
 
