@@ -23,18 +23,15 @@ VARIANT_FLAGS = {
     "bp": "--bp",
     "avgdeg": "--avgdeg",
     "bfs": "--bfs",
-    "conn_greedy": "--conn-greedy",
-    "conn_avgdeg": "--conn-avgdeg",
 }
 
 
 class SolverParams(BaseModel):
     """Shared solver-side hyperparameters across both extraction endpoints."""
 
-    k: int = Field(default=5, ge=2, description="Target subgraph size (BP / conn-greedy)")
-    variant: str = Field(default="bp", description="Solver variant: bp, avgdeg, bfs, conn_greedy, conn_avgdeg")
+    k: int = Field(default=5, ge=2, description="Target subgraph size (BP)")
+    variant: str = Field(default="bp", description="Solver variant: bp, avgdeg, bfs")
     kappa: int = Field(default=0, ge=0, description="Edge-connectivity threshold (BP only; 0 disables)")
-    baseline_depth: int = Field(default=-1, description="BFS-frontier depth for conn-* baselines (-1 = unbounded)")
     bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
 
     time_limit: Optional[float] = -1.0
@@ -79,12 +76,8 @@ def _variant_argv(req: "SolverParams") -> list:
         "--tol", str(req.tol),
     ]
 
-    if variant in ("bp", "conn_greedy"):
-        args += ["--k", str(req.k)]
     if variant == "bp":
-        args += ["--kappa", str(req.kappa)]
-    if variant in ("conn_greedy", "conn_avgdeg"):
-        args += ["--baseline-depth", str(req.baseline_depth)]
+        args += ["--k", str(req.k), "--kappa", str(req.kappa)]
     if variant == "bfs":
         args += ["--bfs-depth", str(req.bfs_depth)]
     args.append("--compute-qualities")
