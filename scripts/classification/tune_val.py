@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from solver_utils import (  # noqa: E402
     build_graph_context,
     evaluate_nodes,
+    method_extra_args,
     params_hash,
 )
 from split_utils import assert_split_meta_matches  # noqa: E402
@@ -58,25 +59,6 @@ def _bp_grid(k_values, kappa_values, time_limits, dinkelbach_iters):
                         }
                     )
     return grid
-
-
-def _extra_args_for(method, params, gurobi_seed=None):
-    if method == "avgdeg":
-        return ["--avgdeg"]
-    if method == "bfs":
-        return ["--bfs", "--bfs-depth", str(params["bfs_depth"])]
-    if method == "bp":
-        args = ["--bp"]
-        if "kappa" in params:
-            args += ["--kappa", str(params["kappa"])]
-        if params.get("time_limit") is not None:
-            args += ["--time-limit", str(params["time_limit"])]
-        if params.get("dinkelbach_iter") is not None:
-            args += ["--dinkelbach-iter", str(params["dinkelbach_iter"])]
-        if gurobi_seed is not None:
-            args += ["--gurobi-seed", str(gurobi_seed)]
-        return args
-    raise ValueError(f"unknown method: {method}")
 
 
 def _k_for(method, params):
@@ -159,7 +141,7 @@ def main():
         best_settings = None
         for params in grid:
             p_hash = params_hash(params)
-            extra = _extra_args_for(fam, params, gurobi_seed=args.seed if fam == "bp" else None)
+            extra = method_extra_args(fam, params, gurobi_seed=args.seed if fam == "bp" else None)
             k = _k_for(fam, params)
             print(
                 f"[{args.dataset}] {fam} params={params} hash={p_hash[-12:]} extra={extra}"

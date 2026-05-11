@@ -11,10 +11,13 @@ import argparse
 import json
 import math
 import os
-from collections import defaultdict
+import sys
 
 import numpy as np
 import pandas as pd
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from solver_utils import load_ndjson_records  # noqa: E402
 
 
 METRIC_KEYS = [
@@ -27,20 +30,6 @@ METRIC_KEYS = [
     "mixing_param",
     "algebraic_connectivity_lambda2",
 ]
-
-
-def _read_records(path):
-    records = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return records
 
 
 def _row_for(record):
@@ -120,7 +109,7 @@ def main():
     if not os.path.exists(records_path):
         raise FileNotFoundError(records_path)
 
-    records = _read_records(records_path)
+    records = load_ndjson_records(records_path)
     if args.dataset:
         records = [r for r in records if r.get("dataset") == args.dataset]
     if args.method:

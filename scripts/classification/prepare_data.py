@@ -1,45 +1,23 @@
 import argparse
 import os
 import sys
-from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from split_utils import sha256_edge_list, write_split_meta  # noqa: E402
+from split_utils import (  # noqa: E402
+    build_out_adjacency,
+    compute_hard_subset,
+    sha256_edge_list,
+    write_split_meta,
+)
 
 try:
     from torch_geometric.datasets import CitationFull
 except ImportError:
     print("Error: PyTorch Geometric not found.")
     exit(1)
-
-
-def _argmax_label(counter: Counter):
-    if not counter:
-        return None
-    return min(((-count, label) for label, count in counter.items()))[1]
-
-
-def _adjacencies(df_edges: pd.DataFrame):
-    out_adj = defaultdict(set)
-    und_adj = defaultdict(set)
-    for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
-        if s == t:
-            continue
-        out_adj[s].add(t)
-        und_adj[s].add(t)
-        und_adj[t].add(s)
-    return out_adj, und_adj
-
-
-def _bfs_depth1_predict(q_node, out_adj, train_mask, labels, global_majority):
-    neighbors = out_adj.get(q_node, ())
-    train_neighbors = [n for n in neighbors if n != q_node and train_mask[n]]
-    if not train_neighbors:
-        return global_majority
-    return _argmax_label(Counter(labels[n] for n in train_neighbors))
 
 
 def _library_versions() -> dict:
@@ -86,7 +64,7 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     all_citing_nodes = set(df_edges["source"].astype(int).unique())
     pure_sources = sorted(all_citing_nodes - cited_nodes)
 
-    out_adj, _ = _adjacencies(df_edges)
+    out_adj = build_out_adjacency(df_edges)
     pool = sorted(q for q in pure_sources if len(out_adj.get(q, ())) >= 2)
 
     print(f"Total Nodes: {data.num_nodes}")
@@ -116,12 +94,7 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     labels = df_nodes["label"].values
     train_mask = df_nodes["train"].values
 
-    global_majority = _argmax_label(Counter(labels[train_mask]))
-
-    hard_subset = [
-        q for q in val_ids
-        if _bfs_depth1_predict(q, out_adj, train_mask, labels, global_majority) != labels[q]
-    ]
+    hard_subset = compute_hard_subset(val_ids, out_adj, train_mask, labels)
 
     edges_iter = zip(
         df_edges["source"].astype(int).tolist(),

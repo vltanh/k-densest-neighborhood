@@ -243,13 +243,9 @@ def _edge_connectivity_in_subset(adj_und: List[int], s_mask: int, q: int) -> int
     for t_local in range(nn):
         if t_local == s_local:
             continue
-        # BFS-augmenting-path max-flow on a mutable capacity matrix
-        cap = [list(adj_compact)]
-        # Encode capacities as bitmasks: cap_to[u] = bitmask of v with cap[u][v]==1
         cap_to = list(adj_compact)
         flow = 0
         while True:
-            # BFS
             parent_arr = [-1] * nn
             parent_arr[s_local] = s_local
             queue: List[int] = [s_local]
@@ -323,18 +319,15 @@ def brute_force_optima(
             v = lsb.bit_length() - 1
             m += (adj_out[v] & s).bit_count()
             ss &= ss - 1
-        # avg-degree (unconstrained)
         avg = m / sz
         if avg > best_avg[0]:
             best_avg = (avg, sz, m, s, None)
-        # edge-density per k (unconstrained)
         for k in k_list:
             if sz >= k:
                 ed = m / (sz * (sz - 1))
                 if ed > best_bp[k][0]:
                     best_bp[k] = (ed, sz, m, s, None)
 
-        # Decide whether this subset could improve any connected or kappa cell.
         could_improve_avg_conn = avg > best_avg_conn[0]
         could_improve_bp_any_kappa = False
         for k in k_list:
@@ -350,11 +343,9 @@ def brute_force_optima(
             continue
         if not _connected_in_subset(adj_und, s, q):
             continue
-        # Subset is connected.
         kappa_S: Optional[int] = None
         if could_improve_avg_conn:
             best_avg_conn = (avg, sz, m, s, None)
-        # kappa=0 cells take connectivity only; record actual kappa lazily.
         for k in k_list:
             if sz >= k:
                 ed = m / (sz * (sz - 1))
@@ -362,7 +353,6 @@ def brute_force_optima(
                     if kappa_S is None:
                         kappa_S = _edge_connectivity_in_subset(adj_und, s, q)
                     best_bp_kappa[k][0] = (ed, sz, m, s, kappa_S)
-        # For kappa >= 1, compute edge-connectivity if needed.
         need_kappa_check = False
         for k in k_list:
             if sz < k:
@@ -675,6 +665,22 @@ def _do_solver_runs(args):
 
     rows: List[dict] = []
     tol = float(args.match_tol)
+    # Cache (n, p, seed) -> adj_out bitmask so post-checks don't reread edge.csv per cell.
+    adj_cache: Dict[Tuple[int, float, int], List[int]] = {}
+
+    def _adj_for_graph(meta, meta_path_str):
+        key = (int(meta["n"]), float(meta["p"]), int(meta["seed"]))
+        cached = adj_cache.get(key)
+        if cached is not None:
+            return cached
+        df_e = pd.read_csv(str(Path(meta_path_str).with_name("edge.csv")))
+        edges_dir_local = list(
+            zip(df_e["source"].astype(int), df_e["target"].astype(int))
+        )
+        adj_local = _bitmask_adjacency(int(meta["n"]), edges_dir_local)
+        adj_cache[key] = adj_local
+        return adj_local
+
     with ProcessPoolExecutor(max_workers=args.max_workers) as exe:
         futures = {exe.submit(_solver_runs_one, cell): cell for cell in cells}
         for i, fut in enumerate(as_completed(futures), 1):
@@ -708,12 +714,7 @@ def _do_solver_runs(args):
             # Compute the actual edge-connectivity of the solver's returned set.
             solver_actual_kappa: Optional[int] = None
             if result["returncode"] == 0 and solver_nodes_set:
-                edge_csv_for = str(Path(meta_path_str).with_name("edge.csv"))
-                df_e = pd.read_csv(edge_csv_for)
-                edges_dir_local = list(
-                    zip(df_e["source"].astype(int), df_e["target"].astype(int))
-                )
-                adj_local = _bitmask_adjacency(meta["n"], edges_dir_local)
+                adj_local = _adj_for_graph(meta, meta_path_str)
                 s_mask_local = 0
                 for nid in solver_nodes_set:
                     s_mask_local |= 1 << int(nid)

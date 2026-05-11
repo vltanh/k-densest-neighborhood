@@ -57,6 +57,43 @@ def params_hash(params: dict) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def method_extra_args(method: str, params: Optional[dict] = None, gurobi_seed: Optional[int] = None) -> List[str]:
+    """Single source of truth for the solver argv per (method, params).
+
+    BP cells optionally carry kappa, time_limit, dinkelbach_iter, node_limit,
+    gap_tol, and cg_* values. Unset values stay at solver defaults (-1).
+    """
+    params = params or {}
+    if method == "avgdeg":
+        return ["--avgdeg"]
+    if method == "bfs":
+        depth = params.get("bfs_depth", 1)
+        return ["--bfs", "--bfs-depth", str(depth)]
+    if method == "bp":
+        args: List[str] = ["--bp"]
+        if "kappa" in params:
+            args += ["--kappa", str(params["kappa"])]
+        if params.get("time_limit") is not None:
+            args += ["--time-limit", str(params["time_limit"])]
+        if params.get("dinkelbach_iter") is not None:
+            args += ["--dinkelbach-iter", str(params["dinkelbach_iter"])]
+        if params.get("node_limit") is not None:
+            args += ["--node-limit", str(params["node_limit"])]
+        if params.get("gap_tol") is not None:
+            args += ["--gap-tol", str(params["gap_tol"])]
+        for cg_key, flag in (
+            ("cg_batch_frac", "--cg-batch-frac"),
+            ("cg_min_batch", "--cg-min-batch"),
+            ("cg_max_batch", "--cg-max-batch"),
+        ):
+            if params.get(cg_key) is not None:
+                args += [flag, str(params[cg_key])]
+        if gurobi_seed is not None:
+            args += ["--gurobi-seed", str(gurobi_seed)]
+        return args
+    raise ValueError(f"unknown method: {method}")
+
+
 def _record_key(record: dict) -> Tuple:
     method = record.get("method")
     keys = [
@@ -71,7 +108,8 @@ def _record_key(record: dict) -> Tuple:
     return tuple(keys)
 
 
-def _records_from_ndjson(path: str) -> List[dict]:
+def load_ndjson_records(path: str) -> List[dict]:
+    """Read an NDJSON file of records; skip malformed lines silently."""
     if not os.path.exists(path):
         return []
     out = []
@@ -85,6 +123,10 @@ def _records_from_ndjson(path: str) -> List[dict]:
             except json.JSONDecodeError:
                 continue
     return out
+
+
+# Backwards-compatible alias for any local caller still using the private name.
+_records_from_ndjson = load_ndjson_records
 
 
 def argmax_label(counter: Counter):

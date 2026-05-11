@@ -24,9 +24,15 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from solver_utils import (  # noqa: E402
     build_graph_context,
     evaluate_nodes,
+    method_extra_args,
     params_hash,
 )
-from split_utils import assert_split_meta_matches, sha256_node_set  # noqa: E402
+from split_utils import (  # noqa: E402
+    assert_split_meta_matches,
+    build_out_adjacency,
+    compute_hard_subset,
+    sha256_node_set,
+)
 
 
 SEEDS = [42, 43, 44, 45, 46]
@@ -71,19 +77,6 @@ def _load_best(out_root: str, family: str):
         return json.load(f)
 
 
-def _extra_args_for_seed(extra_args, gurobi_seed):
-    # Strip any pre-existing --gurobi-seed and append the current one.
-    out = []
-    i = 0
-    while i < len(extra_args):
-        if extra_args[i] == "--gurobi-seed":
-            i += 2
-            continue
-        out.append(extra_args[i])
-        i += 1
-    if "--bp" in out and gurobi_seed is not None:
-        out += ["--gurobi-seed", str(gurobi_seed)]
-    return out
 
 
 def main():
@@ -117,8 +110,6 @@ def main():
     df_edges = pd.read_csv(os.path.join(args.data_dir, args.dataset, "edge.csv"))
     meta = assert_split_meta_matches(args.dataset, df_nodes, df_edges, args.data_dir)
 
-    from collections import defaultdict
-
     if args.subset == "test":
         target_nodes = [int(q) for q in df_nodes[df_nodes["test"]]["node_id"].astype(int).tolist()]
         split_hash = meta.splits["test"]["hash"]
@@ -126,28 +117,14 @@ def main():
     else:
         if meta.hard_subset is None:
             raise ValueError("split_meta.json carries no hard_subset; rerun prepare_data")
-        # Recompute hard_subset from splits.val to verify.
-        from collections import Counter
-        from solver_utils import argmax_label
-
-        out_adj = defaultdict(set)
-        for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
-            if s == t:
-                continue
-            out_adj[s].add(t)
-
-        train_mask = df_nodes["train"].values
-        labels = df_nodes["label"].values
-        global_majority = argmax_label(Counter(labels[train_mask]))
+        out_adj = build_out_adjacency(df_edges)
         val_ids = df_nodes[df_nodes["val"]]["node_id"].astype(int).tolist()
-
-        def _bfs1(q):
-            train_neighbours = [n for n in out_adj.get(q, ()) if n != q and train_mask[n]]
-            if not train_neighbours:
-                return global_majority
-            return argmax_label(Counter(labels[n] for n in train_neighbours))
-
-        hard = [int(q) for q in val_ids if _bfs1(q) != labels[q]]
+        hard = compute_hard_subset(
+            val_ids,
+            out_adj,
+            df_nodes["train"].values,
+            df_nodes["label"].values,
+        )
         if sha256_node_set(hard) != meta.hard_subset["hash"]:
             raise ValueError("hard_subset hash mismatch with split_meta.json")
         target_nodes = hard
@@ -175,19 +152,16 @@ def main():
 
     for family in families:
         best = _load_best(tune_root, family)
-        extra_args_base = best["extra_args"]
         k = best.get("k")
         params = best.get("params") or {}
         p_hash = best["params_hash"]
-        seeds = SEEDS if family not in DETERMINISTIC else SEEDS  # always five rows
-        method_preds = {}  # seed -> y_pred
+        method_preds = {}
         method_truth = None
-        for seed in seeds:
-            if family in DETERMINISTIC and seed != seeds[0] and method_truth is not None:
-                # Reuse the deterministic prediction across seeds.
-                method_preds[seed] = method_preds[seeds[0]]
+        for seed in SEEDS:
+            if family in DETERMINISTIC and seed != SEEDS[0] and method_truth is not None:
+                method_preds[seed] = method_preds[SEEDS[0]]
                 continue
-            extra = _extra_args_for_seed(extra_args_base, seed if family == "bp" else None)
+            extra = method_extra_args(family, params, gurobi_seed=seed if family == "bp" else None)
             records_dir = os.path.join(
                 out_root, family, args.subset, p_hash[-12:], f"seed_{seed}"
             )
@@ -246,18 +220,14 @@ def main():
                 }
             )
 
-        # Aggregate across seeds.
         precisions, recalls, f1s = [], [], []
-        for seed in seeds:
-            yt = method_truth
-            yp = method_preds[seed]
-            scores = _macro_scores(yt, yp)
+        for seed in SEEDS:
+            scores = _macro_scores(method_truth, method_preds[seed])
             precisions.append(scores["precision"])
             recalls.append(scores["recall"])
             f1s.append(scores["f1"])
-        # Pooled CI: bootstrap over the union of (yt, yp) seed-stack.
-        yt_stack = np.concatenate([np.asarray(method_truth) for _ in seeds])
-        yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in seeds])
+        yt_stack = np.concatenate([np.asarray(method_truth) for _ in SEEDS])
+        yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in SEEDS])
         pooled_ci = _bootstrap_ci(yt_stack, yp_stack, B=args.bootstrap, rng_seed=0)
         aggregate_rows.append(
             {
@@ -267,7 +237,7 @@ def main():
                 "params_hash": p_hash,
                 "params_json": json.dumps(params, sort_keys=True),
                 "split_hash": split_hash,
-                "n_seeds": len(seeds),
+                "n_seeds": len(SEEDS),
                 "precision_mean": float(np.mean(precisions)),
                 "recall_mean": float(np.mean(recalls)),
                 "f1_mean": float(np.mean(f1s)),

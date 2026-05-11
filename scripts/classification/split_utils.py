@@ -6,9 +6,10 @@ can verify they are operating on the same split they were tuned against.
 import hashlib
 import json
 import os
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,58 @@ def write_split_meta(
     with open(path, "w") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
     return payload
+
+
+def build_out_adjacency(df_edges) -> Dict[int, Set[int]]:
+    adj: Dict[int, Set[int]] = defaultdict(set)
+    for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
+        if s == t:
+            continue
+        adj[s].add(t)
+    return adj
+
+
+def build_undirected_adjacency(df_edges) -> Dict[int, Set[int]]:
+    adj: Dict[int, Set[int]] = defaultdict(set)
+    for s, t in zip(df_edges["source"].astype(int), df_edges["target"].astype(int)):
+        if s == t:
+            continue
+        adj[s].add(t)
+        adj[t].add(s)
+    return adj
+
+
+def argmax_label_value(counter: Counter):
+    """Deterministic argmax over label counts; ties broken by ascending label."""
+    if not counter:
+        return None
+    best = None
+    for label, count in counter.items():
+        key = (-count, label)
+        if best is None or key < best[0]:
+            best = (key, label)
+    return best[1]
+
+
+def bfs_depth1_label_vote(q_node, out_adj, train_mask, labels, global_majority):
+    """Majority label over outgoing 1-hop train neighbours of q, with
+    deterministic argmax and a global-majority fallback when no train neighbour
+    is reachable.
+    """
+    neighbours = out_adj.get(q_node, ())
+    train_neighbours = [n for n in neighbours if n != q_node and train_mask[n]]
+    if not train_neighbours:
+        return global_majority
+    return argmax_label_value(Counter(labels[n] for n in train_neighbours))
+
+
+def compute_hard_subset(val_ids, out_adj, train_mask, labels) -> List[int]:
+    global_majority = argmax_label_value(Counter(labels[train_mask]))
+    return [
+        int(q)
+        for q in val_ids
+        if bfs_depth1_label_vote(q, out_adj, train_mask, labels, global_majority) != labels[q]
+    ]
 
 
 def assert_split_meta_matches(
