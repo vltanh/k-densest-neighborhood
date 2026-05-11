@@ -6,16 +6,20 @@
 #include <chrono>
 #include <climits>
 #include <limits>
+#include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/push_relabel_max_flow.hpp>
 
 using namespace std;
 
 FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                                                    double tol, int bb_node_limit, double bb_time_limit,
                                                    double bb_gap_tol, int dinkelbach_max_iter,
-                                                   double cg_batch_fraction, int cg_min_batch, int cg_max_batch)
+                                                   double cg_batch_fraction, int cg_min_batch, int cg_max_batch,
+                                                   int kappa)
     : oracle(oracle), q(q), k(k), env(env), tol(tol), bb_node_limit(bb_node_limit),
       bb_time_limit(bb_time_limit), bb_gap_tol(bb_gap_tol), dinkelbach_max_iter(dinkelbach_max_iter),
-      cg_batch_fraction(cg_batch_fraction), cg_min_batch(cg_min_batch), cg_max_batch(cg_max_batch), rmp(nullptr)
+      cg_batch_fraction(cg_batch_fraction), cg_min_batch(cg_min_batch), cg_max_batch(cg_max_batch),
+      kappa(std::max(0, kappa)), rmp(nullptr)
 {
     _initialize_active_set();
     _init_global_model();
@@ -209,15 +213,12 @@ double FullBranchAndPriceSolver::_parametric_obj(const unordered_set<int> &nodes
 // (i.e. the fewest intra-set incident directed edges), since for fixed (E, n):
 //   Δ density = 2E·(n-1)/(n(n-1)²(n-2)) − d_u/((n-1)(n-2))   (decreasing in d_u)
 //   Δ f(S,λ)  = 2λ(n-1) − d_u                                 (decreasing in d_u)
-void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density)
+void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density, bool enforce_connectivity)
 {
     if (sol_nodes.size() <= (size_t)k)
         return;
 
     // Precompute internal degree per node and the directed edge count E once.
-    // For each directed edge u→v inside S, we bump both internal_deg[u] and
-    // internal_deg[v], so the sum over all nodes equals 2·E. When a node is
-    // removed, it loses exactly internal_deg[u] directed edges.
     unordered_map<int, int> internal_deg;
     internal_deg.reserve(sol_nodes.size() * 2);
     for (int u : sol_nodes)
@@ -258,21 +259,72 @@ void FullBranchAndPriceSolver::_prune_discrete_solution(unordered_set<int> &sol_
     {
         int n = (int)sol_nodes.size();
 
-        // Argmin internal_deg (over candidates ≠ q) is the node whose removal
-        // maximises improvement for both metrics.
         int worst_node = -1;
         int worst_deg = INT_MAX;
+
         for (int u : sol_nodes)
         {
             if (u == q)
                 continue;
+
             int d = internal_deg[u];
+
+            // Only evaluate if this is a new candidate minimum
             if (d < worst_deg)
             {
+                // ==========================================================
+                // CONNECTIVITY PROTECTION (Micro-BFS)
+                // ==========================================================
+                if (enforce_connectivity)
+                {
+                    unordered_set<int> visited;
+                    queue<int> test_q;
+                    test_q.push(this->q);
+                    visited.insert(this->q);
+
+                    while (!test_q.empty())
+                    {
+                        int curr = test_q.front();
+                        test_q.pop();
+
+                        auto out_it = adj_out.find(curr);
+                        if (out_it != adj_out.end())
+                        {
+                            for (int v : out_it->second)
+                            {
+                                if (v != u && sol_nodes.find(v) != sol_nodes.end() && visited.insert(v).second)
+                                {
+                                    test_q.push(v);
+                                }
+                            }
+                        }
+                        auto in_it = adj_in.find(curr);
+                        if (in_it != adj_in.end())
+                        {
+                            for (int v : in_it->second)
+                            {
+                                if (v != u && sol_nodes.find(v) != sol_nodes.end() && visited.insert(v).second)
+                                {
+                                    test_q.push(v);
+                                }
+                            }
+                        }
+                    }
+
+                    // If removing 'u' breaks connectivity, skip it!
+                    if (visited.size() < sol_nodes.size() - 1)
+                    {
+                        continue;
+                    }
+                }
+                // ==========================================================
+
+                // If we get here, it's safe to remove and is the new minimum
                 worst_deg = d;
                 worst_node = u;
             }
         }
+
         if (worst_node == -1)
             break;
 
@@ -768,7 +820,7 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         double net = oracle.cumulative_network_time - net_start_bb;
         double effective_time = max(0.0, wall - net);
 
-        if (effective_time > bb_time_limit)
+        if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
             return {std::move(local_x_bar), local_lp_obj};
 
         t0 = chrono::high_resolution_clock::now();
@@ -776,8 +828,11 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         t1 = chrono::high_resolution_clock::now();
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
-        double remaining_budget = max(1e-3, bb_time_limit - effective_time);
-        rmp->set(GRB_DoubleParam_TimeLimit, remaining_budget);
+        if (bb_time_limit >= 0.0)
+        {
+            double remaining_budget = max(1e-3, bb_time_limit - effective_time);
+            rmp->set(GRB_DoubleParam_TimeLimit, remaining_budget);
+        }
 
         rmp->optimize();
         stats.total_lp_solves++;
@@ -944,7 +999,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 
     while (!stack.empty())
     {
-        if (stats.total_bb_nodes >= bb_node_limit)
+        if (bb_node_limit >= 0 && stats.total_bb_nodes >= bb_node_limit)
         {
             cout << "[" << get_timestamp() << "]     [!] B&B node limit reached." << endl;
             break;
@@ -955,7 +1010,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         double net = oracle.cumulative_network_time - net_start_bb;
         double effective_time = max(0.0, wall - net);
 
-        if (effective_time > bb_time_limit)
+        if (bb_time_limit >= 0.0 && effective_time > bb_time_limit)
         {
             cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached ("
                  << bb_time_limit << "s without improvement)." << endl;
@@ -984,14 +1039,172 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 
         if (branch_var == -1)
         {
-            // Integer solution — prune to improve the parametric objective before
-            // accepting as incumbent
-            unordered_set<int> sol_nodes;
+            // ====================================================================
+            // kappa-connectivity check (Menger's theorem)
+            // ====================================================================
+
+            if (this->kappa == 0)
+            {
+                std::unordered_set<int> sol_nodes;
+                for (const auto &[v, val] : x_bar)
+                {
+                    if (val > 0.5)
+                        sol_nodes.insert(v);
+                }
+
+                _prune_discrete_solution(sol_nodes, lambda_val, false, false);
+
+                if (sol_nodes.size() >= (size_t)k)
+                {
+                    double int_obj = _parametric_obj(sol_nodes, lambda_val);
+                    if (int_obj > best_int_obj + tol)
+                    {
+                        best_int_obj = int_obj;
+                        best_int_sol = std::move(sol_nodes);
+                        t_start_bb = chrono::high_resolution_clock::now();
+                        net_start_bb = oracle.cumulative_network_time;
+                    }
+                }
+
+                continue;
+            }
+
+            std::unordered_set<int> sol_nodes;
             for (const auto &[v, val] : x_bar)
+            {
                 if (val > 0.5)
                     sol_nodes.insert(v);
+            }
 
-            _prune_discrete_solution(sol_nodes, lambda_val, false);
+            // Map Gurobi node IDs to Boost contiguous indices
+            std::unordered_map<int, int> g_to_b;
+            std::vector<int> b_to_g;
+            for (int node_id : sol_nodes)
+            {
+                g_to_b[node_id] = b_to_g.size();
+                b_to_g.push_back(node_id);
+            }
+            int N = sol_nodes.size();
+
+            bool is_k_connected = true;
+
+            if (sol_nodes.count(this->q))
+            {
+                // Explicitly scoped Boost Graph definitions
+                typedef boost::adjacency_list_traits<boost::vecS, boost::vecS, boost::directedS> Traits;
+                typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::directedS,
+                                              boost::property<boost::vertex_name_t, int>,
+                                              boost::property<boost::edge_capacity_t, long long,
+                                                              boost::property<boost::edge_residual_capacity_t, long long,
+                                                                              boost::property<boost::edge_reverse_t, Traits::edge_descriptor>>>>
+                    FlowGraph;
+
+                int S = g_to_b[this->q];
+
+                for (int target_node : sol_nodes)
+                {
+                    if (target_node == this->q)
+                        continue;
+
+                    // 1. Build the capacity network for the current integer solution
+                    FlowGraph fg(N);
+                    auto capacity = boost::get(boost::edge_capacity, fg);
+                    auto rev = boost::get(boost::edge_reverse, fg);
+
+                    auto add_flow_edge = [&](int u, int v, long long cap)
+                    {
+                        auto e1 = boost::add_edge(u, v, fg).first;
+                        auto e2 = boost::add_edge(v, u, fg).first;
+                        capacity[e1] = cap;
+                        capacity[e2] = 0;
+                        rev[e1] = e2;
+                        rev[e2] = e1;
+                    };
+
+                    for (const auto &[edge, y_var] : y_vars)
+                    {
+                        if (y_var.get(GRB_DoubleAttr_X) > 0.5)
+                        {
+                            int u = g_to_b[edge.first];
+                            int v = g_to_b[edge.second];
+                            // Add undirected capacity of 1
+                            add_flow_edge(u, v, 1);
+                            add_flow_edge(v, u, 1);
+                        }
+                    }
+
+                    // 2. Compute Max-Flow (Number of edge-disjoint paths)
+                    int T = g_to_b[target_node];
+                    long long flow = boost::push_relabel_max_flow(fg, S, T);
+
+                    // 3. Separation: If flow < \kappa, find the Min-Cut
+                    if (flow < this->kappa)
+                    {
+                        is_k_connected = false;
+
+                        std::unordered_set<int> reachable_boost;
+                        std::queue<int> bq;
+                        std::vector<bool> vis(N, false);
+
+                        bq.push(S);
+                        vis[S] = true;
+                        reachable_boost.insert(S);
+
+                        auto res = boost::get(boost::edge_residual_capacity, fg);
+                        while (!bq.empty())
+                        {
+                            int curr = bq.front();
+                            bq.pop();
+                            for (auto e : boost::make_iterator_range(boost::out_edges(curr, fg)))
+                            {
+                                if (res[e] > 0 && !vis[boost::target(e, fg)])
+                                {
+                                    vis[boost::target(e, fg)] = true;
+                                    bq.push(boost::target(e, fg));
+                                    reachable_boost.insert(boost::target(e, fg));
+                                }
+                            }
+                        }
+
+                        std::unordered_set<int> reachable_gurobi;
+                        for (int b_id : reachable_boost)
+                        {
+                            reachable_gurobi.insert(b_to_g[b_id]);
+                        }
+
+                        // 4. Inject Cut-Set Inequality
+                        GRBLinExpr cut_expr = 0;
+                        for (const auto &[edge, y_var] : y_vars)
+                        {
+                            bool u_in_R = reachable_gurobi.count(edge.first);
+                            bool v_in_R = reachable_gurobi.count(edge.second);
+
+                            // Edge crosses the Min-Cut
+                            if (u_in_R != v_in_R)
+                            {
+                                cut_expr += y_var;
+                            }
+                        }
+
+                        // Force the LP to select enough edges crossing this cut
+                        rmp->addConstr(cut_expr >= this->kappa * x_vars[target_node], "k_connectivity_cut");
+                        stats.total_cuts_added++;
+                        break;
+                    }
+                }
+            }
+
+            if (!is_k_connected)
+            {
+                stats.total_bb_nodes--;
+                stack.push_back(std::move(node));
+                continue;
+            }
+            // ====================================================================
+
+            // Integer solution strictly connected — prune to improve the parametric objective before
+            // accepting as incumbent
+            _prune_discrete_solution(sol_nodes, lambda_val, false, true);
 
             if (sol_nodes.size() >= (size_t)k)
             {
@@ -1043,7 +1256,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 
     // Prune the BFS seed to a near-optimal starting point before the first
     // Dinkelbach iteration, giving a tighter initial λ
-    _prune_discrete_solution(best_sol, 0.0, true);
+    _prune_discrete_solution(best_sol, 0.0, true, false);
 
     double lambda_val = _density(best_sol);
 
@@ -1051,7 +1264,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
     cout << "[" << get_timestamp() << "] Init Active Set | Size: " << best_sol.size() << " | Density: " << lambda_val << endl;
     cout << "--------------------------------------------------" << endl;
 
-    for (int t = 1; t <= dinkelbach_max_iter; t++)
+    for (int t = 1; dinkelbach_max_iter < 0 || t <= dinkelbach_max_iter; t++)
     {
         cout << "[" << get_timestamp() << "] === DINKELBACH ITERATION " << t << " | Lambda = " << lambda_val << " ===" << endl;
 

@@ -16,6 +16,6 @@ class OpenAlexOracle : public IGraphOracle
     std::string url_encode(const std::string &value);
 
 public:
-    explicit OpenAlexOracle(int max_in = 1500);
+    explicit OpenAlexOracle(int max_in = 0);
     const std::pair<std::vector<int>, std::vector<int>> &query(int v_int) override;
 };

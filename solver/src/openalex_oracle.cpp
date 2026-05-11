@@ -45,18 +45,16 @@ std::string OpenAlexOracle::fetch_url(const std::string &url, int max_retries)
         if (res == CURLE_OK && http_code == 200)
             break;
 
+        if (res == CURLE_OK && http_code == 404)
+        {
+            curl_easy_cleanup(curl);
+            throw std::runtime_error("404 Not Found");
+        }
+
         std::cerr << "[" << get_timestamp() << "] HTTP Request failed (Attempt "
                   << attempt << "/" << max_retries << ") for " << url << "\n"
                   << "    -> cURL Error: " << curl_easy_strerror(res)
                   << " | HTTP Code: " << http_code << "\n";
-
-        if (!readBuffer.empty())
-        {
-            std::string snippet = readBuffer.substr(0, 250);
-            std::replace(snippet.begin(), snippet.end(), '\n', ' ');
-            std::cerr << "    -> Server Msg: " << snippet
-                      << (readBuffer.size() > 250 ? "..." : "") << "\n";
-        }
 
         if (attempt < max_retries)
         {

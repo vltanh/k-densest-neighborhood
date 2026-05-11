@@ -24,6 +24,7 @@ private:
     double cg_batch_fraction;
     int cg_min_batch;
     int cg_max_batch;
+    int kappa;
 
     std::unordered_set<int> V_active;
     std::unordered_set<int> F;
@@ -73,7 +74,7 @@ private:
         double net_start_bb);
     std::pair<int, bool> _select_branch_var(const std::unordered_map<int, double> &x_bar, double lambda_val);
     std::pair<std::unordered_set<int>, double> _branch_and_price(double lambda_val);
-    void _prune_discrete_solution(std::unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density);
+    void _prune_discrete_solution(std::unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density, bool enforce_connectivity = false);
 
 public:
     SolverStats stats;
@@ -81,7 +82,8 @@ public:
     FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                              double tol = 1e-6, int bb_node_limit = 100000, double bb_time_limit = 60.0,
                              double bb_gap_tol = 1e-4, int dinkelbach_max_iter = 50,
-                             double cg_batch_fraction = 0.1, int cg_min_batch = 5, int cg_max_batch = 50);
+                             double cg_batch_fraction = 1.0, int cg_min_batch = 50, int cg_max_batch = 50,
+                             int kappa = 2);
     ~FullBranchAndPriceSolver();
 
     std::pair<std::unordered_set<int>, double> solve();

@@ -1,6 +1,11 @@
-#include "solver.hpp"
 #include "simulation_oracle.hpp"
 #include "openalex_oracle.hpp"
+#include "solver.hpp"
+#include "average_degree_solver.hpp"
+#include "connected_greedy_baseline.hpp"
+#include "exact_connected_avg_degree.hpp"
+#include "bfs_solver.hpp"
+#include "subgraph_quality.hpp"
 #include <iostream>
 #include <fstream>
 #include <memory>
@@ -16,22 +21,32 @@ void print_usage(const char *prog_name)
     cout << "Usage: " << prog_name << " [OPTIONS]\n\n"
          << "Required Arguments:\n"
          << "  --mode <sim|openalex>     Mode of operation (local CSV simulation or live API)\n"
-         << "  --query <node_id>         The string ID of the target query node\n"
-         << "  --k <int>                 The target subgraph size (k >= 2)\n\n"
+         << "  --query <node_id>         The string ID of the target query node\n\n"
          << "Conditionally Required:\n"
          << "  --input <edge.csv>        Path to the local edge list (REQUIRED if --mode sim)\n\n"
          << "Optional I/O:\n"
          << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n\n"
+         << "  --compute-qualities       Compute final density/internal-edge metrics (may issue extra oracle queries)\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
-         << "  --time-limit <float>      Max Branch-and-Bound time in seconds (default: 60.0)\n"
-         << "  --node-limit <int>        Max Branch-and-Bound nodes to explore (default: 100000)\n"
+         << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: 60.0)\n"
+         << "  --node-limit <int>        Max Branch-and-Bound nodes to explore; -1 disables (default: 100000)\n"
          << "  --max-in-edges <int>      Max incoming edges to fetch per node (default: 0)\n"
          << "  --gap-tol <float>         Early stopping relative gap tolerance (default: 1e-4)\n"
-         << "  --dinkelbach-iter <int>   Max Dinkelbach (fractional programming) iterations (default: 50)\n"
-         << "  --cg-batch-frac <float>   Fraction of active set to price per iteration (default: 0.1)\n"
-         << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 5)\n"
+         << "  --dinkelbach-iter <int>   Max Dinkelbach iterations; -1 disables (default: 50)\n"
+         << "  --cg-batch-frac <float>   Fraction of active set to price per iteration (default: 1.0)\n"
+         << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 50)\n"
          << "  --cg-max-batch <int>      Maximum columns to add per pricing round (default: 50)\n"
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
+         << "  --k <int>                 Target subgraph size (REQUIRED for --bp; k >= 2)\n"
+         << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
+         << "  --baseline-depth <int>    Max BFS depth for connected baselines; -1 means full reachable graph (default: -1)\n"
+         << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n\n"
+         << "Solver Variants:\n"
+         << "  --bp                      Run BP; uses --k and --kappa\n"
+         << "  --avgdeg                  Run exact query-anchored avgdeg; no method-specific CLI parameter\n"
+         << "  --bfs                     Run BFS; uses --bfs-depth\n"
+         << "  --conn-greedy             Run Conn-greedy; uses --k and --baseline-depth\n"
+         << "  --conn-avgdeg             Run Conn-avgdeg; uses --baseline-depth\n"
          << "  --help, -h                Print this help menu and exit\n";
 }
 
@@ -71,16 +86,31 @@ int main(int argc, char *argv[])
     string query_node = "";
     int k = -1;
     string output_file = "";
+    bool compute_qualities = false;
 
     double time_limit = 60.0;
     int node_limit = 100000;
     int max_in_edges = 0;
     double gap_tol = 1e-4;
     int dinkelbach_iter = 50;
-    double cg_batch_frac = 0.1;
-    int cg_min_batch = 5;
+    double cg_batch_frac = 1.0;
+    int cg_min_batch = 50;
     int cg_max_batch = 50;
     double tol = 1e-6;
+    int kappa = 0;
+
+    // Baseline parameters
+    bool run_bp = false;
+    bool run_avgdeg = false;
+    bool run_bfs = false;
+    bool run_conn_greedy = false;
+    bool run_conn_avgdeg = false;
+    int baseline_depth = -1;
+    int bfs_depth = 1;
+    bool k_provided = false;
+    bool kappa_provided = false;
+    bool baseline_depth_provided = false;
+    bool bfs_depth_provided = false;
 
     // ---------------------------------------------------------
     // 2. Command Line Argument Parsing
@@ -103,6 +133,42 @@ int main(int argc, char *argv[])
                 return 0;
             }
 
+            if (arg == "--compute-qualities")
+            {
+                compute_qualities = true;
+                continue;
+            }
+
+            if (arg == "--bp")
+            {
+                run_bp = true;
+                continue;
+            }
+
+            if (arg == "--avgdeg")
+            {
+                run_avgdeg = true;
+                continue;
+            }
+
+            if (arg == "--bfs")
+            {
+                run_bfs = true;
+                continue;
+            }
+
+            if (arg == "--conn-greedy")
+            {
+                run_conn_greedy = true;
+                continue;
+            }
+
+            if (arg == "--conn-avgdeg")
+            {
+                run_conn_avgdeg = true;
+                continue;
+            }
+
             if (i + 1 >= argc)
             {
                 cerr << "Error: Argument " << arg << " requires a value.\n";
@@ -118,7 +184,10 @@ int main(int argc, char *argv[])
             else if (arg == "--output")
                 output_file = argv[++i];
             else if (arg == "--k")
+            {
                 k = stoi(argv[++i]);
+                k_provided = true;
+            }
             else if (arg == "--time-limit")
                 time_limit = stod(argv[++i]);
             else if (arg == "--node-limit")
@@ -137,6 +206,21 @@ int main(int argc, char *argv[])
                 cg_max_batch = stoi(argv[++i]);
             else if (arg == "--tol")
                 tol = stod(argv[++i]);
+            else if (arg == "--kappa")
+            {
+                kappa = stoi(argv[++i]);
+                kappa_provided = true;
+            }
+            else if (arg == "--baseline-depth")
+            {
+                baseline_depth = stoi(argv[++i]);
+                baseline_depth_provided = true;
+            }
+            else if (arg == "--bfs-depth")
+            {
+                bfs_depth = stoi(argv[++i]);
+                bfs_depth_provided = true;
+            }
             else
             {
                 cerr << "Error: Unknown argument '" << arg << "'\n";
@@ -169,14 +253,48 @@ int main(int argc, char *argv[])
         cerr << "Error: --query is required.\n";
         return 1;
     }
-    if (k < 2)
+    int solver_count = (run_bp ? 1 : 0) + (run_avgdeg ? 1 : 0) + (run_bfs ? 1 : 0) +
+                       (run_conn_greedy ? 1 : 0) + (run_conn_avgdeg ? 1 : 0);
+    if (solver_count > 1)
     {
-        cerr << "Error: --k must be specified and >= 2.\n";
+        cerr << "Error: Specify at most one solver variant.\n";
+        return 1;
+    }
+
+    const bool uses_k = run_bp || run_conn_greedy || solver_count == 0;
+    if (uses_k && k < 2)
+    {
+        cerr << "Error: --k must be specified and >= 2 for this solver.\n";
+        return 1;
+    }
+    if (!uses_k && k_provided)
+    {
+        cerr << "Error: --k is only valid for --bp and --conn-greedy.\n";
         return 1;
     }
     if (mode == "sim" && input_file.empty())
     {
         cerr << "Error: --input edge list is required when using 'sim' mode.\n";
+        return 1;
+    }
+    if (kappa < 0)
+    {
+        cerr << "Error: --kappa must be >= 0.\n";
+        return 1;
+    }
+    if (!run_bp && solver_count != 0 && kappa_provided)
+    {
+        cerr << "Error: --kappa is only valid for --bp.\n";
+        return 1;
+    }
+    if (!run_bfs && bfs_depth_provided)
+    {
+        cerr << "Error: --bfs-depth is only valid for --bfs.\n";
+        return 1;
+    }
+    if ((run_bp || run_avgdeg || run_bfs) && baseline_depth_provided)
+    {
+        cerr << "Error: --baseline-depth is only valid for --conn-greedy and --conn-avgdeg.\n";
         return 1;
     }
 
@@ -220,35 +338,163 @@ int main(int argc, char *argv[])
 
         int q_node_int = oracle_ptr->mapper.get_or_create_id(query_node);
 
-        FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
-                                        tol, node_limit, time_limit, gap_tol,
-                                        dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch);
+        vector<int> best_nodes;
 
-        auto [best_nodes, final_density] = solver.solve();
+        if (run_bp)
+        {
+            cout << "==================================================" << endl;
+            cout << "[" << get_timestamp() << "] Running BP solver..." << endl;
+            cout << "==================================================" << endl;
 
-        cout << "==================================================" << endl;
-        cout << "OPTIMIZATION STATISTICS" << endl;
-        cout << "==================================================" << endl;
-        cout << left << setw(25) << "B&B Nodes Explored" << ": " << solver.stats.total_bb_nodes << endl;
-        cout << left << setw(25) << "Total LP Solves" << ": " << solver.stats.total_lp_solves << endl;
-        cout << left << setw(25) << "Columns Generated" << ": " << solver.stats.total_columns_added << endl;
-        cout << left << setw(25) << "BQP Cuts Added" << ": " << solver.stats.total_cuts_added << endl;
-        cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
-        cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
-        cout << "--------------------------------------------------" << endl;
-        cout << "TIMING BREAKDOWN" << endl;
-        cout << left << setw(25) << "Model Sync Time" << ": " << fixed << setprecision(3) << solver.stats.t_sync << "s" << endl;
-        cout << left << setw(25) << "Gurobi LP Time" << ": " << fixed << setprecision(3) << solver.stats.t_lp_solve << "s" << endl;
-        cout << left << setw(25) << "Pricing Time" << ": " << fixed << setprecision(3) << solver.stats.t_pricing << "s" << endl;
-        cout << left << setw(25) << "Separation Time" << ": " << fixed << setprecision(3) << solver.stats.t_separation << "s" << endl;
-        cout << left << setw(25) << "Network Wait Time" << ": " << fixed << setprecision(3) << oracle_ptr->cumulative_network_time << "s" << endl;
-        cout << "--------------------------------------------------" << endl;
-        cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << solver.stats.t_total << "s" << endl;
+            auto t_start = chrono::high_resolution_clock::now();
+            FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
+                                            tol, node_limit, time_limit, gap_tol,
+                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch, kappa);
+
+            auto bp_result = solver.solve();
+            best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
+            auto t_end = chrono::high_resolution_clock::now();
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
+                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+        }
+        else if (run_avgdeg)
+        {
+            cout << "==================================================" << endl;
+            cout << "[" << get_timestamp() << "] Running Avgdeg solver..." << endl;
+            cout << "==================================================" << endl;
+
+            auto t_start = chrono::high_resolution_clock::now();
+            AverageDegreeSolver baseline_solver(oracle_ptr.get(), 1);
+
+            vector<int> res = baseline_solver.solve(q_node_int, baseline_depth);
+            auto t_end = chrono::high_resolution_clock::now();
+
+            best_nodes = res;
+
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
+                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+        }
+        else if (run_bfs)
+        {
+            cout << "==================================================" << endl;
+            cout << "[" << get_timestamp() << "] Running BFS solver..." << endl;
+            cout << "==================================================" << endl;
+
+            auto t_start = chrono::high_resolution_clock::now();
+            BFSSolver bfs_solver(oracle_ptr.get());
+            vector<int> res = bfs_solver.solve(q_node_int, bfs_depth);
+            auto t_end = chrono::high_resolution_clock::now();
+
+            best_nodes = res;
+
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
+                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+        }
+        else if (run_conn_greedy)
+        {
+            cout << "==================================================" << endl;
+            cout << "[" << get_timestamp() << "] Running Conn-greedy solver..." << endl;
+            cout << "==================================================" << endl;
+
+            auto t_start = chrono::high_resolution_clock::now();
+            ConnectedGreedyBaseline connected_baseline(oracle_ptr.get(), k);
+
+            vector<int> res = connected_baseline.solve(q_node_int, baseline_depth);
+            auto t_end = chrono::high_resolution_clock::now();
+
+            best_nodes = res;
+
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
+                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+        }
+        else if (run_conn_avgdeg)
+        {
+            cout << "==================================================" << endl;
+            cout << "[" << get_timestamp() << "] Running Conn-avgdeg solver..." << endl;
+            cout << "==================================================" << endl;
+
+            auto t_start = chrono::high_resolution_clock::now();
+
+            ExactConnectedAvgDegree exact_connected(oracle_ptr.get(), &env);
+            vector<int> res = exact_connected.solve(q_node_int, baseline_depth);
+
+            auto t_end = chrono::high_resolution_clock::now();
+            best_nodes = res;
+
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3)
+                 << chrono::duration<double>(t_end - t_start).count() << "s" << endl;
+        }
+        else
+        {
+            FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
+                                            tol, node_limit, time_limit, gap_tol,
+                                            dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch, kappa);
+
+            auto bp_result = solver.solve();
+            best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
+
+            cout << "==================================================" << endl;
+            cout << "OPTIMIZATION STATISTICS" << endl;
+            cout << "==================================================" << endl;
+            cout << left << setw(25) << "B&B Nodes Explored" << ": " << solver.stats.total_bb_nodes << endl;
+            cout << left << setw(25) << "Total LP Solves" << ": " << solver.stats.total_lp_solves << endl;
+            cout << left << setw(25) << "Columns Generated" << ": " << solver.stats.total_columns_added << endl;
+            cout << left << setw(25) << "BQP Cuts Added" << ": " << solver.stats.total_cuts_added << endl;
+            cout << left << setw(25) << "API Queries Made" << ": " << oracle_ptr->queries_made << endl;
+            cout << left << setw(25) << "Unique Nodes Mapped" << ": " << oracle_ptr->mapper.size() << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << "TIMING BREAKDOWN" << endl;
+            cout << left << setw(25) << "Model Sync Time" << ": " << fixed << setprecision(3) << solver.stats.t_sync << "s" << endl;
+            cout << left << setw(25) << "Gurobi LP Time" << ": " << fixed << setprecision(3) << solver.stats.t_lp_solve << "s" << endl;
+            cout << left << setw(25) << "Pricing Time" << ": " << fixed << setprecision(3) << solver.stats.t_pricing << "s" << endl;
+            cout << left << setw(25) << "Separation Time" << ": " << fixed << setprecision(3) << solver.stats.t_separation << "s" << endl;
+            cout << left << setw(25) << "Network Wait Time" << ": " << fixed << setprecision(3) << oracle_ptr->cumulative_network_time << "s" << endl;
+            cout << "--------------------------------------------------" << endl;
+            cout << left << setw(25) << "Total Solver Time" << ": " << fixed << setprecision(3) << solver.stats.t_total << "s" << endl;
+        }
+
         cout << "==================================================" << endl;
         cout << "FINAL SOLUTION" << endl;
         cout << "==================================================" << endl;
-        cout << left << setw(25) << "Density" << ": " << fixed << setprecision(6) << final_density << endl;
-        cout << left << setw(25) << "Size" << ": " << best_nodes.size() << endl;
+        int solve_queries_made = oracle_ptr->queries_made;
+        if (compute_qualities)
+        {
+            SubgraphQualities final_metrics = compute_subgraph_qualities(best_nodes, oracle_ptr.get());
+            cout << left << setw(25) << "Average Degree Density" << ": " << fixed << setprecision(6) << final_metrics.avg_degree_density << endl;
+            cout << left << setw(25) << "Avg Total Int Degree" << ": " << fixed << setprecision(6) << final_metrics.avg_total_internal_degree << endl;
+            cout << left << setw(25) << "Edge Density (Target)" << ": " << fixed << setprecision(6) << final_metrics.edge_density << endl;
+            cout << left << setw(25) << "Internal Edges" << ": " << final_metrics.num_edges << endl;
+            cout << left << setw(25) << "Boundary Out Edges" << ": " << final_metrics.boundary_edges_out << endl;
+            cout << left << setw(25) << "Outgoing Conductance" << ": " << fixed << setprecision(6) << final_metrics.outgoing_conductance << endl;
+            cout << left << setw(25) << "Expansion" << ": " << fixed << setprecision(6) << final_metrics.expansion << endl;
+            cout << left << setw(25) << "Weak Components" << ": " << final_metrics.weak_components << endl;
+            cout << left << setw(25) << "Largest Weak Comp Ratio" << ": " << fixed << setprecision(6) << final_metrics.weak_component_ratio << endl;
+            cout << left << setw(25) << "Reciprocity" << ": " << fixed << setprecision(6) << final_metrics.reciprocity << endl;
+            cout << left << setw(25) << "Size" << ": " << final_metrics.num_nodes << endl;
+            cout << left << setw(25) << "Quality Extra Queries" << ": " << (oracle_ptr->queries_made - solve_queries_made) << endl;
+        }
+        else
+        {
+            cout << left << setw(25) << "Average Degree Density" << ": skipped" << endl;
+            cout << left << setw(25) << "Edge Density (Target)" << ": skipped" << endl;
+            cout << left << setw(25) << "Internal Edges" << ": skipped" << endl;
+            cout << left << setw(25) << "Size" << ": " << best_nodes.size() << endl;
+        }
 
         if (!output_file.empty())
         {
