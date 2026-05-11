@@ -548,27 +548,55 @@ University of Illinois Urbana-Champaign \\
 
 \section{Experiments}
 
-\begin{frame}{Solver correctness: setup}
-  Synthetic Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at $n = 20$,
-  $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$. Fifteen graphs total.
-  Query node $q$ is the highest-degree node per graph.
+\begin{frame}{Exp 1: solver correctness on enumerable graphs}
+  \textbf{Goal.} Verify that the C++ branch-and-price binary recovers
+  the true edge-density and avg-degree optima on graphs small enough
+  to enumerate exhaustively.
 
   \vfill
 
-  \textbf{Brute force.} Enumerates every $S \ni q$, $|S| \ge k$, for
-  $k \in \{3, 4, 5\}$, and records the maximum-density $S$ at every
-  edge-connectivity threshold $\kappa \in \{0, 1, 2\}$, along with the
-  realised $\lambda(S)$.
-
-  \vfill
-
-  \textbf{Solver.} Runs the C++ branch-and-price binary across every
-  $(\mathrm{method}, k, \kappa)$ cell with no time, node, gap, or
-  Dinkelbach limit. Cells brute-force-infeasible (sentinel $-1$ in
-  \texttt{optima.csv}) are skipped so wall time stays finite.
+  \textbf{Fixture.} Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at
+  $n = 20$, $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$. Fifteen
+  graphs total. Query node $q$ is the highest-degree node per graph.
 \end{frame}
 
-\begin{frame}{Solver correctness: result}
+\begin{frame}{Exp 1: brute-force oracle}
+  \textbf{Enumerator.} For every $S \ni q$ with $|S| \ge k$:
+  \begin{itemize}
+    \item Iterate $k \in \{3, 4, 5\}$ and
+    $\kappa \in \{0, 1, 2\}$.
+    \item Record the maximum-density $S$ subject to
+    $\lambda(S) \ge \kappa$.
+    \item Cells with no feasible $S$ at the requested $\kappa$ store a
+    $-1$ sentinel in \texttt{optima.csv}.
+  \end{itemize}
+
+  \vfill
+
+  Every row carries a \texttt{code\_hash} (sha256 of the brute-force
+  script) so a stale CSV is rejected at aggregation.
+\end{frame}
+
+\begin{frame}{Exp 1: solver protocol}
+  \textbf{Runs.} The C++ binary on every
+  $(\mathrm{method}, k, \kappa, \mathrm{seed})$ cell with no time,
+  node, gap, or Dinkelbach limit.
+
+  \vfill
+
+  \textbf{Skip rule.} Cells brute-force-infeasible (the $-1$ sentinel
+  in \texttt{optima.csv}) are not dispatched; without this the solver
+  exhausts B\&B trying to prove infeasibility and wall time blows up
+  on sparse seeds.
+
+  \vfill
+
+  Every row in \texttt{solver\_runs.csv} carries the matching
+  \texttt{solver\_build\_id} (git short SHA + UTC build time baked at
+  \texttt{cmake} time) so a stale binary is rejected at aggregation.
+\end{frame}
+
+\begin{frame}{Exp 1: result}
   \textbf{AvgDeg} matches the unconstrained avg-degree optimum on
   $15 / 15$ graphs at every $p$.
 
@@ -576,18 +604,9 @@ University of Illinois Urbana-Champaign \\
 
   \textbf{BP} matches the edge-density optimum on every feasible
   $(k, \kappa, p)$ cell. Two cells at $k = 3$, $\kappa \in \{1, 2\}$,
-  $p = 0.5$ have one seed where $\lambda(S) < \kappa$; that seed is
-  surfaced as \texttt{infeasible\_kappa} rather than counted as a
-  non-match.
-
-  \vfill
-
-  \textbf{Reproducibility stamps.} \texttt{optima.csv} rows carry a
-  \texttt{code\_hash} (sha256 of the brute-force script source);
-  \texttt{solver\_runs.csv} rows carry the matching
-  \texttt{solver\_build\_id} (git short SHA + UTC build time baked into
-  the binary at \texttt{cmake} time). A stale brute force or a stale
-  binary is caught at the aggregation stage.
+  $p = 0.5$ have one seed where no $S$ reaches the requested $\kappa$;
+  that seed is surfaced as \texttt{infeasible\_kappa} rather than
+  counted as a non-match.
 \end{frame}
 
 \begin{frame}{Classification protocol}
