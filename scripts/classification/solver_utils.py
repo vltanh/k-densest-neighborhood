@@ -717,6 +717,7 @@ def evaluate_nodes(
             "solver_build_id": solver_payload.get("solver_build_id"),
             "kappa_verified": result.get("kappa_verified"),
             "kappa_verify_failed": result.get("kappa_verify_failed"),
+            "stats": result.get("stats"),
         }
         return record, False
 
