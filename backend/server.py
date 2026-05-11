@@ -262,8 +262,11 @@ class SimSolverRequest(SolverParams):
     ghost_max_per_node: Optional[int] = 5
 
 
-# Cache: dataset -> (nodes_df_dict, adjacency, num_classes)
-_sim_cache: Dict[str, Tuple[Dict[int, dict], Dict[int, List[int]], int]] = {}
+# Cache: dataset -> (nodes_df_dict, undirected adjacency, directed out-adjacency, num_classes)
+_sim_cache: Dict[
+    str,
+    Tuple[Dict[int, dict], Dict[int, List[int]], Dict[int, List[int]], int],
+] = {}
 
 
 def _load_sim_dataset(dataset: str):
@@ -297,6 +300,7 @@ def _load_sim_dataset(dataset: str):
             nodes[nid] = {"id": nid, "label": lbl, "split": split}
 
     adj: Dict[int, List[int]] = {}
+    adj_out: Dict[int, List[int]] = {}
     with open(edge_csv, "r") as f:
         reader = csv.reader(f)
         next(reader, None)
@@ -306,8 +310,9 @@ def _load_sim_dataset(dataset: str):
             s, t = int(row[0]), int(row[1])
             adj.setdefault(s, []).append(t)
             adj.setdefault(t, []).append(s)
+            adj_out.setdefault(s, []).append(t)
 
-    _sim_cache[dataset] = (nodes, adj, max_label + 1)
+    _sim_cache[dataset] = (nodes, adj, adj_out, max_label + 1)
     return _sim_cache[dataset]
 
 
@@ -320,7 +325,7 @@ def list_datasets():
             os.path.join(base, "edge.csv")
         ):
             try:
-                nodes, _adj, nclass = _load_sim_dataset(d)
+                nodes, _adj, _adj_out, nclass = _load_sim_dataset(d)
                 out.append({"name": d, "numNodes": len(nodes), "numClasses": nclass})
             except Exception as e:
                 logger.warning(f"Failed loading {d}: {e}")
@@ -335,7 +340,7 @@ async def extract_sim(req: SimSolverRequest):
     if not os.path.exists(bin_path):
         raise HTTPException(status_code=500, detail="Solver missing.")
 
-    nodes_meta, adj, num_classes = _load_sim_dataset(req.dataset)
+    nodes_meta, adj, adj_out, num_classes = _load_sim_dataset(req.dataset)
     if req.query_node not in nodes_meta:
         raise HTTPException(
             status_code=400,
@@ -427,19 +432,21 @@ async def extract_sim(req: SimSolverRequest):
                 )
 
             edges_out = []
-            seen_pairs = set()
+            seen_directed = set()
             for nid in core_ids:
-                for nb in adj.get(nid, []):
+                for nb in adj_out.get(nid, []):
                     if nb in core_set and nb != nid:
-                        key = (min(nid, nb), max(nid, nb))
-                        if key in seen_pairs:
+                        key = (nid, nb)
+                        if key in seen_directed:
                             continue
-                        seen_pairs.add(key)
+                        seen_directed.add(key)
                         edges_out.append(
                             {"source": str(nid), "target": str(nb), "type": "core"}
                         )
 
-            # Ghost frontier sampling
+            # Ghost frontier sampling. Direction preserved from the original
+            # directed graph: if nid -> nb, ghost is target; if nb -> nid,
+            # ghost is source.
             ghost_set = set()
             frac = max(0.0, min(1.0, req.ghost_sample_frac or 0.0))
             cap = max(0, req.ghost_max_per_node or 0)
@@ -451,6 +458,7 @@ async def extract_sim(req: SimSolverRequest):
                 sample = random.sample(
                     neighbors_outside, min(sample_size, len(neighbors_outside))
                 )
+                out_set_nid = set(adj_out.get(nid, []))
                 for nb in sample:
                     g_id = f"ghost_{nb}"
                     if g_id not in ghost_set:
@@ -466,9 +474,14 @@ async def extract_sim(req: SimSolverRequest):
                             }
                         )
                         ghost_set.add(g_id)
-                    edges_out.append(
-                        {"source": str(nid), "target": g_id, "type": "ghost"}
-                    )
+                    if nb in out_set_nid:
+                        edges_out.append(
+                            {"source": str(nid), "target": g_id, "type": "ghost"}
+                        )
+                    else:
+                        edges_out.append(
+                            {"source": g_id, "target": str(nid), "type": "ghost"}
+                        )
 
             yield json.dumps(
                 {
