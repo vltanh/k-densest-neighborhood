@@ -104,15 +104,22 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
     const xSpacing = Math.max(70, (width * 0.8) / Math.max(1, coreNodes.length - 1));
     const totalWidth = xSpacing * (coreNodes.length - 1);
     const startX = (width - totalWidth) / 2;
+    const yBand = Math.min(height * 0.32, 280);
 
     const nodes = graphData.nodes.map(d => {
       const copy = Object.create(d);
       if (copy.type === 'core') {
         const rank = rankMap.get(copy.id);
         copy.targetX = startX + rank * xSpacing;
+        // 3-row zigzag: rank %3 maps to top / middle / bottom band so adjacent
+        // ranks never share a row and a single row never holds all nodes.
+        const row = rank % 3;
+        const band = row === 0 ? -1 : row === 1 ? 0 : 1;
+        copy.targetY = height / 2 + band * yBand + (Math.random() - 0.5) * 60;
         copy.x = copy.targetX;
-        copy.y = height / 2 + (rank % 2 === 0 ? 1 : -1) * (160 + Math.random() * 120);
+        copy.y = copy.targetY;
       } else {
+        copy.targetY = height / 2;
         copy.y = height / 2;
         copy.targetX = width / 2;
       }
@@ -138,7 +145,7 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
 
     const g = svg.append('g');
 
-    const totalHeight = 2 * (160 + 120) + 80;
+    const totalHeight = 2 * yBand + 80;
     const scaleX = (totalWidth + 200) > width ? width / (totalWidth + 200) : 1;
     const scaleY = totalHeight > height ? height / totalHeight : 1;
     const initialScale = Math.min(scaleX, scaleY, 1);
@@ -152,11 +159,12 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
     zoomBehaviorRef.current = zoom;
 
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'core' ? 120 : 40))
+      .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'core' ? 140 : 40))
       .force('charge', d3.forceManyBody().strength(d => d.type === 'core' ? -1800 : -25))
-      .force('y', d3.forceY(height / 2).strength(0.012))
+      .force('y', d3.forceY(d => d.type === 'core' ? d.targetY : height / 2)
+                    .strength(d => d.type === 'core' ? 0.12 : 0.01))
       .force('x', d3.forceX(d => d.type === 'core' ? d.targetX : width/2).strength(d => d.type === 'core' ? 0.35 : 0.01))
-      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 38 : 8));
+      .force('collide', d3.forceCollide().radius(d => d.type === 'core' ? 42 : 8));
 
     const link = g.append('g').selectAll('line').data(links).join('line')
       .attr('stroke', d => d.type === 'core' ? COL_INK_SOFT : COL_GHOST_LN)
