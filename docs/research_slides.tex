@@ -511,97 +511,83 @@ University of Illinois Urbana-Champaign \\
   \textbf{Effect} stronger incumbent, smaller returned community.
 \end{frame}
 
-\begin{frame}{Average-degree baseline}
+\begin{frame}{Average-degree baseline: pipeline}
   \textbf{Problem.} Maximise $|E(S)| / |S|$ over $S \ni q$,
   $S \subseteq V_{\mathrm{loc}}$ where $V_{\mathrm{loc}}$ is BFS-bounded.
-  Different objective from BP: avg degree, not pair density. No size
-  constraint, no connectivity constraint, no triangle relaxation.
+  No size constraint, no connectivity constraint, no triangle
+  relaxation. Different objective from BP: avg degree, not pair
+  density.
 
   \vfill
 
-  \textbf{Pipeline.} BFS from $q$ caches the local subgraph once;
-  Dinkelbach bisects $\lambda \in [0, |E_{\mathrm{loc}}|]$; each $\lambda$
-  builds a Goldberg-style $s$--$t$ flow network and reads the
-  source-side residual of a push-relabel max-flow as $S_\lambda$. The
-  argmax density across all probed $\lambda$ is kept, not just the
-  converged one.
-
-  \vfill
-
-  \textbf{Four adaptations of Goldberg 1984.}
+  \textbf{Pipeline.}
   \begin{itemize}
-    \item \emph{Query anchor:} $s \to q$ capacity $\infty$ keeps $q$ on
-    the source side of every cut.
-    \item \emph{Local subgraph:} BFS bound replaces Goldberg's
-    fully-materialised graph; required for the lazy oracle.
-    \item \emph{Directed unit-weight edges:} each directed edge
-    $(u, v)$ contributes one edge-item, so density counts directed
-    edges; reciprocal pairs contribute two.
-    \item \emph{Objective:} avg degree, not pair density. Not monotone
-    in each other.
+    \item BFS from $q$ caches the local subgraph once.
+    \item Dinkelbach bisects $\lambda \in [0, |E_{\mathrm{loc}}|]$.
+    \item Per $\lambda$: Goldberg-style $s$--$t$ flow network, then
+    push-relabel max-flow. The source-side residual gives $S_\lambda$.
+    \item Keep the argmax density across every probed $\lambda$, not
+    only the converged one.
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Implementation summary}
+\begin{frame}{Average-degree baseline: four adaptations of Goldberg 1984}
   \begin{itemize}
-    \item C++ solver with Gurobi
-    \item Simulation oracle for CSV graphs
-    \item OpenAlex oracle for live citation search
-    \item Python scripts for tuning and evaluation
-    \item FastAPI backend streams solver logs
-    \item React frontend visualizes core and frontier papers
-  \end{itemize}
-
-  \vfill
-
-  \textbf{Telemetry}
-  \begin{itemize}
-    \item B\&B nodes
-    \item LP solves
-    \item columns generated
-    \item cuts added
-    \item oracle queries
-    \item timing breakdown
+    \item \emph{Query anchor.} $s \to q$ capacity $\infty$ keeps $q$ on
+    the source side of every cut, so the answer is query-anchored
+    densest.
+    \item \emph{Local subgraph.} BFS bound replaces Goldberg's
+    fully-materialised graph; required for the lazy oracle.
+    \item \emph{Directed unit-weight edges.} Each directed edge
+    $(u, v)$ contributes one edge-item, so density counts directed
+    edges; a reciprocal pair $(u, v), (v, u)$ contributes two.
+    \item \emph{Objective.} Avg degree, not pair density. The two
+    objectives are not monotone in each other.
   \end{itemize}
 \end{frame}
 
 \section{Experiments}
 
-\begin{frame}{Solver correctness on enumerable graphs}
+\begin{frame}{Solver correctness: setup}
   Synthetic Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at $n = 20$,
-  $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$ (15 graphs).
+  $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$. Fifteen graphs total.
   Query node $q$ is the highest-degree node per graph.
 
   \vfill
 
-  \textbf{Brute force} enumerates every subset containing $q$ at sizes
-  $|S| \ge k$ for $k \in \{3, 4, 5\}$, and at edge-connectivity
-  $\lambda(S) \ge \kappa$ for $\kappa \in \{0, 1, 2\}$. The optimum and its
-  realised edge-connectivity are recorded for every cell.
+  \textbf{Brute force.} Enumerates every $S \ni q$, $|S| \ge k$, for
+  $k \in \{3, 4, 5\}$, and records the maximum-density $S$ at every
+  edge-connectivity threshold $\kappa \in \{0, 1, 2\}$, along with the
+  realised $\lambda(S)$.
 
   \vfill
 
-  \textbf{Solver runs} the C++ solver across every (method, $k$, $\kappa$)
-  cell with no time, node, gap, or Dinkelbach limit. Cells declared
-  brute-force-infeasible are skipped (the sentinel $-1$ in
-  \texttt{optima.csv}) to keep the wall time finite.
+  \textbf{Solver.} Runs the C++ branch-and-price binary across every
+  $(\mathrm{method}, k, \kappa)$ cell with no time, node, gap, or
+  Dinkelbach limit. Cells brute-force-infeasible (sentinel $-1$ in
+  \texttt{optima.csv}) are skipped so wall time stays finite.
+\end{frame}
+
+\begin{frame}{Solver correctness: result}
+  \textbf{AvgDeg} matches the unconstrained avg-degree optimum on
+  $15 / 15$ graphs at every $p$.
 
   \vfill
 
-  \textbf{Result.} AvgDeg recovers the brute-force avg-degree optimum on
-  $15 / 15$ graphs. BP recovers the brute-force edge-density optimum on
-  every $(k, \kappa, p)$ cell that is feasible on at least one seed; two
-  cells at $k = 3$, $\kappa \in \{1, 2\}$, $p = 0.5$ have one seed with
-  $\lambda(S) < \kappa$ and that seed is surfaced as
-  \texttt{infeasible\_kappa} rather than counted as a non-match.
+  \textbf{BP} matches the edge-density optimum on every feasible
+  $(k, \kappa, p)$ cell. Two cells at $k = 3$, $\kappa \in \{1, 2\}$,
+  $p = 0.5$ have one seed where $\lambda(S) < \kappa$; that seed is
+  surfaced as \texttt{infeasible\_kappa} rather than counted as a
+  non-match.
 
   \vfill
 
-  \textbf{Reproducibility stamps.} Every \texttt{optima.csv} row carries a
-  \texttt{code\_hash} (sha256 of the brute-force script) and every
-  \texttt{solver\_runs.csv} row carries the matching solver
-  \texttt{solver\_build\_id} so a stale binary or script is caught at
-  aggregation.
+  \textbf{Reproducibility stamps.} \texttt{optima.csv} rows carry a
+  \texttt{code\_hash} (sha256 of the brute-force script source);
+  \texttt{solver\_runs.csv} rows carry the matching
+  \texttt{solver\_build\_id} (git short SHA + UTC build time baked into
+  the binary at \texttt{cmake} time). A stale brute force or a stale
+  binary is caught at the aggregation stage.
 \end{frame}
 
 \begin{frame}{Classification protocol}
