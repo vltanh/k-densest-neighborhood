@@ -35,7 +35,7 @@ from benchmark_solvers import run_solver as run_benchmark_solver
     f"solver quality dependencies unavailable: {SOLVER_UTILS_IMPORT_ERROR}",
 )
 class SolverQualityTests(unittest.TestCase):
-    def test_undir_internal_norm_min_cut_uses_symmetric_pymincut_edges(self):
+    def test_undir_internal_ncut_uses_symmetric_pymincut_edges(self):
         mincut_neighbors = {
             0: {1},
             1: {0, 2},
@@ -54,8 +54,10 @@ class SolverQualityTests(unittest.TestCase):
             [0, 1, 2, 3], out_neighbors, mincut_neighbors
         )
 
-        self.assertEqual(qualities["undir_internal_norm_min_cut_computed"], 1)
-        self.assertTrue(math.isclose(qualities["undir_internal_norm_min_cut"], 1.0))
+        # Path 0-1-2-3, min cut isolates a leaf: cut=1, vol_a=1, vol_b=5.
+        # NCut = 1 * (1+5) / (1*5) = 1.2.
+        self.assertEqual(qualities["undir_internal_ncut_computed"], 1)
+        self.assertTrue(math.isclose(qualities["undir_internal_ncut"], 1.2))
 
 
 @unittest.skipIf(

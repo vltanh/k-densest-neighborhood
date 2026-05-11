@@ -100,8 +100,8 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             "dir_internal_edge_density": 0.0,
             "undir_external_expansion": 0.0,
             "undir_external_conductance": 0.0,
-            "undir_internal_norm_min_cut": math.nan,
-            "undir_internal_norm_min_cut_computed": 0,
+            "undir_internal_ncut": math.nan,
+            "undir_internal_ncut_computed": 0,
         }
 
     undir_internal_edges, undir_boundary_edges = compute_mS_cS(mincut_neighbors, node_set)
@@ -121,16 +121,17 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
         else 0.0
     )
 
-    undir_internal_norm_min_cut = math.nan
-    min_cut_computed = 0
+    undir_internal_ncut = math.nan
+    ncut_computed = 0
     if n >= 2:
         if undir_internal_edges == 0:
-            undir_internal_norm_min_cut = 0.0
-            min_cut_computed = 1
+            # Disconnected induced subgraph: empty cut, no internal volume on
+            # one side. Conventional choice is 0 (perfectly cuttable).
+            undir_internal_ncut = 0.0
+            ncut_computed = 1
         else:
             try:
                 part_a, part_b, cut_value = compute_mincut(mincut_neighbors, node_set)
-                # For normalization, use volumes inside the induced subgraph.
                 vol_a = sum(
                     1
                     for u in part_a
@@ -143,21 +144,23 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
                     for v in mincut_neighbors.get(u, [])
                     if v in node_set
                 )
-                min_vol = min(vol_a, vol_b)
-                undir_internal_norm_min_cut = (
-                    cut_value / min_vol if min_vol > 0 else 0.0
-                )
-                min_cut_computed = 1
+                if vol_a > 0 and vol_b > 0:
+                    undir_internal_ncut = (
+                        cut_value * (vol_a + vol_b) / (vol_a * vol_b)
+                    )
+                else:
+                    undir_internal_ncut = 0.0
+                ncut_computed = 1
             except Exception:
-                undir_internal_norm_min_cut = math.nan
+                undir_internal_ncut = math.nan
 
     return {
         "dir_internal_avg_degree": dir_internal_avg_degree,
         "dir_internal_edge_density": dir_internal_edge_density,
         "undir_external_expansion": undir_external_expansion,
         "undir_external_conductance": undir_external_conductance,
-        "undir_internal_norm_min_cut": undir_internal_norm_min_cut,
-        "undir_internal_norm_min_cut_computed": min_cut_computed,
+        "undir_internal_ncut": undir_internal_ncut,
+        "undir_internal_ncut_computed": ncut_computed,
     }
 
 
@@ -211,9 +214,9 @@ def evaluate_nodes(
         "dir_internal_edge_density": [],
         "undir_external_expansion": [],
         "undir_external_conductance": [],
-        "undir_internal_norm_min_cut": [],
+        "undir_internal_ncut": [],
     }
-    min_cut_computed = 0
+    ncut_computed = 0
 
     fallback_count = 0
     total_queries = len(query_nodes)
@@ -251,7 +254,7 @@ def evaluate_nodes(
                 )
                 for key in quality_values:
                     quality_values[key].append(qualities[key])
-                min_cut_computed += qualities["undir_internal_norm_min_cut_computed"]
+                ncut_computed += qualities["undir_internal_ncut_computed"]
 
             # Filter neighborhood to strictly contain Train nodes (EXCLUDING the query node itself)
             train_neighbors = [n for n in neighborhood if train_mask[n] and n != q_node]
@@ -334,11 +337,11 @@ def evaluate_nodes(
                     "avg_undir_external_conductance": _safe_mean(
                         quality_values["undir_external_conductance"]
                     ),
-                    "avg_undir_internal_norm_min_cut": _safe_mean(
-                        quality_values["undir_internal_norm_min_cut"]
+                    "avg_undir_internal_ncut": _safe_mean(
+                        quality_values["undir_internal_ncut"]
                     ),
-                    "undir_internal_norm_min_cut_coverage": (
-                        min_cut_computed / total_queries if total_queries > 0 else 0.0
+                    "undir_internal_ncut_coverage": (
+                        ncut_computed / total_queries if total_queries > 0 else 0.0
                     ),
                 }
             )

@@ -18,8 +18,8 @@ QUALITY_COLUMNS = {
     "avg_dir_internal_edge_density",
     "avg_undir_external_expansion",
     "avg_undir_external_conductance",
-    "avg_undir_internal_norm_min_cut",
-    "undir_internal_norm_min_cut_coverage",
+    "avg_undir_internal_ncut",
+    "undir_internal_ncut_coverage",
 }
 
 
@@ -504,7 +504,7 @@ def main():
                     f"dir_avg_deg={row['avg_dir_internal_avg_degree']:.4f} "
                     f"dir_density={row['avg_dir_internal_edge_density']:.4f} "
                     f"undir_cond={row['avg_undir_external_conductance']:.4f} "
-                    f"undir_ncut={row['avg_undir_internal_norm_min_cut']:.4f}"
+                    f"undir_ncut={row['avg_undir_internal_ncut']:.4f}"
                 )
                 pd.DataFrame(rows).to_csv(partial_path, index=False)
                 print(f"Progress: {len(rows)}/{total_configs} saved to {partial_path}")
