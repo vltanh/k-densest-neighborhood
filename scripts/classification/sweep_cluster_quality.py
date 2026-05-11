@@ -94,9 +94,11 @@ def _run_on_split(
     forbidden,
     seed,
 ):
-    """Run evaluate_nodes for one (family, params) cell on one split. Emits
-    records under records_dir/records.ndjson. evaluate_nodes dedupes cached
-    records on _record_key so a repeat run is cheap if records already exist."""
+    """Run evaluate_nodes for one (family, params, seed) cell on one split.
+    seed is None for deterministic methods, int for BP. evaluate_nodes dedupes
+    cached records on _record_key so a repeat run is cheap if records already
+    exist (deterministic methods share a single record across seeds; BP records
+    are per-seed)."""
     with tempfile.TemporaryDirectory() as td:
         evaluate_nodes(
             query_nodes,
@@ -113,7 +115,7 @@ def _run_on_split(
             graph_context=ctx,
             records_path=records_dir,
             dataset_name=args.dataset,
-            seed=seed if family == "bp" else None,
+            seed=seed,
             method=family,
             params=eff_params,
             split_hash=split_hash,
@@ -132,7 +134,12 @@ def main():
     parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument("--exps-dir", type=str, default="exps")
     parser.add_argument("--max-workers", type=int, default=8)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default="42,43,44,45,46",
+        help="Comma-separated Gurobi seeds for BP cells; deterministic methods ignore them and run once.",
+    )
     parser.add_argument("--weighting", type=str, default="uniform")
     parser.add_argument("--max-fallback-hops", type=int, default=10)
     parser.add_argument("--keep-solver-dumps", action="store_true")
@@ -168,6 +175,7 @@ def main():
     out_root = os.path.join(args.exps_dir, "classification", args.dataset, "cluster_quality")
     os.makedirs(out_root, exist_ok=True)
 
+    bp_seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     families = ["avgdeg", "bfs", "bp"] if args.family == "all" else [args.family]
     manifest_rows = []
     for fam in families:
@@ -189,45 +197,47 @@ def main():
                 max_fallback_hops=args.max_fallback_hops,
                 forbidden_nodes=forbidden,
             )
-            extra = method_extra_args(fam, params, gurobi_seed=args.seed if fam == "bp" else None)
             k = _k_for(fam, params)
             records_dir = os.path.join(out_root, fam, p_hash[-12:])
             os.makedirs(records_dir, exist_ok=True)
             print(
                 f"[{args.dataset}] cluster-quality sweep {fam} params={params} hash={p_hash[-12:]}"
             )
-            _run_on_split(
-                query_nodes=val_ids,
-                split_label="val",
-                split_hash=meta.splits["val"]["hash"],
-                family=fam,
-                params=params,
-                eff_params=eff_params,
-                extra=extra,
-                k=k,
-                args=args,
-                df_nodes=df_nodes,
-                ctx=ctx,
-                records_dir=records_dir,
-                forbidden=forbidden,
-                seed=args.seed,
-            )
-            _run_on_split(
-                query_nodes=test_ids,
-                split_label="test",
-                split_hash=meta.splits["test"]["hash"],
-                family=fam,
-                params=params,
-                eff_params=eff_params,
-                extra=extra,
-                k=k,
-                args=args,
-                df_nodes=df_nodes,
-                ctx=ctx,
-                records_dir=records_dir,
-                forbidden=forbidden,
-                seed=args.seed,
-            )
+            seeds_for_this_fam = bp_seeds if fam == "bp" else [None]
+            for seed in seeds_for_this_fam:
+                extra = method_extra_args(fam, params, gurobi_seed=seed if fam == "bp" else None)
+                _run_on_split(
+                    query_nodes=val_ids,
+                    split_label="val",
+                    split_hash=meta.splits["val"]["hash"],
+                    family=fam,
+                    params=params,
+                    eff_params=eff_params,
+                    extra=extra,
+                    k=k,
+                    args=args,
+                    df_nodes=df_nodes,
+                    ctx=ctx,
+                    records_dir=records_dir,
+                    forbidden=forbidden,
+                    seed=seed,
+                )
+                _run_on_split(
+                    query_nodes=test_ids,
+                    split_label="test",
+                    split_hash=meta.splits["test"]["hash"],
+                    family=fam,
+                    params=params,
+                    eff_params=eff_params,
+                    extra=extra,
+                    k=k,
+                    args=args,
+                    df_nodes=df_nodes,
+                    ctx=ctx,
+                    records_dir=records_dir,
+                    forbidden=forbidden,
+                    seed=seed,
+                )
             manifest_rows.append(
                 {
                     "dataset": args.dataset,
@@ -235,6 +245,7 @@ def main():
                     "params_hash": p_hash,
                     "params_json": json.dumps(params, sort_keys=True),
                     "records_dir": records_dir,
+                    "seeds": ",".join(str(s) for s in seeds_for_this_fam),
                 }
             )
 
