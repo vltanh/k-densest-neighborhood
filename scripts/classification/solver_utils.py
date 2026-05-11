@@ -187,6 +187,42 @@ def compute_mincut(neighbors, com):
     return sub_graph.mincut("noi", "bqueue", False)
 
 
+_LAMBDA2_MAX_SIZE = 500
+
+
+def _algebraic_connectivity_lambda2(mincut_neighbors, node_set):
+    n = len(node_set)
+    if n < 2:
+        return 0.0
+    if n > _LAMBDA2_MAX_SIZE:
+        return math.nan
+    try:
+        import numpy as np
+    except ImportError:
+        return math.nan
+
+    nodes = sorted(node_set)
+    idx = {v: i for i, v in enumerate(nodes)}
+    A = np.zeros((n, n), dtype=float)
+    for u in nodes:
+        for v in mincut_neighbors.get(u, ()):
+            if v in idx and v != u:
+                A[idx[u], idx[v]] = 1.0
+                A[idx[v], idx[u]] = 1.0
+    deg = A.sum(axis=1)
+    if (deg <= 0).any():
+        # Disconnected: at least two components, so lambda_2 = 0.
+        return 0.0
+    d_inv_sqrt = 1.0 / np.sqrt(deg)
+    L_norm = np.eye(n) - (A * d_inv_sqrt[:, None] * d_inv_sqrt[None, :])
+    L_norm = (L_norm + L_norm.T) * 0.5
+    try:
+        vals = np.linalg.eigvalsh(L_norm)
+        return float(vals[1])
+    except Exception:
+        return math.nan
+
+
 def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
     """Compute post-solve quality metrics for the retrieved subgraph."""
     node_set = set(nodes)
@@ -198,6 +234,9 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             "undir_external_expansion": 0.0,
             "undir_external_conductance": 0.0,
             "undir_internal_ncut": math.nan,
+            "mixing_param": math.nan,
+            "algebraic_connectivity_lambda2": 0.0,
+            "size": 0,
         }
 
     undir_internal_edges, undir_boundary_edges = compute_mS_cS(mincut_neighbors, node_set)
@@ -217,11 +256,16 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
         else 0.0
     )
 
+    mixing_denominator = undir_boundary_edges + 2 * undir_internal_edges
+    mixing_param = (
+        undir_boundary_edges / mixing_denominator
+        if mixing_denominator > 0
+        else math.nan
+    )
+
     undir_internal_ncut = math.nan
     if n >= 2:
         if undir_internal_edges == 0:
-            # Disconnected induced subgraph: empty cut, no internal volume on
-            # one side. Conventional choice is 0 (perfectly cuttable).
             undir_internal_ncut = 0.0
         else:
             try:
@@ -247,12 +291,17 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             except Exception:
                 undir_internal_ncut = math.nan
 
+    lambda2 = _algebraic_connectivity_lambda2(mincut_neighbors, node_set)
+
     return {
         "dir_internal_avg_degree": dir_internal_avg_degree,
         "dir_internal_edge_density": dir_internal_edge_density,
         "undir_external_expansion": undir_external_expansion,
         "undir_external_conductance": undir_external_conductance,
         "undir_internal_ncut": undir_internal_ncut,
+        "mixing_param": mixing_param,
+        "algebraic_connectivity_lambda2": lambda2,
+        "size": n,
     }
 
 
