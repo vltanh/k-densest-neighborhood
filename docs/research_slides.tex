@@ -37,11 +37,27 @@ University of Illinois Urbana-Champaign \\
 }
 \date{}
 
+% Insert a divider frame at the start of each of the four top-level sections
+% (Motivation and Problem Statements, Approaches, Experiments, Conclusion) so
+% the audience sees the structural break clearly in the deck.
+\AtBeginSection[]{
+  \begin{frame}
+    \centering
+    \usebeamerfont{title}\insertsectionhead\par
+  \end{frame}
+}
+
 \begin{document}
 
 \begin{frame}
   \titlepage
 \end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation and Problem Statements}
 
 \begin{frame}{Motivation}
   \begin{itemize}
@@ -143,6 +159,8 @@ University of Illinois Urbana-Champaign \\
 
   \textbf{Note} The lower bound $y_{uv}\ge x_u+x_v-1$ is not needed because $y$ has positive objective coefficient.
 \end{frame}
+
+\section{Approaches}
 
 \begin{frame}{Dinkelbach transform}
   For a density estimate $\lambda$, define
@@ -571,6 +589,8 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
+\section{Experiments}
+
 \begin{frame}{Solver correctness on enumerable graphs}
   Synthetic Erd\H{o}s--R\'enyi random graphs $G(n, p)$ at $n = 20$,
   $p \in \{0.25,\, 0.50,\, 0.75\}$, seeds $0..4$ (15 graphs).
@@ -854,6 +874,8 @@ University of Illinois Urbana-Champaign \\
       oracle queries.
   \end{itemize}
 \end{frame}
+
+\section{Conclusion}
 
 \begin{frame}{Main interpretation}
   \textbf{Cluster quality is the headline; classification is the supporting signal.}
