@@ -378,6 +378,7 @@ int main(int argc, char *argv[])
                 bp_block["kappa_verified"] = nullptr;
                 bp_block["kappa_verify_failed"] = nullptr;
             }
+            bp_block["hard_cap_hit"] = solver.last_hard_cap_hit;
         };
 
         if (run_bp)
@@ -576,6 +577,7 @@ int main(int argc, char *argv[])
                 j["lambda_trajectory"] = bp_block.value("lambda_trajectory", json::array());
                 j["kappa_verified"] = bp_block.value("kappa_verified", json(nullptr));
                 j["kappa_verify_failed"] = bp_block.value("kappa_verify_failed", json(nullptr));
+                j["hard_cap_hit"] = bp_block.value("hard_cap_hit", false);
                 j["stats"] = bp_block.value("stats", json::object());
             }
             else
@@ -584,6 +586,7 @@ int main(int argc, char *argv[])
                 j["lambda_trajectory"] = json::array();
                 j["kappa_verified"] = nullptr;
                 j["kappa_verify_failed"] = nullptr;
+                j["hard_cap_hit"] = false;
                 j["stats"] = nullptr;
             }
             j["qualities"] = qualities_json;

@@ -130,6 +130,7 @@ def invoke_solver(
             "lambda_trajectory": payload.get("lambda_trajectory") or [],
             "kappa_verified": payload.get("kappa_verified"),
             "kappa_verify_failed": payload.get("kappa_verify_failed"),
+            "hard_cap_hit": payload.get("hard_cap_hit"),
             "stats": payload.get("stats"),
             "qualities": payload.get("qualities"),
             "solver_json": payload,

@@ -1130,7 +1130,10 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
 
         double solve_elapsed_cg = chrono::duration<double>(t_now - t_start_solve).count();
         if (bb_hard_time_limit >= 0.0 && solve_elapsed_cg > bb_hard_time_limit)
+        {
+            last_hard_cap_hit = true;
             return {std::move(local_x_bar), local_lp_obj};
+        }
 
         // Materialise the adjacency of every frontier node we have not yet
         // queried. Pricing must score columns against the true subgraph
@@ -1380,6 +1383,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             double solve_elapsed = chrono::duration<double>(t_now - t_start_solve).count();
             if (solve_elapsed > bb_hard_time_limit)
             {
+                last_hard_cap_hit = true;
                 cout << "[" << get_timestamp() << "]     [!] Hard wall-time cap reached ("
                      << bb_hard_time_limit << "s); returning current incumbent." << endl;
                 break;
@@ -1705,6 +1709,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
                 chrono::high_resolution_clock::now() - t_start_solve).count();
             if (solve_elapsed > bb_hard_time_limit)
             {
+                last_hard_cap_hit = true;
                 cout << "[" << get_timestamp() << "]   Status            : Hard wall-time cap reached ("
                      << bb_hard_time_limit << "s); returning current incumbent." << endl;
                 break;

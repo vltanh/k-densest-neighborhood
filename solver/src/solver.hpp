@@ -92,6 +92,9 @@ public:
     SolverStats stats;
     bool last_kappa_verified = false;
     bool last_kappa_verify_failed = false;
+    // True when the hard wall-time cap fired during this solve. The returned
+    // incumbent is the best one found before the cap and may be suboptimal.
+    bool last_hard_cap_hit = false;
 
     FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                              double tol = 1e-6, int bb_node_limit = -1, double bb_time_limit = -1.0,
