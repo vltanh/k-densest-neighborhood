@@ -511,59 +511,35 @@ University of Illinois Urbana-Champaign \\
   \textbf{Effect} stronger incumbent, smaller returned community.
 \end{frame}
 
-\begin{frame}{Avgdeg baseline: construction}
-  \textbf{Problem} maximize $|E(S)| / |S|$ over $S \ni q$,
+\begin{frame}{Average-degree baseline}
+  \textbf{Problem.} Maximise $|E(S)| / |S|$ over $S \ni q$,
   $S \subseteq V_{\mathrm{loc}}$ where $V_{\mathrm{loc}}$ is BFS-bounded.
+  Different objective from BP: avg degree, not pair density. No size
+  constraint, no connectivity constraint, no triangle relaxation.
 
   \vfill
 
-  \textbf{Three stages}
+  \textbf{Pipeline.} BFS from $q$ caches the local subgraph once;
+  Dinkelbach bisects $\lambda \in [0, |E_{\mathrm{loc}}|]$; each $\lambda$
+  builds a Goldberg-style $s$--$t$ flow network and reads the
+  source-side residual of a push-relabel max-flow as $S_\lambda$. The
+  argmax density across all probed $\lambda$ is kept, not just the
+  converged one.
+
+  \vfill
+
+  \textbf{Four adaptations of Goldberg 1984.}
   \begin{itemize}
-    \item BFS from $q$ once, cache successors per query
-    \item Dinkelbach bisection on $\lambda \in [0, |E_{\mathrm{loc}}|]$
-    \item Per $\lambda$: build Goldberg-style $s$--$t$ network, push-relabel
-    max-flow, source-side residual reachability gives $S_\lambda$
+    \item \emph{Query anchor:} $s \to q$ capacity $\infty$ keeps $q$ on
+    the source side of every cut.
+    \item \emph{Local subgraph:} BFS bound replaces Goldberg's
+    fully-materialised graph; required for the lazy oracle.
+    \item \emph{Directed unit-weight edges:} each directed edge
+    $(u, v)$ contributes one edge-item, so density counts directed
+    edges; reciprocal pairs contribute two.
+    \item \emph{Objective:} avg degree, not pair density. Not monotone
+    in each other.
   \end{itemize}
-
-  \vfill
-
-  \textbf{Flow network}
-  \begin{itemize}
-    \item per edge $e=(u,v)$: edge-item $n_e$ with $s \to n_e$ capacity
-    $\mathrm{SCALE} = 10^6$, $n_e \to u, n_e \to v$ capacity $\infty$
-    \item per node $i$: $i \to t$ capacity
-    $\lfloor \lambda \cdot \mathrm{SCALE} \rfloor$
-    \item anchor: $s \to q$ capacity $\infty$
-  \end{itemize}
-
-  \vfill
-
-  Keep argmax density across all probed $\lambda$, not just the converged one.
-\end{frame}
-
-\begin{frame}{Avgdeg vs textbook Goldberg}
-  \textbf{Goldberg 1984} max-density subgraph globally on full undirected
-  graph, no anchor.
-
-  \vfill
-
-  \textbf{Four adaptations}
-  \begin{itemize}
-    \item \textbf{Query anchor.} $s \to q$ capacity $\infty$ forces $q$ on the
-    source side of every cut, so the answer is query-anchored densest.
-    \item \textbf{Local subgraph.} BFS bounds the candidate set; Goldberg
-    assumes a fully materialised graph. Required for oracle access.
-    \item \textbf{Directed unit-weight edges.} Each $(u,v)$ produces one
-    edge-item connected to both endpoints; reciprocal pair $(u,v), (v,u)$
-    contributes two items, so density counts directed edges.
-    \item \textbf{Objective.} Avgdeg uses $|E(S)|/|S|$. BP uses
-    $|E(S)|/(|S|(|S|-1))$. Not monotone in each other.
-  \end{itemize}
-
-  \vfill
-
-  Mechanical differences (integer $\mathrm{SCALE}$ capacities, wider bisection
-  bracket, consider-best fallback) affect only precision and termination.
 \end{frame}
 
 \begin{frame}{Implementation summary}
