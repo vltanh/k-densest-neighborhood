@@ -7,8 +7,10 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from solver_utils import evaluate_nodes
 from tune_methods import limit_nodes
+from _solver_runner import build_bp_extra_args
 
 
 def _maybe_int(value):
@@ -29,20 +31,16 @@ def _bp_extra_args(
     gap_tol,
     dinkelbach_iter,
 ):
-    extra_args = ["--bp", "--kappa", str(kappa), "--time-limit", str(time_limit)]
-    if cg_batch_frac is not None:
-        extra_args += ["--cg-batch-frac", str(cg_batch_frac)]
-    if cg_min_batch is not None:
-        extra_args += ["--cg-min-batch", str(cg_min_batch)]
-    if cg_max_batch is not None:
-        extra_args += ["--cg-max-batch", str(cg_max_batch)]
-    if node_limit is not None:
-        extra_args += ["--node-limit", str(node_limit)]
-    if gap_tol is not None:
-        extra_args += ["--gap-tol", str(gap_tol)]
-    if dinkelbach_iter is not None:
-        extra_args += ["--dinkelbach-iter", str(dinkelbach_iter)]
-    return extra_args
+    return build_bp_extra_args(
+        kappa=kappa,
+        time_limit=time_limit,
+        cg_batch_frac=cg_batch_frac,
+        cg_min_batch=cg_min_batch,
+        cg_max_batch=cg_max_batch,
+        node_limit=node_limit,
+        gap_tol=gap_tol,
+        dinkelbach_iter=dinkelbach_iter,
+    )
 
 
 def methods_from_settings(settings_path):

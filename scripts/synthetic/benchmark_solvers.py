@@ -1,11 +1,20 @@
 import argparse
 import os
-import subprocess
+import subprocess  # re-exported for tests that patch benchmark_solvers.subprocess.run
+import sys
 import tempfile
 import time
 from collections import defaultdict
 
 import pandas as pd
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _solver_runner import (  # noqa: E402
+    base_sim_argv,
+    induced_directed_metrics as _shared_induced_metrics,
+    overlap_metrics as _shared_overlap_metrics,
+    read_predicted_nodes,
+)
 
 
 METHODS = {
@@ -89,29 +98,8 @@ def load_directed_edge_set(edge_csv):
     return edges, adj
 
 
-def read_prediction(path):
-    if not os.path.exists(path):
-        return []
-    df = pd.read_csv(path)
-    if "node_id" not in df.columns:
-        return []
-    return [str(v) for v in df["node_id"].tolist()]
-
-
-def induced_directed_metrics(nodes, edges):
-    node_set = set(nodes)
-    if not node_set:
-        return {"internal_edges": 0, "avg_degree_density": 0.0, "edge_density": 0.0}
-
-    internal_edges = sum(1 for u, v in edges if u in node_set and v in node_set)
-    n = len(node_set)
-    avg_degree_density = internal_edges / n
-    edge_density = internal_edges / (n * (n - 1)) if n > 1 else 0.0
-    return {
-        "internal_edges": internal_edges,
-        "avg_degree_density": avg_degree_density,
-        "edge_density": edge_density,
-    }
+read_prediction = read_predicted_nodes
+induced_directed_metrics = _shared_induced_metrics
 
 
 def is_connected_undirected(nodes, adj):
@@ -130,27 +118,7 @@ def is_connected_undirected(nodes, adj):
     return len(seen) == len(node_set)
 
 
-def overlap_metrics(gt_nodes, pred_nodes):
-    gt_set = set(gt_nodes)
-    pred_set = set(pred_nodes)
-    intersection = gt_set & pred_set
-    union = gt_set | pred_set
-    tp = len(intersection)
-    fp = len(pred_set - gt_set)
-    fn = len(gt_set - pred_set)
-    precision = tp / len(pred_set) if pred_set else 0.0
-    recall = tp / len(gt_set) if gt_set else 0.0
-    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-    jaccard = tp / len(union) if union else 0.0
-    return {
-        "tp": tp,
-        "fp": fp,
-        "fn": fn,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "jaccard": jaccard,
-    }
+overlap_metrics = _shared_overlap_metrics
 
 
 def run_solver(
@@ -167,20 +135,9 @@ def run_solver(
 ):
     method_spec = METHODS[method]
     out_csv = os.path.join(output_dir, f"{method}_q{query_node}_k{k}.csv")
-    cmd = [
-        bin_path,
-        "--mode",
-        "sim",
-        "--input",
-        edge_csv,
-        "--query",
-        str(query_node),
-        "--output",
-        out_csv,
-        "--time-limit",
-        str(time_limit),
-        "--node-limit",
-        str(node_limit),
+    cmd = base_sim_argv(bin_path, edge_csv, query_node, out_csv) + [
+        "--time-limit", str(time_limit),
+        "--node-limit", str(node_limit),
     ]
     if method_spec["uses_k"]:
         cmd += ["--k", str(k)]

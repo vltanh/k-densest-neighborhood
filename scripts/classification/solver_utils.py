@@ -1,13 +1,22 @@
-import os
-import subprocess
-import pandas as pd
-import networkx as nx
 import math
-import re
+import os
+import subprocess  # re-exported for tests that patch solver_utils.subprocess.run
+import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
+
+import networkx as nx
+import pandas as pd
 from pymincut.pygraph import PyGraph
+from tqdm import tqdm
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _solver_runner import (  # noqa: E402
+    count_internal_directed_edges,
+    invoke_solver,
+    parse_oracle_queries,
+    read_predicted_nodes,
+)
 
 
 def run_solver(
@@ -43,24 +52,14 @@ def run_solver(
     oracle_queries = math.nan
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        match = re.search(r"API Queries Made\s*:\s*(\d+)", result.stdout)
-        if match:
-            oracle_queries = int(match.group(1))
+        oracle_queries = parse_oracle_queries(result.stdout)
     except subprocess.CalledProcessError as exc:
-        match = re.search(r"API Queries Made\s*:\s*(\d+)", exc.stdout or "")
-        if match:
-            oracle_queries = int(match.group(1))
+        oracle_queries = parse_oracle_queries(exc.stdout or "")
         return q_node, [], oracle_queries
 
-    neighborhood = []
+    neighborhood = read_predicted_nodes(out_csv, as_int=True)
     if os.path.exists(out_csv):
-        try:
-            pred_df = pd.read_csv(out_csv)
-            neighborhood = pred_df["node_id"].astype(int).tolist()
-        except Exception:
-            pass
         os.remove(out_csv)
-
     return q_node, neighborhood, oracle_queries
 
 
@@ -105,18 +104,12 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             "undir_internal_norm_min_cut_computed": 0,
         }
 
-    internal_edges = 0
     undir_internal_edges, undir_boundary_edges = compute_mS_cS(mincut_neighbors, node_set)
     undir_external_volume = 2 * undir_internal_edges + undir_boundary_edges
     full_undir_volume = sum(len(v) for v in mincut_neighbors.values())
     outside_undir_volume = full_undir_volume - undir_external_volume
 
-    for u in node_set:
-        for v in out_neighbors.get(u, []):
-            if u == v:
-                continue
-            if v in node_set:
-                internal_edges += 1
+    internal_edges = count_internal_directed_edges(node_set, out_neighbors)
 
     dir_internal_avg_degree = internal_edges / n
     dir_internal_edge_density = internal_edges / (n * (n - 1)) if n > 1 else 0.0
@@ -222,7 +215,6 @@ def evaluate_nodes(
     }
     min_cut_computed = 0
 
-    # --- NEW: Initialize the starvation counter ---
     fallback_count = 0
     total_queries = len(query_nodes)
     eval_label = f"k={k}" if k is not None else "no-k"
@@ -265,12 +257,9 @@ def evaluate_nodes(
             train_neighbors = [n for n in neighborhood if train_mask[n] and n != q_node]
 
             if not train_neighbors:
-                # --- NEW: Increment the starvation counter ---
+                # Concentric-BFS fallback: solver returned no training-labelled
+                # neighbours, so vote with the nearest labelled ring instead.
                 fallback_count += 1
-
-                # ==========================================================
-                # LABEL STARVATION DETECTED: Trigger Concentric BFS Fallback
-                # ==========================================================
                 try:
                     paths = nx.single_source_shortest_path_length(
                         fallback_graph, q_node, cutoff=max_fallback_hops
@@ -295,9 +284,6 @@ def evaluate_nodes(
                     pred_label = global_majority
 
             else:
-                # ==========================================================
-                # STANDARD VOTING (K-Densest Subgraph)
-                # ==========================================================
                 if weighting == "distance":
                     class_scores = Counter()
                     for n in train_neighbors:
@@ -320,7 +306,6 @@ def evaluate_nodes(
             y_pred.append(pred_label)
             evaluated_query_nodes.append(q_node)
 
-    # --- NEW: Print the telemetry summary before returning ---
     fallback_rate = (fallback_count / total_queries) * 100 if total_queries > 0 else 0
     print(
         f"\n[Diagnostic] {eval_label} | Fallback Triggered: {fallback_count}/{total_queries} times ({fallback_rate:.1f}%)"

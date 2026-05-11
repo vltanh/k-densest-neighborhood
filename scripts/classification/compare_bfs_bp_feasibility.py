@@ -1,40 +1,23 @@
-import csv
 import os
-import subprocess
-import tempfile
+import sys
 from collections import defaultdict, deque
 
 import pandas as pd
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _solver_runner import (  # noqa: E402
+    count_internal_directed_edges,
+    directed_density as _shared_directed_density,
+    invoke_solver,
+)
+
 
 def run_solver_nodes(q_node, k, edge_csv, bin_path, extra_args):
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        out_csv = tmp.name
-    cmd = [
-        bin_path,
-        "--mode",
-        "sim",
-        "--input",
-        edge_csv,
-        "--query",
-        str(q_node),
-        "--output",
-        out_csv,
-    ]
+    extra = list(extra_args)
     if k is not None:
-        cmd.extend(["--k", str(k)])
-    cmd.extend(extra_args)
-    try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
-        if not os.path.exists(out_csv):
-            return []
-        df = pd.read_csv(out_csv)
-        return df["node_id"].astype(int).tolist()
-    except subprocess.CalledProcessError:
-        return []
-    finally:
-        if os.path.exists(out_csv):
-            os.remove(out_csv)
+        extra = ["--k", str(k)] + extra
+    result = invoke_solver(bin_path, edge_csv, q_node, extra_args=extra, as_int_nodes=True)
+    return result["pred_nodes"] if result["returncode"] == 0 else []
 
 
 def directed_density(nodes, out_neighbors):
@@ -42,12 +25,8 @@ def directed_density(nodes, out_neighbors):
     n = len(node_set)
     if n <= 1:
         return 0.0
-    m = 0
-    for u in node_set:
-        for v in out_neighbors.get(u, ()):
-            if v in node_set and v != u:
-                m += 1
-    return m / (n * (n - 1))
+    internal = count_internal_directed_edges(node_set, out_neighbors)
+    return _shared_directed_density(internal, n)
 
 
 def edge_connectivity_at_least(nodes, undir_neighbors, kappa):

@@ -1,10 +1,16 @@
 import argparse
 import itertools
 import os
-import subprocess
+import sys
 import tempfile
 
 import pandas as pd
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _solver_runner import (  # noqa: E402
+    count_internal_edges_from_edge_list,
+    invoke_solver,
+)
 
 
 DEMO_EDGES = [
@@ -39,8 +45,7 @@ def write_demo_csv(path):
 
 
 def internal_edge_count(edges, subset):
-    subset = set(subset)
-    return sum(1 for u, v in edges if u in subset and v in subset)
+    return count_internal_edges_from_edge_list(subset, edges)
 
 
 def brute_force_avgdeg(nodes, edges, query):
@@ -74,35 +79,17 @@ def brute_force_bp(nodes, edges, query, k):
 
 
 def run_solver(bin_path, edge_csv, query, method, args):
-    out_csv = tempfile.mktemp(suffix=".csv")
-    cmd = [
-        bin_path,
-        "--mode",
-        "sim",
-        "--input",
-        edge_csv,
-        "--query",
-        str(query),
-        "--output",
-        out_csv,
-    ]
+    extra = []
     if method == "avgdeg":
-        cmd.append("--avgdeg")
+        extra.append("--avgdeg")
     if method == "bp":
-        cmd.extend(["--bp", "--k", str(args.k), "--kappa", str(args.kappa)])
+        extra += ["--bp", "--k", str(args.k), "--kappa", str(args.kappa)]
     if args.time_limit is not None:
-        cmd.extend(["--time-limit", str(args.time_limit)])
+        extra += ["--time-limit", str(args.time_limit)]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        pred_df = pd.read_csv(out_csv)
-        pred_nodes = tuple(sorted(pred_df["node_id"].astype(str).tolist()))
-    except Exception:
-        pred_nodes = tuple()
-    finally:
-        if os.path.exists(out_csv):
-            os.remove(out_csv)
-    return result.returncode, result.stdout, result.stderr, pred_nodes
+    result = invoke_solver(bin_path, edge_csv, query, extra_args=extra)
+    pred_nodes = tuple(sorted(result["pred_nodes"]))
+    return result["returncode"], result["stdout"], result["stderr"], pred_nodes
 
 
 def score_subset(edges, subset):
