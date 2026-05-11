@@ -9,6 +9,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 1. External Dependencies
 # ==============================================================================
 find_package(CURL REQUIRED)
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 OLD)
+endif()
+find_package(Boost REQUIRED)
 
 # B. nlohmann/json (Fetched directly as a single header to bypass CMake 4.0+ errors)
 set(JSON_INCLUDE_DIR ${CMAKE_BINARY_DIR}/external/json/include)
@@ -44,6 +48,15 @@ add_executable(solver
     src/solver.cpp
     src/simulation_oracle.cpp
     src/openalex_oracle.cpp
+    src/subgraph_quality.cpp
+    src/average_degree_solver.cpp
+    src/bfs_solver.cpp
+    src/connected_greedy_baseline.cpp
+    src/exact_connected_avg_degree.cpp
+)
+
+set_target_properties(solver PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
 )
 
 # ==============================================================================
@@ -56,6 +69,7 @@ target_link_libraries(solver
     CURL::libcurl
     ${GUROBI_CXX_LIB}
     ${GUROBI_C_LIB}
+    Boost::boost
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

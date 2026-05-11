@@ -10,5 +10,6 @@
   "[python]": {
     "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.formatOnSave": true
-  }
+  },
+  "cmake.sourceDirectory": "/home/vltanh/Documents/courses/uiuc/ie514/densest_community_search/solver"
 }

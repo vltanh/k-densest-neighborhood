@@ -212,7 +212,7 @@ __marimo__/
 !.vscode/settings.json
 
 # C++ build artifacts
-solver/bin/solver
+solver/bin/
 solver/build/
 
 # Node / Vite
@@ -223,3 +223,21 @@ frontend/.vite/
 # Data
 data
 output
+
+# Local agent / experiment artifacts
+AGENTS.md
+CLAUDE.md
+exps/
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.out
+docs/*.synctex.gz
+docs/*.nav
+docs/*.snm
+docs/*.toc
+docs/*.log
+docs/*.bbl
+docs/*.blg
