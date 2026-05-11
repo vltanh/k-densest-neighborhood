@@ -21,9 +21,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from solver_utils import (  # noqa: E402
     build_graph_context,
+    effective_params,
     evaluate_nodes,
     method_extra_args,
-    params_hash,
 )
 from split_utils import assert_split_meta_matches  # noqa: E402
 
@@ -92,9 +92,9 @@ def main():
         default="all",
         choices=["all", "avgdeg", "bfs", "bp"],
     )
-    parser.add_argument("--bp-k", type=str, default="5,10")
-    parser.add_argument("--bp-kappa", type=str, default="0,2")
-    parser.add_argument("--bp-time-limit", type=str, default="5")
+    parser.add_argument("--bp-k", type=str, default="3,4,5,6,7,8,9,10")
+    parser.add_argument("--bp-kappa", type=str, default="0,1,2,3,4")
+    parser.add_argument("--bp-time-limit", type=str, default="-1")
     parser.add_argument("--bp-dinkelbach-iter", type=str, default="-1")
     parser.add_argument("--bfs-depth", type=str, default="1,2")
     args = parser.parse_args()
@@ -140,7 +140,12 @@ def main():
         best_row = None
         best_settings = None
         for params in grid:
-            p_hash = params_hash(params)
+            eff_params, p_hash = effective_params(
+                params,
+                weighting=args.weighting,
+                max_fallback_hops=args.max_fallback_hops,
+                forbidden_nodes=forbidden,
+            )
             extra = method_extra_args(fam, params, gurobi_seed=args.seed if fam == "bp" else None)
             k = _k_for(fam, params)
             print(
@@ -166,7 +171,7 @@ def main():
                     dataset_name=args.dataset,
                     seed=args.seed if fam == "bp" else None,
                     method=fam,
-                    params=params,
+                    params=eff_params,
                     split_hash=meta.splits["val"]["hash"],
                     keep_solver_dumps=args.keep_solver_dumps,
                     query_split="val",
@@ -181,13 +186,16 @@ def main():
                 "seed": args.seed if fam == "bp" else None,
                 "split_hash": meta.splits["val"]["hash"],
                 "weighting": args.weighting,
+                "max_fallback_hops": args.max_fallback_hops,
                 "optimize_target": "f1",
                 "params_hash": p_hash,
                 "params_json": json.dumps(params, sort_keys=True),
+                "effective_params_json": json.dumps(eff_params, sort_keys=True),
                 "precision": scores["precision"],
                 "recall": scores["recall"],
                 "f1": scores["f1"],
                 "fallback_rate": stats["fallback_rate"],
+                "fallback_rate_flag": stats["fallback_rate"] > 10.0,
                 "avg_oracle_queries": stats["avg_oracle_queries"],
                 "avg_dir_internal_edge_density": stats.get(
                     "avg_dir_internal_edge_density"
@@ -205,13 +213,17 @@ def main():
                     "dataset": args.dataset,
                     "method": fam,
                     "params": params,
+                    "effective_params": eff_params,
                     "params_hash": p_hash,
+                    "weighting": args.weighting,
+                    "max_fallback_hops": args.max_fallback_hops,
                     "extra_args": extra,
                     "k": k,
                     "split_hash": meta.splits["val"]["hash"],
                     "f1": scores["f1"],
                     "precision": scores["precision"],
                     "recall": scores["recall"],
+                    "fallback_rate": stats["fallback_rate"],
                     "records_dir": records_dir,
                 }
         csv_path = os.path.join(out_root, f"tune_val_{fam}.csv")

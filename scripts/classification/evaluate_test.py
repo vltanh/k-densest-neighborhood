@@ -23,9 +23,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from solver_utils import (  # noqa: E402
     build_graph_context,
+    effective_params,
     evaluate_nodes,
     method_extra_args,
-    params_hash,
 )
 from split_utils import (  # noqa: E402
     assert_split_meta_matches,
@@ -47,7 +47,10 @@ def _macro_scores(y_true, y_pred):
     }
 
 
-def _bootstrap_ci(y_true, y_pred, B: int = 500, rng_seed: int = 0):
+def _bootstrap_ci(y_true, y_pred, B: int = 500, rng_seed: int = 0, indices_per_replicate=None):
+    """Standard bootstrap CI. When indices_per_replicate is supplied (list of
+    arrays length B), use those indices for the b-th replicate so multiple
+    methods reuse the same paired-by-query resamples."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     n = len(y_true)
@@ -56,17 +59,64 @@ def _bootstrap_ci(y_true, y_pred, B: int = 500, rng_seed: int = 0):
     precisions, recalls, f1s = [], [], []
     indices = np.arange(n)
     for b in range(B):
-        idx = resample(indices, replace=True, n_samples=n, random_state=rng_seed + b)
+        if indices_per_replicate is not None:
+            idx = indices_per_replicate[b]
+        else:
+            idx = resample(indices, replace=True, n_samples=n, random_state=rng_seed + b)
         yt = y_true[idx]
         yp = y_pred[idx]
         precisions.append(precision_score(yt, yp, average="macro", zero_division=0))
         recalls.append(recall_score(yt, yp, average="macro", zero_division=0))
         f1s.append(f1_score(yt, yp, average="macro", zero_division=0))
-    return {
-        "precision": (float(np.percentile(precisions, 2.5)), float(np.percentile(precisions, 97.5))),
-        "recall": (float(np.percentile(recalls, 2.5)), float(np.percentile(recalls, 97.5))),
-        "f1": (float(np.percentile(f1s, 2.5)), float(np.percentile(f1s, 97.5))),
-    }
+    return _ci_from_samples(precisions, recalls, f1s, n)
+
+
+def _ci_from_samples(precisions, recalls, f1s, n_total):
+    """Convert bootstrap sample lists to a 95 percent CI dict. When the metric
+    is constant across replicates (typical on the hard subset when one method
+    is locked at zero F1), substitute the Wilson interval on n_total Bernoulli
+    trials with success rate equal to the point estimate."""
+    out = {}
+    for name, samples in (("precision", precisions), ("recall", recalls), ("f1", f1s)):
+        arr = np.asarray(samples)
+        lo = float(np.percentile(arr, 2.5))
+        hi = float(np.percentile(arr, 97.5))
+        if lo == hi and n_total > 0:
+            lo, hi = _wilson_interval(float(arr[0]), n_total)
+        out[name] = (lo, hi)
+    return out
+
+
+def _wilson_interval(p_hat: float, n: int, z: float = 1.959963984540054) -> tuple:
+    """95 percent Wilson score interval for a proportion p_hat over n trials."""
+    if n <= 0:
+        return (float("nan"), float("nan"))
+    p_hat = max(0.0, min(1.0, float(p_hat)))
+    denom = 1.0 + (z * z) / n
+    centre = (p_hat + (z * z) / (2 * n)) / denom
+    half = (z * np.sqrt((p_hat * (1 - p_hat) / n) + (z * z) / (4 * n * n))) / denom
+    return (float(max(0.0, centre - half)), float(min(1.0, centre + half)))
+
+
+def _paired_indices(n: int, B: int, rng_seed: int):
+    """B arrays of indices in [0, n), used as the common resample for every
+    method so the i-th sample maps to the same query across methods."""
+    rng = np.random.default_rng(rng_seed)
+    return [rng.integers(0, n, size=n) for _ in range(B)]
+
+
+def _stratified_indices(per_seed_n: int, n_seeds: int, B: int, rng_seed: int):
+    """Stratified resample for BP pooled CI. For each replicate, draw
+    per_seed_n indices per seed independently (so the variance from seed
+    randomness is preserved rather than artificially shrunk by sqrt(n_seeds))."""
+    rng = np.random.default_rng(rng_seed)
+    replicates = []
+    for _ in range(B):
+        per_seed = []
+        for s in range(n_seeds):
+            per_seed.append(rng.integers(s * per_seed_n, (s + 1) * per_seed_n, size=per_seed_n))
+        replicates.append(np.concatenate(per_seed))
+    return replicates
 
 
 def _load_best(out_root: str, family: str):
@@ -150,20 +200,42 @@ def main():
     per_seed_rows = []
     aggregate_rows = []
 
+    # Paired-by-query bootstrap: build one shared set of resample indices over
+    # the query axis and reuse it for every (method, seed) so the b-th replicate
+    # samples the same queries everywhere. evaluate_nodes sorts results by
+    # query_node, so position i maps to the same query across methods.
+    paired_idx = _paired_indices(len(target_nodes), args.bootstrap, rng_seed=0)
+
+    method_state = {}
     for family in families:
         best = _load_best(tune_root, family)
         k = best.get("k")
         params = best.get("params") or {}
         p_hash = best["params_hash"]
+        # Recompute the effective params hash so cached records bound to the
+        # eval signature in tune_val are reused if and only if eval bits match.
+        eff_params, eff_hash = effective_params(
+            params,
+            weighting=args.weighting,
+            max_fallback_hops=args.max_fallback_hops,
+            forbidden_nodes=forbidden,
+        )
+        if eff_hash != p_hash:
+            print(
+                f"[{args.dataset}] {family}: params_hash drift {p_hash[-12:]} -> {eff_hash[-12:]}; "
+                "tune_val and evaluate_test eval signatures differ. Using effective hash."
+            )
         method_preds = {}
         method_truth = None
+        seed_aux = {}
         for seed in SEEDS:
             if family in DETERMINISTIC and seed != SEEDS[0] and method_truth is not None:
                 method_preds[seed] = method_preds[SEEDS[0]]
+                seed_aux[seed] = seed_aux[SEEDS[0]]
                 continue
             extra = method_extra_args(family, params, gurobi_seed=seed if family == "bp" else None)
             records_dir = os.path.join(
-                out_root, family, args.subset, p_hash[-12:], f"seed_{seed}"
+                out_root, family, args.subset, eff_hash[-12:], f"seed_{seed}"
             )
             os.makedirs(records_dir, exist_ok=True)
             with tempfile.TemporaryDirectory() as td:
@@ -184,7 +256,7 @@ def main():
                     dataset_name=args.dataset,
                     seed=seed if family == "bp" else None,
                     method=family,
-                    params=params,
+                    params=eff_params,
                     split_hash=split_hash,
                     keep_solver_dumps=args.keep_solver_dumps,
                     query_split=query_split,
@@ -195,16 +267,24 @@ def main():
                 )
             method_truth = y_true
             method_preds[seed] = y_pred
+            seed_aux[seed] = {
+                "fallback_rate": stats["fallback_rate"],
+                "avg_oracle_queries": stats.get("avg_oracle_queries"),
+            }
             scores = _macro_scores(y_true, y_pred)
-            ci = _bootstrap_ci(y_true, y_pred, B=args.bootstrap, rng_seed=seed)
+            ci = _bootstrap_ci(
+                y_true, y_pred, B=args.bootstrap, rng_seed=seed,
+                indices_per_replicate=paired_idx,
+            )
             per_seed_rows.append(
                 {
                     "dataset": args.dataset,
                     "subset": args.subset,
                     "method": family,
                     "seed": seed,
-                    "params_hash": p_hash,
+                    "params_hash": eff_hash,
                     "params_json": json.dumps(params, sort_keys=True),
+                    "effective_params_json": json.dumps(eff_params, sort_keys=True),
                     "split_hash": split_hash,
                     "precision": scores["precision"],
                     "recall": scores["recall"],
@@ -216,9 +296,18 @@ def main():
                     "f1_ci_lo": ci["f1"][0],
                     "f1_ci_hi": ci["f1"][1],
                     "fallback_rate": stats["fallback_rate"],
+                    "fallback_rate_flag": stats["fallback_rate"] > 10.0,
                     "avg_oracle_queries": stats.get("avg_oracle_queries"),
                 }
             )
+        method_state[family] = {
+            "method_truth": method_truth,
+            "method_preds": method_preds,
+            "seed_aux": seed_aux,
+            "p_hash": eff_hash,
+            "params": params,
+            "eff_params": eff_params,
+        }
 
         precisions, recalls, f1s = [], [], []
         for seed in SEEDS:
@@ -226,18 +315,43 @@ def main():
             precisions.append(scores["precision"])
             recalls.append(scores["recall"])
             f1s.append(scores["f1"])
-        yt_stack = np.concatenate([np.asarray(method_truth) for _ in SEEDS])
-        yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in SEEDS])
-        pooled_ci = _bootstrap_ci(yt_stack, yp_stack, B=args.bootstrap, rng_seed=0)
+
+        if family in DETERMINISTIC:
+            # Deterministic methods produce identical predictions across seeds;
+            # pooling 5 copies shrinks the CI by sqrt(5) without adding signal.
+            # Report the single-seed CI computed above for SEEDS[0].
+            single_ci = _bootstrap_ci(
+                method_truth, method_preds[SEEDS[0]],
+                B=args.bootstrap, rng_seed=SEEDS[0],
+                indices_per_replicate=paired_idx,
+            )
+            pooled_ci = single_ci
+            ci_kind = "single_seed_paired"
+        else:
+            # BP: stratified bootstrap over the seed axis preserves the across-
+            # seed variance instead of treating 5 seeds as 5N independent draws.
+            n_per_seed = len(method_truth)
+            strat_idx = _stratified_indices(n_per_seed, len(SEEDS), args.bootstrap, rng_seed=0)
+            yt_stack = np.concatenate([np.asarray(method_truth) for _ in SEEDS])
+            yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in SEEDS])
+            pooled_ci = _bootstrap_ci(
+                yt_stack, yp_stack,
+                B=args.bootstrap, rng_seed=0,
+                indices_per_replicate=strat_idx,
+            )
+            ci_kind = "stratified_seed_pooled"
+        mean_fallback = float(np.mean([seed_aux[s]["fallback_rate"] for s in SEEDS]))
         aggregate_rows.append(
             {
                 "dataset": args.dataset,
                 "subset": args.subset,
                 "method": family,
-                "params_hash": p_hash,
+                "params_hash": eff_hash,
                 "params_json": json.dumps(params, sort_keys=True),
                 "split_hash": split_hash,
+                "ci_kind": ci_kind,
                 "n_seeds": len(SEEDS),
+                "n_queries": len(method_truth),
                 "precision_mean": float(np.mean(precisions)),
                 "recall_mean": float(np.mean(recalls)),
                 "f1_mean": float(np.mean(f1s)),
@@ -250,6 +364,8 @@ def main():
                 "recall_pooled_ci_hi": pooled_ci["recall"][1],
                 "f1_pooled_ci_lo": pooled_ci["f1"][0],
                 "f1_pooled_ci_hi": pooled_ci["f1"][1],
+                "fallback_rate_mean": mean_fallback,
+                "fallback_rate_flag": mean_fallback > 10.0,
             }
         )
 

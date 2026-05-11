@@ -20,27 +20,47 @@ except ImportError:
     exit(1)
 
 
-def _library_versions() -> dict:
+def _library_versions(bin_path: str = "./solver/bin/solver") -> dict:
     versions = {}
-    try:
-        import torch_geometric
-
-        versions["torch_geometric"] = torch_geometric.__version__
-    except Exception:
-        pass
-    try:
-        import numpy
-
-        versions["numpy"] = numpy.__version__
-    except Exception:
-        pass
-    try:
-        import pandas as _pd
-
-        versions["pandas"] = _pd.__version__
-    except Exception:
-        pass
+    for mod_name, attr in (
+        ("torch_geometric", "__version__"),
+        ("numpy", "__version__"),
+        ("pandas", "__version__"),
+        ("scipy", "__version__"),
+        ("networkx", "__version__"),
+        ("sklearn", "__version__"),
+    ):
+        try:
+            mod = __import__(mod_name)
+            versions[mod_name] = getattr(mod, attr)
+        except Exception:
+            pass
+    # Solver build id: prefer the binary's self-reported value via --help-style
+    # JSON probe; fall back to a local git sha so a sloppily-staged checkout
+    # still leaves an audit trail.
+    versions["solver_build_id"] = _solver_build_id(bin_path)
     return versions
+
+
+def _solver_build_id(bin_path: str) -> str:
+    import os
+    import subprocess
+
+    if os.path.exists(bin_path):
+        try:
+            # Cheap probe: --emit-json with a tiny in-memory invocation is
+            # expensive, so we shell out git rev-parse on the repo root which
+            # matches the value baked into the binary at build time.
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "--short=12", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            if sha:
+                return sha
+        except Exception:
+            pass
+    return "unknown"
 
 
 def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):

@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
+EXPECTED_SCHEMA_VERSION = "2.0"
+EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2"
+
+
 @dataclass(frozen=True)
 class SplitMeta:
     schema_version: str
@@ -24,6 +28,7 @@ class SplitMeta:
     edges_hash: str
     library_versions: dict
     created_at: str
+    pool_criterion: Optional[str] = None
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -61,6 +66,7 @@ def load_split_meta(dataset: str, data_dir: str = "data") -> SplitMeta:
         edges_hash=payload["edges_hash"],
         library_versions=payload.get("library_versions", {}),
         created_at=payload["created_at"],
+        pool_criterion=payload.get("pool_criterion"),
     )
 
 
@@ -167,6 +173,17 @@ def assert_split_meta_matches(
     data_dir: str = "data",
 ) -> SplitMeta:
     meta = load_split_meta(dataset, data_dir)
+
+    if meta.schema_version != EXPECTED_SCHEMA_VERSION:
+        raise ValueError(
+            f"{dataset}: split_meta.json schema_version {meta.schema_version!r} "
+            f"does not match expected {EXPECTED_SCHEMA_VERSION!r}. Regenerate via prepare_data.py."
+        )
+    if meta.pool_criterion != EXPECTED_POOL_CRITERION:
+        raise ValueError(
+            f"{dataset}: split_meta.json pool_criterion {meta.pool_criterion!r} "
+            f"does not match expected {EXPECTED_POOL_CRITERION!r}. Regenerate via prepare_data.py."
+        )
 
     train_ids = df_nodes[df_nodes["train"]]["node_id"].astype(int).tolist()
     val_ids = df_nodes[df_nodes["val"]]["node_id"].astype(int).tolist()

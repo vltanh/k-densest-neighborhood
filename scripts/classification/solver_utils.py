@@ -57,6 +57,42 @@ def params_hash(params: dict) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _sha256_forbidden(forbidden_nodes: Optional[Iterable[int]]) -> str:
+    ids = sorted(int(n) for n in (forbidden_nodes or ()))
+    payload = b"\n".join(str(i).encode("ascii") for i in ids)
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def effective_params(
+    params: Optional[dict],
+    *,
+    weighting: str,
+    max_fallback_hops: int,
+    forbidden_nodes: Optional[Iterable[int]] = None,
+    code_hash: Optional[str] = None,
+) -> Tuple[dict, str]:
+    """Bake the bits that change the classifier's output into the params dict
+    before hashing, so cached records emitted under one configuration are not
+    reused under another. Returns (effective_params, params_hash).
+
+    Fields included in ``_eval``:
+      - weighting (uniform / distance)
+      - max_fallback_hops
+      - forbidden_hash: sha256 of the sorted forbidden node id list
+      - code_hash (optional): caller-stamped solver build id or git sha
+    """
+    base = dict(params or {})
+    eval_block = {
+        "weighting": weighting,
+        "max_fallback_hops": int(max_fallback_hops),
+        "forbidden_hash": _sha256_forbidden(forbidden_nodes),
+    }
+    if code_hash is not None:
+        eval_block["code_hash"] = str(code_hash)
+    base["_eval"] = eval_block
+    return base, params_hash(base)
+
+
 def method_extra_args(method: str, params: Optional[dict] = None, gurobi_seed: Optional[int] = None) -> List[str]:
     """Single source of truth for the solver argv per (method, params).
 
@@ -232,40 +268,153 @@ def compute_mincut(neighbors, com):
     return sub_graph.mincut("noi", "bqueue", False)
 
 
-_LAMBDA2_MAX_SIZE = 500
+_LAMBDA2_DENSE_THRESHOLD = 64
 
 
 def _algebraic_connectivity_lambda2(mincut_neighbors, node_set):
+    """Second-smallest eigenvalue of the normalized Laplacian of the undirected
+    induced subgraph. scipy.sparse.linalg.eigsh handles graphs of any practical
+    size; dense numpy.linalg.eigvalsh is used as a fallback for very small
+    subgraphs where ARPACK requires k < n - 1."""
     n = len(node_set)
     if n < 2:
         return 0.0
-    if n > _LAMBDA2_MAX_SIZE:
-        return math.nan
     try:
         import numpy as np
+        from scipy import sparse
+        from scipy.sparse.linalg import eigsh
     except ImportError:
         return math.nan
 
     nodes = sorted(node_set)
     idx = {v: i for i, v in enumerate(nodes)}
-    A = np.zeros((n, n), dtype=float)
+    rows: List[int] = []
+    cols: List[int] = []
     for u in nodes:
         for v in mincut_neighbors.get(u, ()):
             if v in idx and v != u:
-                A[idx[u], idx[v]] = 1.0
-                A[idx[v], idx[u]] = 1.0
-    deg = A.sum(axis=1)
+                rows.append(idx[u])
+                cols.append(idx[v])
+    if not rows:
+        return 0.0
+    data = np.ones(len(rows), dtype=float)
+    A = sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
+    A = (A + A.T) * 0.5
+    deg = np.asarray(A.sum(axis=1)).ravel()
     if (deg <= 0).any():
-        # Disconnected: at least two components, so lambda_2 = 0.
         return 0.0
     d_inv_sqrt = 1.0 / np.sqrt(deg)
-    L_norm = np.eye(n) - (A * d_inv_sqrt[:, None] * d_inv_sqrt[None, :])
+    D_inv_sqrt = sparse.diags(d_inv_sqrt)
+    L_norm = sparse.eye(n) - D_inv_sqrt @ A @ D_inv_sqrt
     L_norm = (L_norm + L_norm.T) * 0.5
+
+    if n <= _LAMBDA2_DENSE_THRESHOLD:
+        try:
+            vals = np.linalg.eigvalsh(L_norm.toarray())
+            return float(vals[1])
+        except Exception:
+            return math.nan
+
     try:
-        vals = np.linalg.eigvalsh(L_norm)
-        return float(vals[1])
+        vals = eigsh(L_norm, k=2, which="SM", return_eigenvectors=False)
+        vals = sorted(float(v) for v in vals)
+        return vals[1]
     except Exception:
-        return math.nan
+        try:
+            vals = np.linalg.eigvalsh(L_norm.toarray())
+            return float(vals[1])
+        except Exception:
+            return math.nan
+
+
+def _size_bucket(n: int) -> str:
+    if n <= 5:
+        return "small"
+    if n <= 20:
+        return "medium"
+    return "large"
+
+
+def compute_per_class_breakdown(
+    nodes: Iterable[int],
+    out_neighbors: Dict[int, Set[int]],
+    mincut_neighbors: Dict[int, Set[int]],
+    labels,
+    train_mask,
+    query_node: int,
+) -> dict:
+    """Per-class diagnostics for a returned subgraph. Reports:
+
+      within_class_internal_edges_ratio
+          Of the undirected internal edges of S, the fraction whose two
+          endpoints share a label.
+      train_label_entropy
+          Shannon entropy (base 2) of the label distribution over train
+          neighbours of S, in nats-of-log2; 0 when one class dominates,
+          log2(num_classes) when uniform.
+      true_class_vote_share
+          Fraction of train neighbours of S whose label equals labels[query_node].
+      n_train_neighbours
+          Number of train neighbours of S used to build the vote.
+      size_bucket
+          Discretised size class: small (|S| <= 5), medium (6..20), large (>20).
+    """
+    node_set = set(int(n) for n in nodes)
+    n = len(node_set)
+    if n == 0 or query_node is None:
+        return {
+            "within_class_internal_edges_ratio": math.nan,
+            "train_label_entropy": math.nan,
+            "true_class_vote_share": math.nan,
+            "n_train_neighbours": 0,
+            "size_bucket": _size_bucket(n),
+        }
+
+    same = 0
+    total = 0
+    seen_pairs: Set[Tuple[int, int]] = set()
+    for u in node_set:
+        for v in mincut_neighbors.get(u, ()):
+            if v == u or v not in node_set:
+                continue
+            a, b = (u, v) if u < v else (v, u)
+            if (a, b) in seen_pairs:
+                continue
+            seen_pairs.add((a, b))
+            total += 1
+            try:
+                if labels[a] == labels[b]:
+                    same += 1
+            except IndexError:
+                pass
+    within_ratio = (same / total) if total else math.nan
+
+    train_neighbours = [
+        v for v in node_set if v != query_node and v < len(train_mask) and train_mask[v]
+    ]
+    train_labels = [int(labels[v]) for v in train_neighbours]
+    if train_labels:
+        counts = Counter(train_labels)
+        total_t = sum(counts.values())
+        entropy = 0.0
+        for c in counts.values():
+            p = c / total_t
+            entropy -= p * math.log2(p)
+        query_label = int(labels[query_node]) if query_node < len(labels) else None
+        vote_share = (
+            counts.get(query_label, 0) / total_t if query_label is not None else math.nan
+        )
+    else:
+        entropy = math.nan
+        vote_share = math.nan
+
+    return {
+        "within_class_internal_edges_ratio": within_ratio,
+        "train_label_entropy": entropy,
+        "true_class_vote_share": vote_share,
+        "n_train_neighbours": len(train_neighbours),
+        "size_bucket": _size_bucket(n),
+    }
 
 
 def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
@@ -525,10 +674,21 @@ def evaluate_nodes(
         neighborhood = result["pred_nodes"] if result["returncode"] == 0 else []
         oracle_queries = result["oracle_queries"]
         wall_time = result.get("wall_time")
+        solver_payload = result.get("solver_json") or {}
         qualities_local = None
         if compute_qualities:
             qualities_local = compute_subgraph_quality(
                 neighborhood, out_neighbors, mincut_neighbors
+            )
+            qualities_local.update(
+                compute_per_class_breakdown(
+                    neighborhood,
+                    out_neighbors,
+                    mincut_neighbors,
+                    labels,
+                    train_mask,
+                    int(q_node),
+                )
             )
         record = {
             "dataset": dataset_name,
@@ -554,6 +714,9 @@ def evaluate_nodes(
                 else None
             ),
             "returncode": result["returncode"],
+            "solver_build_id": solver_payload.get("solver_build_id"),
+            "kappa_verified": result.get("kappa_verified"),
+            "kappa_verify_failed": result.get("kappa_verify_failed"),
         }
         return record, False
 
@@ -594,6 +757,16 @@ def evaluate_nodes(
                     qualities_local = compute_subgraph_quality(
                         neighborhood, out_neighbors, mincut_neighbors
                     )
+                    qualities_local.update(
+                        compute_per_class_breakdown(
+                            neighborhood,
+                            out_neighbors,
+                            mincut_neighbors,
+                            labels,
+                            train_mask,
+                            int(q_node),
+                        )
+                    )
                     record["qualities"] = qualities_local
                 if qualities_local is None:
                     qualities_local = {}
@@ -633,6 +806,16 @@ def evaluate_nodes(
             y_pred.append(pred_label)
             evaluated_query_nodes.append(q_node)
             records_out.append(record)
+
+    # Sort results by query_node so callers (e.g. paired bootstrap) get the
+    # same row order regardless of as_completed arrival ordering, making the
+    # i-th sample correspond to the same query across methods and seeds.
+    if evaluated_query_nodes:
+        order = sorted(range(len(evaluated_query_nodes)), key=lambda i: evaluated_query_nodes[i])
+        y_true = [y_true[i] for i in order]
+        y_pred = [y_pred[i] for i in order]
+        evaluated_query_nodes = [evaluated_query_nodes[i] for i in order]
+        records_out = [records_out[i] for i in order]
 
     fallback_rate = (fallback_count / total_queries) * 100 if total_queries > 0 else 0
     print(
