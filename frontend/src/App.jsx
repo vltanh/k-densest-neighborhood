@@ -15,8 +15,6 @@ const SHARED_DEFAULTS = {
   k: 5,
   kappa: 0,
   bfsDepth: 1,
-  bfsUseK: true,
-  avgdegUseK: true,
   timeLimit: -1,
   hardTimeLimit: -1,
   nodeLimit: -1,
