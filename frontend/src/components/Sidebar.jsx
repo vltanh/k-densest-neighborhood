@@ -38,6 +38,7 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
     [setParams],
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedTab, setAdvancedTab] = useState('solver');
   const isSim = oracleMode === ORACLE_SIM;
 
   const variant = params.variant || VARIANT_BP;
@@ -252,76 +253,107 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
         <div className="pb-6">
           {advancedOpen && (
             <div className="pt-4 fade-in">
-              <div className="space-y-5">
-
-              {/* Oracle limits — apply to every variant */}
-              <div>
-                <label className="field-label">Max In-Edges</label>
-                <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
-                <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
+              <div role="tablist" aria-label="Advanced settings" className="flex gap-6 border-b border-[var(--rule-night)] mb-4">
+                {[
+                  { id: 'oracle', label: 'Oracle' },
+                  { id: 'solver', label: 'Solver' },
+                ].map(t => {
+                  const active = advancedTab === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => setAdvancedTab(t.id)}
+                      className={`relative pb-2 pt-1 eyebrow transition-colors duration-200 ease-out ${
+                        active ? 'text-[var(--on-night)]' : 'text-[var(--on-night-faint)] hover:text-[var(--on-night-dim)]'
+                      }`}
+                    >
+                      <span>{t.label}</span>
+                      <span
+                        className="absolute left-0 right-0 -bottom-px h-[2px] transition-[background-color,transform] duration-200 ease-out origin-left"
+                        style={{
+                          backgroundColor: active ? 'var(--gold)' : 'transparent',
+                          transform: active ? 'scaleX(1)' : 'scaleX(0.4)',
+                        }}
+                      />
+                    </button>
+                  );
+                })}
               </div>
 
-              {usesBpInternals && (
-                <>
-                  <div className="pt-1 eyebrow text-[var(--on-night-faint)]">B&P Tuning</div>
-                  {usesTimeBudget && (
+              {advancedTab === 'oracle' && (
+                <div className="space-y-5 fade-in">
+                  <div>
+                    <label className="field-label">Max In-Edges</label>
+                    <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
+                    <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
+                  </div>
+                </div>
+              )}
+
+              {advancedTab === 'solver' && (
+                <div className="space-y-5 fade-in">
+                  {usesBpInternals ? (
                     <>
-                      <div className="grid grid-cols-2 gap-x-5 gap-y-5">
-                        <div>
-                          <label className="field-label">Soft Time (s)</label>
-                          <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
-                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">no-improvement cap · -1 disables</div>
-                        </div>
-                        <div>
-                          <label className="field-label">Hard Time (s)</label>
-                          <input type="number" min="-1" step="10" value={params.hardTimeLimit} onChange={set('hardTimeLimit')} className="field-input" />
-                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
-                        </div>
+                      {usesTimeBudget && (
+                        <>
+                          <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                            <div>
+                              <label className="field-label">Soft Time (s)</label>
+                              <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">no-improvement cap · -1 disables</div>
+                            </div>
+                            <div>
+                              <label className="field-label">Hard Time (s)</label>
+                              <input type="number" min="-1" step="10" value={params.hardTimeLimit} onChange={set('hardTimeLimit')} className="field-input" />
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                            <div>
+                              <label className="field-label">Node Limit</label>
+                              <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                            </div>
+                            <div>
+                              <label className="field-label">Gap Tol</label>
+                              <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <div>
+                        <label className="field-label">Dinkelbach Iter</label>
+                        <input type="number" min="-1" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
+                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
                       </div>
-                      <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+
+                      <div className="grid grid-cols-3 gap-x-5 gap-y-5">
                         <div>
-                          <label className="field-label">Node Limit</label>
-                          <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
-                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                          <label className="field-label">CG Batch Frac</label>
+                          <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
                         </div>
                         <div>
-                          <label className="field-label">Gap Tol</label>
-                          <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
-                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                          <label className="field-label">Min Batch</label>
+                          <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
+                        </div>
+                        <div>
+                          <label className="field-label">Max Batch</label>
+                          <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
                         </div>
                       </div>
                     </>
+                  ) : (
+                    <div className="text-[length:var(--text-sm)] text-[var(--on-night-faint)] italic">
+                      {spec.label} exposes no inner-loop tuning. The variant runs to completion using its own stopping rule.
+                    </div>
                   )}
-
-                  <div className="grid grid-cols-2 gap-x-5 gap-y-5">
-                    <div>
-                      <label className="field-label">Dinkelbach Iter</label>
-                      <input type="number" min="-1" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
-                      <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
-                    </div>
-                    <div>
-                      <label className="field-label">Num Tol</label>
-                      <input type="number" min="0" step="0.000001" value={params.tol} onChange={set('tol')} className="field-input" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-x-5 gap-y-5">
-                    <div>
-                      <label className="field-label">CG Batch Frac</label>
-                      <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
-                    </div>
-                    <div>
-                      <label className="field-label">Min Batch</label>
-                      <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
-                    </div>
-                    <div>
-                      <label className="field-label">Max Batch</label>
-                      <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
-                    </div>
-                  </div>
-                </>
+                </div>
               )}
-              </div>
             </div>
           )}
         </div>
