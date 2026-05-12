@@ -40,7 +40,7 @@ void print_usage(const char *prog_name)
          << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 0)\n"
          << "  --cg-max-batch <int>      Maximum columns to add per pricing round (default: 50)\n"
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
-         << "  --k <int>                 Target subgraph size (REQUIRED for --bp; optional for --avgdeg and --bfs; triggers at-least-k grow heuristic; k >= 2)\n"
+         << "  --k <int>                 Target subgraph size (REQUIRED for --bp; optional for --avgdeg and --bfs; triggers at-least-k grow heuristic; BP requires k >= 2, AvgDeg/BFS accept k >= 1)\n"
          << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
          << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n"
          << "  --gurobi-seed <int>       Gurobi Seed parameter (default: -1; unset)\n\n"
@@ -267,9 +267,9 @@ int main(int argc, char *argv[])
         cerr << "Error: --k must be specified and >= 2 for this solver.\n";
         return 1;
     }
-    if ((run_avgdeg || run_bfs) && k_provided && k < 2)
+    if ((run_avgdeg || run_bfs) && k_provided && k < 1)
     {
-        cerr << "Error: --k must be >= 2 when provided.\n";
+        cerr << "Error: --k must be >= 1 when provided to --avgdeg or --bfs.\n";
         return 1;
     }
     if (mode == "sim" && input_file.empty())
