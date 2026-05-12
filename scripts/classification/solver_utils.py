@@ -520,6 +520,7 @@ def run_one_query(
         query=q_node,
         extra_args=cmd_extra,
         as_int_nodes=True,
+        capture_wall_time=True,
         json_output_path=json_output_path,
     )
 
@@ -717,6 +718,10 @@ def evaluate_nodes(
             "solver_build_id": solver_payload.get("solver_build_id"),
             "kappa_verified": result.get("kappa_verified"),
             "kappa_verify_failed": result.get("kappa_verify_failed"),
+            "hard_cap_hit": result.get("hard_cap_hit"),
+            "soft_time_limit_s": (solver_payload.get("config") or {}).get("time_limit"),
+            "hard_time_limit_s": (solver_payload.get("config") or {}).get("hard_time_limit"),
+            "solver_wall_time_s": solver_payload.get("wall_time_s"),
             "stats": result.get("stats"),
         }
         return record, False

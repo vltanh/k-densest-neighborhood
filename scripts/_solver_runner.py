@@ -145,6 +145,7 @@ def invoke_solver(
             "lambda_trajectory": [],
             "kappa_verified": None,
             "kappa_verify_failed": None,
+            "hard_cap_hit": None,
             "stats": None,
             "qualities": None,
             "solver_json": None,

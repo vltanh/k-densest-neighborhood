@@ -745,6 +745,7 @@ def _do_solver_runs(args):
                             "solver_actual_kappa": None,
                             "kappa_verified": None,
                             "kappa_verify_failed": None,
+                            "hard_cap_hit": None,
                             "solver_size": 0,
                             "brute_size": bf_opt["opt_size"],
                             "wall_time_s": 0.0,
@@ -829,6 +830,7 @@ def _do_solver_runs(args):
             opt_match_size_only = solver_size == opt_size
             kappa_verified = payload.get("kappa_verified")
             kappa_verify_failed = payload.get("kappa_verify_failed")
+            hard_cap_hit = payload.get("hard_cap_hit")
             solver_build_id = payload.get("solver_build_id")
             # Compute the actual edge-connectivity of the solver's returned set.
             solver_actual_kappa: Optional[int] = None
@@ -864,6 +866,7 @@ def _do_solver_runs(args):
                     "solver_actual_kappa": solver_actual_kappa,
                     "kappa_verified": kappa_verified,
                     "kappa_verify_failed": kappa_verify_failed,
+                    "hard_cap_hit": hard_cap_hit,
                     "solver_size": solver_size,
                     "brute_size": opt_size,
                     "wall_time_s": wall,

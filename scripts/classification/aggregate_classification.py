@@ -7,7 +7,7 @@ solver:
   2. At the best params_hash, compute per-seed macro precision/recall/F1 on
      query_split == 'test' records, with paired-by-query bootstrap CI shared
      across methods.
-  3. Optionally restrict the test pool to the hard subset (val records where
+  3. Optionally restrict the test pool to the hard subset (test records where
      the BFS depth-1 vote was wrong) via --subset bfs_depth1_wrong.
 
 Deterministic methods (avgdeg, bfs) report a single-seed paired CI; BP uses
@@ -148,9 +148,9 @@ def _pick_best_params_by_val_f1(records) -> Dict[str, str]:
 
 
 def _hard_subset(records) -> List[int]:
-    """Val nodes where the BFS depth-1 record predicted_label != true label.
+    """Test nodes where the BFS depth-1 record predicted_label != true label.
     Uses the first BFS hash encountered with bfs_depth=1 in the params blob."""
-    candidates = [r for r in records if r.get("method") == "bfs" and r.get("query_split") == "val"]
+    candidates = [r for r in records if r.get("method") == "bfs" and r.get("query_split") == "test"]
     if not candidates:
         return []
     pool = []
@@ -285,16 +285,17 @@ def main():
             precisions.append(s["precision"])
             recalls.append(s["recall"])
             f1s.append(s["f1"])
-        if fam in DETERMINISTIC:
+        present_seeds = [s for s in SEEDS if s in method_preds]
+        if fam in DETERMINISTIC or len(present_seeds) <= 1:
             ci_kind = "single_seed_paired"
             single_yp = method_preds.get(SEEDS[0]) or next(iter(method_preds.values()))
             pooled_ci = _bootstrap_ci(method_truth, single_yp, paired_idx)
         else:
             ci_kind = "stratified_seed_pooled"
             n_per_seed = len(method_truth)
-            strat_idx = _stratified_indices(n_per_seed, len(SEEDS), args.bootstrap, rng_seed=0)
-            yt_stack = np.concatenate([np.asarray(method_truth) for _ in SEEDS])
-            yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in SEEDS if s in method_preds])
+            strat_idx = _stratified_indices(n_per_seed, len(present_seeds), args.bootstrap, rng_seed=0)
+            yt_stack = np.concatenate([np.asarray(method_truth) for _ in present_seeds])
+            yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in present_seeds])
             pooled_ci = _bootstrap_ci(yt_stack, yp_stack, strat_idx)
         aggregate_rows.append(
             {

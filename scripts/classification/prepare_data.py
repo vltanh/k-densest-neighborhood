@@ -114,7 +114,7 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     labels = df_nodes["label"].values
     train_mask = df_nodes["train"].values
 
-    hard_subset = compute_hard_subset(val_ids, out_adj, train_mask, labels)
+    hard_subset = compute_hard_subset(test_ids, out_adj, train_mask, labels)
 
     edges_iter = zip(
         df_edges["source"].astype(int).tolist(),

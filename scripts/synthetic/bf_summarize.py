@@ -93,6 +93,13 @@ def _summarise(df: pd.DataFrame) -> pd.DataFrame:
             )
         else:
             row["median_total_bb_nodes"] = None
+        if "hard_cap_hit" in chunk.columns:
+            hits = chunk["hard_cap_hit"].fillna(False).astype(bool)
+            row["n_hard_cap_hit"] = int(hits.sum())
+            row["hard_cap_hit_rate"] = float(hits.mean()) if n_runs else 0.0
+        else:
+            row["n_hard_cap_hit"] = 0
+            row["hard_cap_hit_rate"] = 0.0
         rows.append(row)
     return pd.DataFrame(rows).sort_values(group_cols).reset_index(drop=True)
 

@@ -99,7 +99,7 @@ def write_split_meta(
         if hard_subset_ids is None
         else {
             "criterion": "bfs_depth1_label_vote_wrong_outgoing",
-            "split": "val",
+            "split": "test",
             "size": len(hard_subset_ids),
             "hash": sha256_node_set(hard_subset_ids),
         },
@@ -157,11 +157,11 @@ def bfs_depth1_label_vote(q_node, out_adj, train_mask, labels, global_majority):
     return argmax_label_value(Counter(labels[n] for n in train_neighbours))
 
 
-def compute_hard_subset(val_ids, out_adj, train_mask, labels) -> List[int]:
+def compute_hard_subset(query_ids, out_adj, train_mask, labels) -> List[int]:
     global_majority = argmax_label_value(Counter(labels[train_mask]))
     return [
         int(q)
-        for q in val_ids
+        for q in query_ids
         if bfs_depth1_label_vote(q, out_adj, train_mask, labels, global_majority) != labels[q]
     ]
 

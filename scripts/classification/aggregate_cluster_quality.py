@@ -68,6 +68,7 @@ def _row_for(record):
         "query_split": record.get("query_split"),
         "fallback_used": record.get("fallback_used"),
         "size_solver": record.get("size"),
+        "hard_cap_hit": bool(record.get("hard_cap_hit") or False),
     }
     for key in HEADLINE_METRICS + TRACE_METRICS:
         row[key] = qualities.get(key, math.nan)
@@ -92,7 +93,7 @@ def _collapse_seeds(per_query: pd.DataFrame) -> pd.DataFrame:
     # Re-attach split_hash / fallback_used / size_solver / size_bucket from the
     # first row of each group; these are seed-invariant for deterministic
     # methods and a representative for BP.
-    extras_agg = {"split_hash": "first", "fallback_used": "any", "size_solver": "median"}
+    extras_agg = {"split_hash": "first", "fallback_used": "any", "size_solver": "median", "hard_cap_hit": "any"}
     for cat in CATEGORICAL_METRICS:
         if cat in per_query.columns:
             extras_agg[cat] = "first"
@@ -118,6 +119,13 @@ def _summarise(
         row = {col: val for col, val in zip(group_cols, keys)}
         row["params"] = chunk["params"].iloc[0]
         row["n_queries"] = len(chunk)
+        if "hard_cap_hit" in chunk.columns:
+            hits = chunk["hard_cap_hit"].fillna(False).astype(bool)
+            row["n_hard_cap_hit"] = int(hits.sum())
+            row["hard_cap_hit_rate"] = float(hits.mean()) if len(chunk) else 0.0
+        else:
+            row["n_hard_cap_hit"] = 0
+            row["hard_cap_hit_rate"] = 0.0
         for key in HEADLINE_METRICS:
             vals = chunk[key].astype(float).to_numpy()
             finite = vals[~np.isnan(vals)]

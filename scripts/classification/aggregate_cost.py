@@ -75,6 +75,7 @@ def _row_for(record):
         "t_sync": stats.get("t_sync"),
         "t_total": stats.get("t_total"),
         "solver_build_id": record.get("solver_build_id"),
+        "hard_cap_hit": record.get("hard_cap_hit"),
     }
     return row
 
@@ -92,6 +93,13 @@ def _summarise(per_query: pd.DataFrame, combine_splits: bool = False) -> pd.Data
         row = {col: val for col, val in zip(group_cols, keys)}
         row["params"] = chunk["params"].iloc[0]
         row["n_queries"] = len(chunk)
+        if "hard_cap_hit" in chunk.columns:
+            hits = chunk["hard_cap_hit"].fillna(False).astype(bool)
+            row["n_hard_cap_hit"] = int(hits.sum())
+            row["hard_cap_hit_rate"] = float(hits.mean()) if len(chunk) else 0.0
+        else:
+            row["n_hard_cap_hit"] = 0
+            row["hard_cap_hit_rate"] = 0.0
         for key in COST_NUMERIC_FIELDS:
             if key not in chunk.columns:
                 row[f"{key}_median"] = math.nan
