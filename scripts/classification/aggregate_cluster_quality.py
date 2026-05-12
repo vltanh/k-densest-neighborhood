@@ -44,6 +44,7 @@ HEADLINE_METRICS = [
     "undir_internal_ncut",
     "mixing_param",
     "algebraic_connectivity_lambda2",
+    "edge_connectivity",
     "within_class_internal_edges_ratio",
     "train_label_entropy",
     "true_class_vote_share",

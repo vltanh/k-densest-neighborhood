@@ -145,10 +145,12 @@ def _record_key(record: dict) -> Tuple:
 
 
 def load_ndjson_records(path: str) -> List[dict]:
-    """Read an NDJSON file of records; skip malformed lines silently."""
+    """Read an NDJSON file of records; skip malformed lines and report count
+    to stderr so partial corruption is visible to operators."""
     if not os.path.exists(path):
         return []
-    out = []
+    out: List[dict] = []
+    skipped = 0
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -157,7 +159,10 @@ def load_ndjson_records(path: str) -> List[dict]:
             try:
                 out.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                skipped += 1
+    if skipped > 0:
+        print(f"[load_ndjson_records] {path}: {skipped} malformed line(s) skipped",
+              file=sys.stderr)
     return out
 
 
@@ -430,6 +435,7 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
             "undir_internal_ncut": math.nan,
             "mixing_param": math.nan,
             "algebraic_connectivity_lambda2": 0.0,
+            "edge_connectivity": 0,
             "size": 0,
         }
 
@@ -458,12 +464,14 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
     )
 
     undir_internal_ncut = math.nan
+    edge_conn = 0
     if n >= 2:
         if undir_internal_edges == 0:
             undir_internal_ncut = 0.0
         else:
             try:
                 part_a, part_b, cut_value = compute_mincut(mincut_neighbors, node_set)
+                edge_conn = int(round(cut_value))
                 vol_a = sum(
                     1
                     for u in part_a
@@ -495,6 +503,7 @@ def compute_subgraph_quality(nodes, out_neighbors, mincut_neighbors):
         "undir_internal_ncut": undir_internal_ncut,
         "mixing_param": mixing_param,
         "algebraic_connectivity_lambda2": lambda2,
+        "edge_connectivity": edge_conn,
         "size": n,
     }
 

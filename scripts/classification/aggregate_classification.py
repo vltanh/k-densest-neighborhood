@@ -147,9 +147,33 @@ def _pick_best_params_by_val_f1(records) -> Dict[str, str]:
     return best_for
 
 
-def _hard_subset(records) -> List[int]:
-    """Test nodes where the BFS depth-1 record predicted_label != true label.
-    Uses the first BFS hash encountered with bfs_depth=1 in the params blob."""
+def _hard_subset(records, dataset=None, data_dir="data") -> List[int]:
+    """Canonical hard subset: test nodes whose plain depth-1 BFS majority vote
+    over 1-hop train neighbours (no grow-to-k) disagrees with the true label.
+    When dataset is given, recompute from data/<dataset>/{nodes.csv, edge.csv}
+    and verify against split_meta.json's hash. Otherwise derive from BFS d=1
+    records (non-canonical fallback)."""
+    if dataset is not None:
+        meta_path = os.path.join(data_dir, dataset, "split_meta.json")
+        nodes_csv = os.path.join(data_dir, dataset, "nodes.csv")
+        edges_csv = os.path.join(data_dir, dataset, "edge.csv")
+        if all(os.path.exists(p) for p in (meta_path, nodes_csv, edges_csv)):
+            from split_utils import build_out_adjacency, compute_hard_subset, sha256_node_set
+            df_nodes = pd.read_csv(nodes_csv)
+            df_edges = pd.read_csv(edges_csv)
+            test_ids = [int(q) for q in df_nodes[df_nodes["test"]]["node_id"].astype(int).tolist()]
+            labels = df_nodes["label"].values
+            train_mask = df_nodes["train"].values
+            out_adj = build_out_adjacency(df_edges)
+            hard = compute_hard_subset(test_ids, out_adj, train_mask, labels)
+            with open(meta_path) as f:
+                meta = json.load(f)
+            expected = (meta.get("hard_subset") or {}).get("hash")
+            if expected is not None and sha256_node_set(hard) != expected:
+                raise RuntimeError(
+                    f"hard_subset hash mismatch for {dataset}: split_meta.json drift"
+                )
+            return sorted(int(n) for n in hard)
     candidates = [r for r in records if r.get("method") == "bfs" and r.get("query_split") == "test"]
     if not candidates:
         return []
@@ -203,7 +227,7 @@ def main():
         return
 
     if args.subset == "bfs_depth1_wrong":
-        hard_ids = _hard_subset(records)
+        hard_ids = _hard_subset(records, dataset=args.dataset)
         if not hard_ids:
             print("No hard subset queries identified (no BFS depth-1 records with wrong label).")
             return
