@@ -37,6 +37,7 @@ class SolverParams(BaseModel):
     avgdeg_use_k: bool = Field(default=True, description="If true, AvgDeg grows its Goldberg optimum to size k when |S*| < k; if false, returns the unconstrained optimum")
 
     time_limit: Optional[float] = -1.0
+    hard_time_limit: Optional[float] = -1.0
     node_limit: Optional[int] = -1
     max_in_edges: Optional[int] = 0
     gap_tol: Optional[float] = -1.0
@@ -71,6 +72,7 @@ def _variant_argv(req: "SolverParams") -> list:
     args = [
         VARIANT_FLAGS[variant],
         "--time-limit", str(req.time_limit),
+        "--hard-time-limit", str(req.hard_time_limit),
         "--node-limit", str(req.node_limit),
         "--max-in-edges", str(req.max_in_edges),
         "--gap-tol", str(req.gap_tol),
