@@ -6,6 +6,7 @@
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage{xcolor}
+\PassOptionsToPackage{hyphens}{url}
 \usepackage{hyperref}
 
 \hypersetup{
@@ -29,41 +30,50 @@
 \maketitle
 
 \begin{abstract}
-Citation graphs are a natural substrate for exploratory scholarly search: given
-a paper, a user often wants a compact set of nearby papers that forms a coherent
-research community. Simple local expansion is cheap, but it does not optimize
-cohesion, satisfy a target size, or guarantee a formal connectivity property.
-This paper presents a query-anchored densest community search system for
-directed citation graphs. Given a directed graph, a query paper, and a minimum
-community size, the system seeks a set containing the query that maximizes
-induced directed edge density. The solver also supports a rooted
-$\kappa$-edge-connectivity constraint.
+Citation graphs are a natural substrate for exploratory scholarly search:
+given a paper, a user often wants a compact set of nearby papers that
+forms a coherent research community. Simple local expansion is cheap, but
+it does not optimize cohesion, satisfy a target size, or guarantee a
+formal connectivity property. This paper presents a query-anchored
+densest community search system for directed citation graphs. Given a
+directed graph, a query paper, and a minimum community size $k \ge 3$,
+the system seeks a set containing the query that maximizes induced
+directed edge density $|E(S)| / (|S|(|S|-1))$. The solver also supports
+a rooted $\kappa$-edge-connectivity constraint.
 
-The method combines Dinkelbach's fractional-programming transform with a lazy
-branch-and-price algorithm. Each Dinkelbach iteration solves a parametric
-integer program over a dynamically expanded active set. The restricted master
-problem uses node, directed-edge, and unordered-pair variables; column generation
-promotes promising frontier nodes; branch-and-bound enforces integrality; Boolean
-quadratic polytope triangle cuts tighten fractional relaxations; and min-cut
-separation enforces optional rooted connectivity. The implementation supports
-both local CSV simulation and live OpenAlex-backed citation retrieval, and is
-wrapped by a FastAPI/React interface that streams optimization telemetry.
+The method combines Dinkelbach's fractional-programming transform with a
+lazy branch-and-price algorithm. Each Dinkelbach iteration solves a
+parametric integer program over a dynamically expanded active set. The
+restricted master problem uses node, directed-edge, and unordered-pair
+variables; column generation promotes promising frontier nodes;
+branch-and-bound enforces integrality; Boolean quadratic polytope
+triangle cuts tighten fractional relaxations; and min-cut separation
+enforces optional rooted connectivity. The implementation supports both
+local CSV simulation and live OpenAlex citation retrieval, wrapped by a
+FastAPI/React interface that streams optimization telemetry.
 
-On an inductive Cora-ML CitationFull node-classification task, one-hop BFS is
-the strongest full-test classifier because test queries have direct labeled
-citation neighbors. The best validation branch-and-price setting,
-$k=3,\kappa=1$, is close on the full test split by macro F1 (0.8134 versus
-0.8266), returns smaller communities (3.04 versus 3.85 nodes on average), and
-has higher directed internal edge density (0.4987 versus 0.4011). On the
-validation subset where one-hop BFS fails, the same branch-and-price setting
-achieves the best macro F1 among the compared fixed methods (0.1268), while
-matching one-hop BFS's perfect normalized internal min-cut. The exact
-average-degree baseline reaches 0.0987 macro F1 on that hard subset with much
-larger communities, many more oracle queries, and lower internal connectivity.
-The results support a two-regime conclusion: direct neighbors dominate easy
-citation classification, while density-constrained optimization is a principled
-compact retrieval primitive when size, density, and connectivity are part of the
-task.
+Evaluation has three perspectives on Cora-ML (CitationFull). The
+cluster-quality perspective, on the $804$ val+test queries, has
+branch-and-price (BP) returning the densest and most algebraically
+connected compact communities at every $k \in \{3, 4, 5\}$: at $k = 3$,
+BP at $\kappa = 0$ reaches edge density $0.51 \pm 0.10$ and BP at
+$\kappa = 2$ reaches $\lambda_2 = 1.27 \pm 0.27$, against BFS depth-$1$
+at density $0.35 \pm 0.11$ and AvgDeg at density $0.21 \pm 0.12$ with
+size $21.2 \pm 15.2$ and average degree $3.02 \pm 1.55$. The cost
+perspective has BFS sub-second, AvgDeg under $0.1$ s, BP heterogeneous
+with mean wall time growing from $1.5$ s at $k = 3, \kappa = 0$ to
+$96$ s at $k = 5, \kappa = 2$ under a $300$ s hard cap. The
+classification perspective tunes on the $402$ val queries and evaluates
+on the $402$ test queries: BFS depth-$1$ at $k = 4$ wins macro F1
+($0.856 \pm 0.019$), BP at $k = 4, \kappa = 2$ runs second
+($0.811 \pm 0.021$), AvgDeg at $k = 4$ trails ($0.603 \pm 0.024$). On
+the $59$-node BFS-hard test subset, where the depth-$1$ vote disagrees
+with the true label by construction, BP leads macro F1
+($0.190 \pm 0.056$) ahead of AvgDeg ($0.146 \pm 0.056$) and BFS
+($0.080 \pm 0.042$). The pattern supports a two-regime reading: direct
+neighbours dominate easy citation classification, while density-
+constrained optimization is the principled retrieval primitive when
+size, density, and connectivity are part of the task.
 \end{abstract}
 
 \section{Motivation and Problem Statements}
@@ -168,7 +178,7 @@ from the Graph2Gauss benchmark collection \cite{bojchevski2017}.
 \subsection{Problem Statement}
 
 Let $G=(V,E)$ be a directed graph. In the citation setting, $(u,v)\in E$ means
-that paper $u$ cites paper $v$. Let $q\in V$ be the query paper and $k\geq 2$
+that paper $u$ cites paper $v$. Let $q\in V$ be the query paper and $k\geq 3$
 be a minimum target size. For $S\subseteq V$, define the induced directed edge
 set
 \[
@@ -410,6 +420,19 @@ This pruning step is important because the constraint is $|S|\geq k$. The LP or
 integer search may return a set larger than needed; pruning tightens the
 incumbent and often reduces the returned community to a compact core.
 
+\subsection{BFS Baseline}
+\label{sec:bfs}
+
+The \texttt{--bfs} variant performs topology-only frontier expansion from
+$q$. Layered breadth-first: each dequeued node is oracle-queried, and its
+predecessors and successors enter the candidate pool. A depth parameter
+$d$ bounds the number of explored layers. There is no density objective,
+no size constraint, and no $\kappa$-edge-connectivity enforcement, so the
+returned set is the pool collected during expansion. The cost is one
+oracle query per visited node, with no flow or LP work. Output size grows
+with $d$; per-$k$ comparison against branch-and-price requires the
+grow-to-$k$ post-processing of Section~\ref{sec:grow-to-k}.
+
 \subsection{Average-Degree Baseline}
 \label{sec:avgdeg}
 
@@ -496,6 +519,25 @@ instead of exact rational capacities, and a consider-best loop instead of
 Goldberg's interval-feasibility test. None of these change which subset is
 optimal; they only affect numerical precision and termination.
 
+\subsection{Grow-to-\texorpdfstring{$k$}{k} Post-Processing}
+\label{sec:grow-to-k}
+
+Branch-and-price enforces $|S| \ge k$ directly through the size constraint
+$\sum_{u \in \Vactive} x_u \ge k$. BFS and AvgDeg do not have a size knob,
+so a separate post-processing pass equalises their output cardinality with
+branch-and-price for per-$k$ comparison. Given a seed $S$ and a candidate
+pool $P \supseteq S$, the pass greedily adds the pool node with the
+largest internal degree into the current set:
+\[
+  v^\star = \argmax_{v \in P \setminus S}\; \bigl|N(v) \cap S\bigr|,
+\]
+and repeats until $|S| = k$ or $P$ is exhausted. BFS uses $S = \{q\}$ with
+depth $d$ acting as a minimum, and growth continues until the pool itself
+reaches $k$. AvgDeg uses its Goldberg optimum $S^\star$ as the seed and
+fires only when $|S^\star| < k$. The pass is a greedy heuristic; the
+densest-at-least-$k$ problem is NP-hard, so no approximation guarantee is
+claimed.
+
 \subsection{End-to-End System}
 
 The project is not only an algorithm implementation. The C++ solver is exposed
@@ -518,413 +560,455 @@ reproducibility.
 
 \section{Experiments}
 
-\subsection{Dataset and Split}
-
-The lead dataset is Cora-ML from PyTorch Geometric's \texttt{CitationFull}
-collection, with directed edges preserved. The exported graph has 2,995
-nodes, 8,416 directed edges, and 7 labels. The split mimics inductive
-citation prediction:
-\begin{itemize}[leftmargin=1.1cm]
-  \item validation and test nodes are ``pure source'' papers that cite
-  others but are not themselves cited in the exported graph (split
-  uniformly between val and test with seed 42);
-  \item every remaining node is a training node, including isolated nodes
-  and nodes whose only outgoing edges land inside val or test.
-\end{itemize}
-With random seed 42, the split contains 1,746 training nodes, 624
-validation nodes, and 625 test nodes. Each run carries a
-\texttt{split\_meta.json} manifest with SHA-256 hashes of the train, val,
-and test node sets, the edge list, and the post-filter
-\emph{eligible} subsets used for evaluation. CiteSeer, DBLP, and Cora runs
-follow the same protocol and are processed in ascending node-count order.
-
-A query node enters the evaluation pool only when its undirected one-hop
-neighbourhood spans more than a single edge; a degenerate
-$(q, \text{neighbour})$ two-node subgraph carries no information for
-density, conductance, NCut, or $\lambda_2$. After this filter, Cora-ML
-contributes 411 eligible val nodes and 393 eligible test nodes.
-A narrower \emph{hard subset} contains the 52 eligible val nodes whose
-BFS depth-1 label vote disagrees with the true label; the subset is
-hash-pinned in \texttt{split\_meta.json} so the hard-subset comparisons
-reference exactly the same nodes across runs.
-
-\subsection{Classification Protocol}
-
-For a query node, each method returns a community. The classifier predicts
-the query label from training nodes inside that returned community,
-excluding the query itself and any node listed in the val or test split. The
-voting rule is uniform majority with a deterministic tie-break by ascending
-label value, so two runs over the same records yield identical predictions.
-If the returned community contains no eligible training nodes, the pipeline
-falls back to a concentric BFS search restricted to non-forbidden nodes; the
-source query stays at distance 0 but cannot use a val or test node as a
-stepping stone to reach further training nodes. On Cora-ML this fallback
-rate is zero for AvgDeg, BFS, and BP at the tuned hyperparameters.
-
-All reported Cora-ML classification runs use \texttt{max\_in\_edges=0}. Thus
-the solver and BFS baseline expand through outgoing citation edges only,
-matching the inductive split where test papers cite older training papers. This
-choice is important: enabling incoming edges would change the retrieval problem
-and the label-propagation neighborhood.
-
-This protocol deliberately evaluates the retrieval set as a neighborhood for
-label propagation. It is not a trained graph neural network. That makes the
-evaluation interpretable: differences come from the selected community, not from
-learned features or model capacity.
-
-\subsection{Methods Compared}
-
-The comparison set is the three solver variants:
-\begin{itemize}[leftmargin=1.1cm]
-  \item BFS with depths 1 and 2;
-  \item branch-and-price with $k \in \{5, 10\}$ and
-  $\kappa \in \{0, 2\}$ at a five-second per-iteration budget;
-  \item the exact average-degree baseline.
-\end{itemize}
-The main test comparison uses the best validation setting per family:
-BFS depth 1, branch-and-price with $k=5$ and $\kappa=2$, and the
-average-degree baseline.
-
-\subsection{Metrics}
-
-Two evaluation perspectives share the same per-query records. The
-\emph{cluster-quality} perspective reports medians of size, directed
-internal average degree, directed edge density, undirected external
-expansion, undirected external conductance, normalized internal min-cut
-(NCut), mixing parameter
-$\mu = b / (b + 2 e_{\mathrm{int}})$ where $b$ and $e_{\mathrm{int}}$ count
-boundary and internal undirected edges, and the algebraic connectivity
-$\lambda_2$ of the normalized Laplacian of the induced undirected subgraph.
-$\lambda_2$ is computed on the dense Laplacian for subgraphs of size up to
-500 and reported as NaN above the cap.
-The \emph{classification} perspective reports macro precision, recall, and
-macro F1 only. Accuracy is dropped. Test classification numbers are means
-over five Gurobi seeds with bootstrap 95\% confidence intervals from
-$B=500$ resamples shared across methods within each seed.
-
-\subsection{Validation Sweep}
-
-Table~\ref{tab:validation} reports the best-per-family setting from the
-Cora-ML validation sweep, with cluster-quality medians on the 411 eligible
-val nodes and macro F1 from \texttt{tune\_val\_*.csv}. BFS depth 1 wins
-on macro F1 (0.864) at the smallest oracle cost. BP at $k=5,\kappa=2$
-returns the densest community (median directed edge density 0.400) with a
-slightly lower $\lambda_2$ (0.726 vs the BFS clique-like 1.000).
-
-\begin{table}[t]
-\centering
-\caption{Validation sweep on Cora-ML, best setting per family. Density,
-NCut, $\lambda_2$, and conductance are medians on the 411 eligible val
-nodes. F1 is macro and oracle queries are the per-query average.}
-\label{tab:validation}
-\begin{tabular}{lllrrrrrr}
-\toprule
-Method & Setting & Size & Density & $\lambda_2$ & NCut & Conduct. & F1 (val) & Queries \\
-\midrule
-AvgDeg & local         & 17.0 & 0.146 & 0.236 & 1.011 & 0.676 & 0.614 & 204.09 \\
-BFS    & depth 1       & 4.0  & 0.333 & 1.000 & 1.200 & 0.833 & 0.864 & 1.00 \\
-BP     & $k=5,\kappa=2$ & 5.0  & 0.400 & 0.726 & 1.158 & 0.852 & 0.827 & 10.67 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The BP sweep explored $\{k=5,k=10\} \times \{\kappa=0,\kappa=2\}$. The
-$k=5,\kappa=2$ cell maximises macro F1 (0.827) and dominates the $k=10$
-cells on density (0.400 vs 0.244--0.250). The BFS sweep ranged over
-depth $\in \{1, 2\}$; depth 1 leads with size 4 and macro F1 0.864, while
-depth 2 expands to size $\approx 10$ and drops macro F1 to 0.851 and
-density to 0.196.
+Evaluation has three perspectives that share per-query records. The first
+is correctness on enumerable random graphs against brute force
+(Section~\ref{sec:bf}). The second is intrinsic cluster quality and
+solver cost on the full Cora-ML val+test pool
+(Sections~\ref{sec:dataset}--\ref{sec:cost}). The third is downstream
+node classification, tuned on val and evaluated on test plus a hard
+test subset where the one-hop baseline already fails
+(Sections~\ref{sec:classify-protocol}--\ref{sec:hard}). Cluster quality
+is the headline perspective; classification is a downstream readout of
+the retrieved geometry.
 
 \subsection{Brute-Force Optimality on Small Random Graphs}
 \label{sec:bf}
 
-Before reporting cluster quality and classification on the citation
-graphs, the branch-and-price solver is checked against a brute-force
-oracle on synthetic graphs small enough to enumerate every subset
-containing the query. The fixture is Erd\H{o}s--R\'enyi $G(n,p)$ at
-$n = 20$, $p \in \{0.25,\,0.50,\,0.75\}$, with seeds $0..4$ per
-$p$, giving 15 graphs. The query node $q$ is the highest-degree
-vertex of each graph.
+Before reporting on the citation graph, the branch-and-price solver is
+checked against a brute-force oracle on synthetic graphs small enough to
+enumerate every subset containing the query. The fixture is
+Erd\H{o}s--R\'enyi $G(n, p)$ at $n = 20$, $p \in \{0.25, 0.50, 0.75\}$,
+with seeds $0..4$ per $p$, giving $15$ graphs. The query node $q$ is the
+highest-degree vertex of each graph.
 
-Brute force enumerates every $S \ni q$, $|S| \ge k$, with
-$k \in \{3,4,5\}$. For each $k$, the maximum-density $S$ is recorded
-at every requested edge-connectivity threshold $\kappa \in \{0,1,2\}$,
-along with the realised $\lambda(S)$. Cells with no feasible $S$ at
-the requested $\kappa$ get a sentinel and are skipped at the solver
-stage so the run stays finite. The C++ solver runs across the same
-$(k, \kappa)$ grid per graph with no time, node, gap, or Dinkelbach
-limit. A run is counted as a primary match when its objective lies
-within $10^{-9}$ of the brute-force optimum.
+Brute force enumerates every $S \ni q$ with $|S| \ge k$ for
+$k \in \{3, 4, 5\}$. For each $k$ it records the maximum-density $S$ at
+every connectivity threshold $\kappa \in \{0, 1, 2\}$. Cells with no
+feasible $S$ at the requested $\kappa$ are marked infeasible and skipped
+at the solver stage so the run stays finite. The C++ solver runs across
+the same $(k, \kappa)$ grid per graph with no time, node, gap, or
+Dinkelbach limit. A run is counted as a primary match when its objective
+lies within $10^{-9}$ of the brute-force optimum. \texttt{optima.csv} and
+\texttt{solver\_runs.csv} carry a \texttt{code\_hash} of the brute-force
+source and a \texttt{solver\_build\_id} baked into the binary at
+\texttt{cmake} time, so a stale brute force or stale solver binary is
+caught at aggregation.
 
-The result is summarised in Table~\ref{tab:bf-summary}. AvgDeg
-matches the unconstrained avg-degree optimum on every graph at every
-$p$. BP matches the edge-density optimum on every feasible
-$(k, \kappa, p)$ cell. Two cells at $k = 3$, $\kappa \in \{1, 2\}$,
-$p = 0.5$ contain one seed where no $S$ reaches the requested
-$\kappa$; that seed is surfaced as \texttt{infeasible\_kappa} rather
-than counted as a non-match, leaving the other four seeds at $5/5$
-match. Every \texttt{optima.csv} row carries a \texttt{code\_hash}
-(sha256 of the brute-force script source) and every
-\texttt{solver\_runs.csv} row carries the matching
-\texttt{solver\_build\_id} (git short SHA and build timestamp baked
-into the binary at \texttt{cmake} time), so a stale brute force or
-a stale solver binary is caught at the aggregation stage.
+The result on the full $\{3, 4, 5\} \times \{0, 1, 2\}$ grid: AvgDeg
+matches the unconstrained avg-degree optimum on $15/15$ graphs. BP
+returns $S$ satisfying $|S| \ge k$ and rooted $\kappa$-edge-connectivity
+on every feasible $(k, \kappa, p, \text{seed})$ cell, and matches the
+brute-force edge density on every feasible cell. Zero solver errors
+across the grid.
+
+\subsection{Dataset and Split}
+\label{sec:dataset}
+
+The lead dataset is Cora-ML from PyTorch Geometric's \texttt{CitationFull}
+collection with directed edges preserved: $2{,}995$ nodes, $8{,}416$
+directed edges, $7$ paper labels. The query pool restricts to pure-source
+papers (papers that cite others but are not themselves cited in the
+exported graph) with out-degree at least $2$. With random seed $42$, the
+pool splits evenly into $402$ val queries and $402$ test queries. The
+remaining $2{,}191$ nodes form the train pool, which supplies labels for
+the prediction rule and is never queried by any method. A narrower
+\emph{hard subset} contains the $59$ test queries where the depth-$1$ BFS
+majority vote disagrees with the true label; the subset is hash-pinned in
+\texttt{split\_meta.json} so the same nodes are evaluated across runs.
+CiteSeer, DBLP, and Cora follow the same protocol and are processed in
+ascending node-count order.
+
+All Cora-ML runs use \texttt{max\_in\_edges = 0}: every method expands
+through outgoing citation edges only, matching the inductive split where
+test papers cite older training papers. Enabling incoming edges would
+change the retrieval problem and the label-propagation neighbourhood.
+
+\subsection{Methods Compared}
+\label{sec:methods}
+
+Three solver variants are compared, in order of complexity:
+\begin{itemize}[leftmargin=1.1cm]
+  \item BFS at depth $1$ (Section~\ref{sec:bfs});
+  \item AvgDeg, the exact average-degree baseline of
+  Section~\ref{sec:avgdeg};
+  \item BP, the branch-and-price solver, at $\kappa \in \{0, 1, 2\}$.
+\end{itemize}
+All three sweep $k \in \{3, 4, 5\}$. BFS and AvgDeg outputs are grown to
+$|S| \ge k$ where feasible by the post-processing of
+Section~\ref{sec:grow-to-k}, so the three methods return comparable
+cardinality at each $k$. BP runs with soft time cap $60$ s and hard time
+cap $300$ s; no explicit node, gap, or Dinkelbach limit.
+
+\subsection{Cluster Quality on val + test}
+\label{sec:cluster}
+
+Cluster quality is the headline perspective.
+Table~\ref{tab:cluster-quality} reports mean $\pm$ standard deviation
+over the $804$ val+test queries on a single seed. Five intrinsic
+statistics per query: subgraph size $|S|$, algebraic connectivity
+$\lambda_2$ of the normalised Laplacian of the induced undirected
+subgraph, normalised internal min-cut (ncut), average degree
+$2|E(S)|/|S|$, and directed edge density $|E(S)| / (|S|(|S|-1))$.
+$\lambda_2$ is computed on the dense Laplacian.
 
 \begin{table}[t]
 \centering
-\caption{Brute-force optimality on $n = 20$ random graphs, seeds
-$0..4$. \emph{n\_feasible} is the count of seeds whose brute-force
-optimum reaches the requested $\kappa$; the match rate is over
-feasible seeds only. Cells not shown are equivalent to the
-corresponding $\kappa = 0$ row in this fixture.}
-\label{tab:bf-summary}
-\begin{tabular}{llrrrr}
+\footnotesize
+\caption{Cluster quality on the Cora-ML val + test pool ($n = 804$
+queries), mean $\pm$ std, single seed. \underline{Section best} (max
+per column within each $k$, $|S|$ excluded); \textbf{overall best}
+(max across $k$).}
+\label{tab:cluster-quality}
+\begin{tabular}{lccccc}
 \toprule
-Method & ($k$, $\kappa$) & $p = 0.25$ & $p = 0.50$ & $p = 0.75$ \\
+Method & $|S|$ & $\lambda_2$ & ncut & avg.~deg & density \\
 \midrule
-AvgDeg            & (-, -) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (3, 0) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (3, 1) & $5/5$       & $4/4$ (1 skip) & $5/5$    \\
-BP                & (3, 2) & $5/5$       & $4/4$ (1 skip) & $5/5$    \\
-BP                & (4, 0) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (4, 1) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (4, 2) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (5, 0) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (5, 1) & $5/5$       & $5/5$       & $5/5$       \\
-BP                & (5, 2) & $5/5$       & $5/5$       & $5/5$       \\
+\multicolumn{6}{l}{\textit{$k = 3$}} \\
+BFS $d{=}1$       & $4.87 \pm 2.75$    & $0.96 \pm 0.30$ & $1.23 \pm 0.15$ & $1.17 \pm 0.50$ & $0.35 \pm 0.11$ \\
+AvgDeg            & $21.20 \pm 15.20$  & $0.32 \pm 0.38$ & $0.70 \pm 0.53$ & \underline{\textbf{$3.02 \pm 1.55$}} & $0.21 \pm 0.12$ \\
+BP $\kappa{=}0$   & $3.34 \pm 0.71$    & $1.23 \pm 0.34$ & $1.36 \pm 0.26$ & $1.20 \pm 0.42$ & \underline{\textbf{$0.51 \pm 0.10$}} \\
+BP $\kappa{=}1$   & $3.32 \pm 0.67$    & $1.25 \pm 0.28$ & $1.39 \pm 0.13$ & $1.19 \pm 0.41$ & \underline{$0.51 \pm 0.10$} \\
+BP $\kappa{=}2$   & $3.28 \pm 0.72$    & \underline{\textbf{$1.27 \pm 0.27$}} & \underline{\textbf{$1.41 \pm 0.11$}} & $1.10 \pm 0.44$ & $0.48 \pm 0.12$ \\
+\midrule
+\multicolumn{6}{l}{\textit{$k = 4$}} \\
+BFS $d{=}1$       & $5.20 \pm 2.56$    & $0.78 \pm 0.25$ & $1.17 \pm 0.09$ & $1.22 \pm 0.47$ & $0.32 \pm 0.10$ \\
+AvgDeg            & $21.21 \pm 15.18$  & $0.31 \pm 0.35$ & $0.69 \pm 0.53$ & \underline{$3.02 \pm 1.55$} & $0.21 \pm 0.11$ \\
+BP $\kappa{=}0$   & $4.35 \pm 0.78$    & $0.75 \pm 0.48$ & $0.94 \pm 0.53$ & $1.59 \pm 0.48$ & \underline{$0.47 \pm 0.09$} \\
+BP $\kappa{=}1$   & $4.23 \pm 0.76$    & $0.92 \pm 0.28$ & $1.21 \pm 0.10$ & $1.47 \pm 0.42$ & $0.46 \pm 0.09$ \\
+BP $\kappa{=}2$   & $4.19 \pm 0.72$    & \underline{$0.94 \pm 0.28$} & \underline{$1.24 \pm 0.08$} & $1.34 \pm 0.46$ & $0.42 \pm 0.12$ \\
+\midrule
+\multicolumn{6}{l}{\textit{$k = 5$}} \\
+BFS $d{=}1$       & $5.72 \pm 2.36$    & $0.66 \pm 0.24$ & $1.13 \pm 0.08$ & $1.29 \pm 0.46$ & $0.29 \pm 0.09$ \\
+AvgDeg            & $21.25 \pm 15.14$  & $0.30 \pm 0.34$ & $0.69 \pm 0.52$ & \underline{$3.02 \pm 1.55$} & $0.20 \pm 0.11$ \\
+BP $\kappa{=}0$   & $5.03 \pm 0.72$    & $0.50 \pm 0.44$ & $0.74 \pm 0.57$ & $1.76 \pm 0.51$ & \underline{$0.43 \pm 0.09$} \\
+BP $\kappa{=}1$   & $5.14 \pm 1.03$    & \underline{$0.73 \pm 0.27$} & $1.14 \pm 0.08$ & $1.67 \pm 0.47$ & $0.41 \pm 0.09$ \\
+BP $\kappa{=}2$   & $5.16 \pm 1.13$    & $0.72 \pm 0.28$ & \underline{$1.16 \pm 0.08$} & $1.52 \pm 0.54$ & $0.37 \pm 0.11$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Structural Quality on the Full Test Split}
+At every $k$, BP $\kappa = 0$ takes the highest pair density and BP
+$\kappa = 2$ takes the highest $\lambda_2$ and ncut, so BP wins internal
+geometry across the grid. AvgDeg returns much larger sets
+($|S| \approx 21$ regardless of $k$) with the highest average degree
+($3.02$) by construction, but the spread across many more nodes drops
+per-pair edge density to $0.20$--$0.21$. BFS depth-$1$ output size grows
+from $4.9$ at $k = 3$ to $5.7$ at $k = 5$ with edge density between
+$0.29$ and $0.35$, dominated on every internal axis.
 
-Cluster quality leads the test-split report. Table~\ref{tab:test-quality}
-gives the medians on 393 eligible test nodes.
+\subsection{Cost on val + test}
+\label{sec:cost}
+
+Table~\ref{tab:cost} reports per-query wall time, oracle queries,
+branch-and-bound nodes, LP solves, separated cuts, and LP time on the
+same $804$ queries.
 
 \begin{table}[t]
 \centering
-\caption{Cluster-quality medians on the eligible Cora-ML test split.}
-\label{tab:test-quality}
-\begin{tabular}{lrrrrrr}
+\footnotesize
+\caption{Solver cost on the Cora-ML val + test pool ($n = 804$),
+mean $\pm$ std. BP soft cap $60$ s, hard cap $300$ s.}
+\label{tab:cost}
+\begin{tabular}{lcccccc}
 \toprule
-Method & Size & $\lambda_2$ & Density & NCut & Mixing & Conduct. \\
+Method & wall (s) & queries & BB nodes & LP solves & cuts & $t_{\text{LP}}$ (s) \\
 \midrule
-AvgDeg              & 15.0 & 0.181 & 0.144 & 1.007 & 0.677 & 0.677 \\
-BFS depth 1         & 4.0  & 1.000 & 0.333 & 1.200 & 0.840 & 0.840 \\
-BP $k=5,\kappa=2$   & 5.0  & 0.726 & 0.350 & 1.143 & 0.855 & 0.855 \\
+\multicolumn{7}{l}{\textit{$k = 3$}} \\
+BFS $d{=}1$       & $0.03 \pm 0.01$  & $5 \pm 3$     & --                & --                  & --                  & --              \\
+AvgDeg            & $0.08 \pm 0.05$  & $202 \pm 210$ & --                & --                  & --                  & --              \\
+BP $\kappa{=}0$   & $1.54 \pm 15.19$ & $179 \pm 201$ & $121 \pm 837$     & $131 \pm 861$       & $87 \pm 315$        & $0.93 \pm 11.50$ \\
+BP $\kappa{=}1$   & $1.47 \pm 13.71$ & $179 \pm 201$ & $121 \pm 772$     & $132 \pm 796$       & $90 \pm 308$        & $0.87 \pm 10.4$ \\
+BP $\kappa{=}2$   & $10.3 \pm 53.1$  & $180 \pm 202$ & $81 \pm 429$      & $1106 \pm 5876$     & $1106 \pm 5868$     & $6.26 \pm 36.3$ \\
+\midrule
+\multicolumn{7}{l}{\textit{$k = 4$}} \\
+BFS $d{=}1$       & $0.03 \pm 0.01$  & $5 \pm 3$     & --                & --                  & --                  & --              \\
+AvgDeg            & $0.08 \pm 0.05$  & $202 \pm 210$ & --                & --                  & --                  & --              \\
+BP $\kappa{=}0$   & $9.85 \pm 38.12$ & $200 \pm 210$ & $833 \pm 2025$    & $881 \pm 2079$      & $492 \pm 677$       & $9.21 \pm 36.31$ \\
+BP $\kappa{=}1$   & $28.2 \pm 79.7$  & $200 \pm 210$ & $1549 \pm 3593$   & $1618 \pm 3696$     & $756 \pm 1348$      & $26.9 \pm 76.8$ \\
+BP $\kappa{=}2$   & $47.9 \pm 103.3$ & $200 \pm 210$ & $1363 \pm 3061$   & $3794 \pm 9691$     & $3300 \pm 9483$     & $44.1 \pm 95.6$ \\
+\midrule
+\multicolumn{7}{l}{\textit{$k = 5$}} \\
+BFS $d{=}1$       & $0.04 \pm 0.01$  & $6 \pm 2$     & --                & --                  & --                  & --              \\
+AvgDeg            & $0.08 \pm 0.05$  & $202 \pm 210$ & --                & --                  & --                  & --              \\
+BP $\kappa{=}0$   & $66.7 \pm 110.0$ & $202 \pm 210$ & $2967 \pm 4275$   & $3079 \pm 4392$     & $1291 \pm 1477$     & $63.2 \pm 105.6$ \\
+BP $\kappa{=}1$   & $92.4 \pm 130.6$ & $202 \pm 210$ & $3799 \pm 5311$   & $3961 \pm 5485$     & $1992 \pm 2825$     & $88.4 \pm 126.3$ \\
+BP $\kappa{=}2$   & $96.0 \pm 131.8$ & $202 \pm 210$ & $3197 \pm 4493$   & $4409 \pm 7318$     & $3326 \pm 6744$     & $90.8 \pm 126.7$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-BP returns the densest community at a size close to BFS and the highest
-mixing parameter, indicating tighter internal connectivity relative to the
-boundary. BFS returns the most algebraically connected community
-($\lambda_2 = 1$ matches the small clique-like neighbourhoods around a
-test paper). AvgDeg explores far further and its $\lambda_2$ drops to 0.181.
+BFS is sub-second ($0.03$--$0.04$ s) with at most $6$ oracle queries.
+AvgDeg costs $0.08$ s and $\approx 200$ queries; the query budget
+reflects the full BFS-bounded local subgraph used by Goldberg's flow
+construction. BP cost is heterogeneous: medians stay small but the mean
+grows with $k$ and $\kappa$, from $1.5$ s at $k = 3, \kappa = 0$ to
+$96$ s at $k = 5, \kappa = 2$. Standard deviations on wall time are
+dominated by the tail of $\kappa = 2$ runs hitting the $300$ s hard cap.
+$\kappa = 2$ also drives BQP separation up an order of magnitude
+(cuts $\approx 1100$--$3300$ per query), and LP time tracks total wall
+time closely.
 
-\subsection{Full Test Split}
+\subsection{Classification Protocol}
+\label{sec:classify-protocol}
 
-Table~\ref{tab:test-classification} reports the test classification
-metrics with bootstrap 95\% CIs from paired resampling shared across
-methods within each seed.
+For each val or test query $q$, the chosen method returns a community
+$S \ni q$. The classifier predicts $q$'s label by uniform majority vote
+over the training-labelled members of $S$, with ties broken by ascending
+label value for reproducibility. The query itself and any val or test
+node inside $S$ are excluded from the vote. If $S$ contains no
+training-labelled member, the pipeline falls back to a concentric BFS
+from $q$ that forbids val and test nodes as stepping stones until it
+reaches a training node; if no training label is reachable, it returns
+the global training-majority label. At the tuned hyperparameters, the
+fallback fires on a negligible fraction of queries.
+
+The retrieval set is therefore evaluated as a neighbourhood for label
+propagation, not as input to a trained model. Differences in
+classification metrics come from the selected community geometry, not
+from learned features or model capacity.
+
+\subsection{Tuning on val}
+\label{sec:tune-val}
+
+Table~\ref{tab:tune-val} reports macro precision, recall, and F1 on the
+$402$ val queries across the $(k, \kappa)$ grid. The per-family val-best
+setting is BFS depth-$1$ at $k = 4$, AvgDeg at $k = 4$, and BP at
+$k = 4, \kappa = 2$. BFS depth-$1$ at $k = 4$ tops the table overall at
+$F1 = 0.838 \pm 0.020$.
 
 \begin{table}[t]
 \centering
-\caption{Classification on the eligible Cora-ML test split. Means over
-five Gurobi seeds (42--46) with bootstrap 95\% CI from $B=500$ resamples.}
+\footnotesize
+\caption{Tuning on the Cora-ML val split ($n = 402$). Mean $\pm$
+bootstrap std. \underline{Section best} (max per column within $k$);
+\textbf{overall best} (max across $k$).}
+\label{tab:tune-val}
+\begin{tabular}{llll}
+\toprule
+Method                     & P     & R     & F1 \\
+\midrule
+\multicolumn{4}{l}{\textit{$k = 3$}} \\
+BFS $d = 1$                & \underline{$0.836 \pm 0.019$} & \underline{$0.832 \pm 0.020$} & \underline{$0.826 \pm 0.021$} \\
+AvgDeg                     & $0.714 \pm 0.026$ & $0.540 \pm 0.024$ & $0.558 \pm 0.026$ \\
+BP $\kappa = 0$            & $0.797 \pm 0.021$ & $0.787 \pm 0.022$ & $0.782 \pm 0.022$ \\
+BP $\kappa = 1$            & $0.799 \pm 0.020$ & $0.790 \pm 0.021$ & $0.785 \pm 0.021$ \\
+BP $\kappa = 2$            & $0.801 \pm 0.020$ & $0.794 \pm 0.021$ & $0.785 \pm 0.022$ \\
+\midrule
+\multicolumn{4}{l}{\textit{$k = 4$}} \\
+BFS $d = 1$                & \underline{\textbf{$0.844 \pm 0.019$}} & \underline{\textbf{$0.843 \pm 0.019$}} & \underline{\textbf{$0.838 \pm 0.020$}} \\
+AvgDeg                     & $0.717 \pm 0.026$ & $0.544 \pm 0.024$ & $0.563 \pm 0.025$ \\
+BP $\kappa = 0$            & $0.762 \pm 0.021$ & $0.683 \pm 0.025$ & $0.694 \pm 0.025$ \\
+BP $\kappa = 1$            & $0.808 \pm 0.020$ & $0.789 \pm 0.021$ & $0.789 \pm 0.022$ \\
+BP $\kappa = 2$            & $0.827 \pm 0.020$ & $0.810 \pm 0.021$ & $0.811 \pm 0.021$ \\
+\midrule
+\multicolumn{4}{l}{\textit{$k = 5$}} \\
+BFS $d = 1$                & \underline{$0.814 \pm 0.021$} & \underline{$0.816 \pm 0.021$} & \underline{$0.810 \pm 0.021$} \\
+AvgDeg                     & $0.717 \pm 0.026$ & $0.544 \pm 0.024$ & $0.563 \pm 0.025$ \\
+BP $\kappa = 0$            & $0.725 \pm 0.023$ & $0.616 \pm 0.026$ & $0.628 \pm 0.026$ \\
+BP $\kappa = 1$            & $0.772 \pm 0.024$ & $0.744 \pm 0.023$ & $0.741 \pm 0.024$ \\
+BP $\kappa = 2$            & $0.795 \pm 0.022$ & $0.784 \pm 0.021$ & $0.780 \pm 0.022$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The temporal split favours BFS: pure-source test papers cite same-class
+training papers, so a one-hop majority vote already retrieves the
+homophilous signal. Within BP, $\kappa = 2$ dominates lower $\kappa$ at
+every $k$ on the classification metric, even though density at
+$\kappa = 2$ is below density at $\kappa = 0$. Connectivity therefore
+helps the downstream vote without helping pair density.
+
+\subsection{Test Classification}
+\label{sec:test}
+
+Table~\ref{tab:test-classification} applies the per-family val-best
+setting to the $402$ Cora-ML test queries.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Test classification on Cora-ML ($n = 402$). Per-family val-best
+parameters carried over from Table~\ref{tab:tune-val}. Mean $\pm$
+bootstrap std. \textbf{Bold} = max per column.}
 \label{tab:test-classification}
-\begin{tabular}{lrrr}
+\begin{tabular}{lllll}
 \toprule
-Method & Precision & Recall & F1 \\
+Method & val-best params      & P     & R     & F1 \\
 \midrule
-AvgDeg              & 0.709 [0.687, 0.731] & 0.523 [0.501, 0.546] & 0.537 [0.514, 0.562] \\
-BFS depth 1         & 0.825 [0.809, 0.842] & 0.813 [0.795, 0.832] & 0.810 [0.793, 0.829] \\
-BP $k=5,\kappa=2$   & 0.749 [0.729, 0.767] & 0.740 [0.720, 0.759] & 0.737 [0.718, 0.756] \\
+BFS    & $d = 1, k = 4$       & \textbf{$0.871 \pm 0.016$} & \textbf{$0.853 \pm 0.020$} & \textbf{$0.856 \pm 0.019$} \\
+AvgDeg & $k = 4$              & $0.772 \pm 0.022$ & $0.579 \pm 0.024$ & $0.603 \pm 0.024$ \\
+BP     & $k = 4, \kappa = 2$  & $0.818 \pm 0.021$ & $0.815 \pm 0.021$ & $0.811 \pm 0.021$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-BFS depth 1 dominates macro F1. The split rewards direct citation
-homophily: test nodes are pure source papers, and their direct citation
-targets are train nodes. BP closes most of the F1 gap (0.737) while
-returning the densest and best-mixed subgraph in
-Table~\ref{tab:test-quality}.
+The val ranking carries over to test: BFS $0.856$, BP $0.811$, AvgDeg
+$0.603$. AvgDeg's gap reflects its much larger communities diluting the
+majority vote, not absent label information. BP closes most of the F1
+gap to BFS while returning the densest compact community in
+Table~\ref{tab:cluster-quality}.
 
-\subsection{Hard Validation Subset Where One-Hop BFS Fails}
+\subsection{BFS-Hard Test Subset}
+\label{sec:hard}
 
-The hard subset contains the 52 eligible val nodes for which the BFS
-depth-1 vote disagrees with the true label. It is hash-pinned in
-\texttt{split\_meta.json}, so the same nodes are evaluated across runs.
-Cluster quality leads.
-
-\begin{table}[t]
-\centering
-\caption{Cluster-quality medians on the BFS-hard Cora-ML validation subset.}
-\label{tab:hard-quality}
-\begin{tabular}{lrrrrrr}
-\toprule
-Method & Size & $\lambda_2$ & Density & NCut & Mixing & Conduct. \\
-\midrule
-AvgDeg              & 33.0 & 0.045 & 0.142 & 0.585 & 0.677 & 0.677 \\
-BFS depth 1         & 3.0  & 1.000 & 0.333 & 1.333 & 0.893 & 0.893 \\
-BP $k=5,\kappa=2$   & 5.0  & 0.691 & 0.300 & 1.143 & 0.889 & 0.889 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The cluster-quality picture matches the full-test pattern: BFS produces
-the most algebraically connected subgraph, BP the densest and best-mixed,
-AvgDeg the largest with a near-zero $\lambda_2$. Classification ranks
-reorder.
+The hard subset contains the $59$ test queries where the depth-$1$ BFS
+majority vote already disagrees with the true label.
+Table~\ref{tab:hard-classification} applies the same per-family val-best
+settings to this subset.
 
 \begin{table}[t]
 \centering
-\caption{Classification on the BFS-hard Cora-ML validation subset. Means
-over five seeds (42--46) with bootstrap 95\% CI ($B=500$).}
+\footnotesize
+\caption{Classification on the BFS-hard Cora-ML test subset ($n = 59$).
+Mean $\pm$ bootstrap std. \textbf{Bold} = max per column.}
 \label{tab:hard-classification}
-\begin{tabular}{lrrr}
+\begin{tabular}{lllll}
 \toprule
-Method & Precision & Recall & F1 \\
+Method & val-best params      & P     & R     & F1 \\
 \midrule
-AvgDeg              & 0.227 [0.205, 0.249] & 0.315 [0.305, 0.326] & 0.196 [0.179, 0.211] \\
-BFS depth 1         & 0.000                & 0.000                & 0.000 \\
-BP $k=5,\kappa=2$   & 0.239 [0.193, 0.291] & 0.203 [0.136, 0.285] & 0.169 [0.126, 0.212] \\
+BFS    & $d = 1, k = 4$       & $0.183 \pm 0.061$ & $0.097 \pm 0.049$ & $0.080 \pm 0.042$ \\
+AvgDeg & $k = 4$              & \textbf{$0.269 \pm 0.084$} & $0.251 \pm 0.079$ & $0.146 \pm 0.056$ \\
+BP     & $k = 4, \kappa = 2$  & $0.174 \pm 0.053$ & \textbf{$0.282 \pm 0.090$} & \textbf{$0.190 \pm 0.056$} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-BFS is zero on this subset by construction. Both AvgDeg and BP move off
-the BFS-zero baseline: AvgDeg leads on recall (0.315) and F1 (0.196), BP
-leads on precision (0.239). Absolute F1 remains under 0.2; the subset is
-the difficult tail where the cheapest baseline already fails.
+BFS scores near zero by construction: the subset is defined by depth-$1$
+votes that are already wrong, and the grow-to-$k$ pass adds only
+neighbours of those same wrong nodes. AvgDeg leads precision at $0.269$
+on the back of much larger communities. BP leads recall ($0.282$) and F1
+($0.190$) with the $k = 4, \kappa = 2$ community. Absolute F1 remains
+below $0.2$ across the board: the subset is the difficult tail where the
+cheapest baseline already fails.
 
 \section{Conclusion}
 
 \subsection{Discussion}
 
-\paragraph{Cluster quality is the headline.}
-Across the full test split and the BFS-hard subset, branch-and-price returns
-the densest community of the three methods, with a mixing parameter that
-exceeds BFS by a small but consistent margin. The geometry is the
-contribution. Classification numbers serve as a downstream check on whether
-that geometry transfers to a label vote.
+\paragraph{BP wins internal geometry at every $k$.}
+On the $804$-query val + test pool, BP at $\kappa = 0$ returns the
+densest community and BP at $\kappa = 2$ returns the highest $\lambda_2$
+and ncut at every $k \in \{3, 4, 5\}$. The cluster-quality ranking is
+stable across the grid: BP leads on pair density and algebraic
+connectivity, BFS sits in the middle, AvgDeg trails on per-pair density.
+The dense, compact, query-anchored community is the contribution;
+classification metrics are a downstream readout of that geometry.
 
-\paragraph{BFS depth 1 is the homophily ceiling for this split.}
-Cora-ML test nodes are pure source papers; their outgoing citations land on
-training papers of the same class. A one-hop majority vote retrieves
-labelled evidence at the minimum oracle cost. Any retrieval method that
-deviates from that one-hop frontier therefore competes against a baseline
-that already matches the homophily structure of the split.
+\paragraph{AvgDeg trades pair density for size.}
+AvgDeg optimises average degree rather than pair density, and the two
+objectives are not monotone in each other. The solver returns
+$|S| \approx 21$ with average degree $3.02$ regardless of $k$, the
+largest and best-connected set by average degree in the comparison. The
+spread drops per-pair edge density to $0.20$--$0.21$ and the large set
+dilutes the majority vote at classification time.
+
+\paragraph{BFS depth-$1$ is the homophily ceiling for the easy split.}
+Cora-ML test queries are pure-source papers whose direct citations land
+on training papers. A one-hop majority vote matches that homophily
+structure at the minimum oracle cost. Any retrieval method that deviates
+from the one-hop frontier competes against a baseline already aligned
+with the split.
 
 \paragraph{The hard subset reorders the classifiers.}
-By construction, BFS depth 1 has macro F1 zero on the 52 BFS-hard val
-nodes. AvgDeg and BP both move off zero. The cluster-quality picture is
-unchanged: BFS still has the highest $\lambda_2$, BP returns the densest
-subgraph, AvgDeg the largest. The implication is that classification rank
-on the easy regime is a homophily artefact, while cluster-quality rank is
-stable across regimes.
+On the $59$ test queries where the depth-$1$ vote is wrong by
+construction, BFS scores $F1 = 0.080$, AvgDeg $0.146$, and BP $0.190$.
+BP narrowly leads on the regime where the cheapest baseline already
+fails. The cluster-quality ranking does not flip on the hard subset, so
+the classification reorder is a regime-specific readout, not a geometry
+change.
 
 \paragraph{The role of $\kappa$.}
-The selected Cora-ML BP setting uses $k=5$ and $\kappa=2$. Increasing $k$
-to 10 lowers macro F1 and density on val; tightening $\kappa$ without
-matching $k$ tends to fragment the community and is not monotonically
-helpful. $\kappa$ is therefore a tuning parameter, not a universally
-beneficial constraint.
+The classification-best BP setting uses $k = 4, \kappa = 2$. Within BP,
+$\kappa = 2$ dominates $\kappa \in \{0, 1\}$ on F1 at every $k$, even
+though density at $\kappa = 2$ is slightly below density at $\kappa = 0$.
+$\kappa$ is a tuning parameter that trades pair density for structural
+coherence; it is not universally beneficial.
 
-\paragraph{Cost matters.}
-BFS depth 1 issues one oracle query per node. BP averages about 11
-queries per node, an order of magnitude more, in exchange for a 1.2x
-directed-density premium and a $\kappa$-feasible community. AvgDeg
-averages about 200 queries per node, two orders of magnitude more. The
-live OpenAlex telemetry exposes that cost-quality tradeoff at interactive
-latency.
+\paragraph{Cost grows steeply with $k$ and $\kappa$.}
+BFS is sub-second. AvgDeg costs $0.08$ s and $\approx 200$ queries. BP
+mean wall time grows from $1.5$ s at $k = 3, \kappa = 0$ to $96$ s at
+$k = 5, \kappa = 2$ under the $300$ s hard cap; $\kappa = 2$ also drives
+BQP separation up an order of magnitude. The live OpenAlex telemetry
+exposes that cost-quality tradeoff at interactive latency.
 
 \subsection{Limitations and Future Work}
 
-Reported numbers are Cora-ML only at this draft. The pipeline has been
-exercised end-to-end on Cora-ML and the same protocol applies to CiteSeer,
-DBLP, and Cora; per-dataset runs and writeups are processed in ascending
-node-count order. The temporal split makes one-hop BFS unusually strong:
-test papers cite training papers directly, so the easy regime is wide.
-The hard subset is hash-pinned but defined on validation; a held-out
-test-hard subset is not constructed in this draft.
+Reported numbers are Cora-ML only at this draft. The same pipeline runs
+on CiteSeer, DBLP, and Cora; per-dataset writeups are produced in
+ascending node-count order. The temporal split makes one-hop BFS
+unusually strong: test queries are pure-source papers whose direct
+citations sit in the train set, so the easy regime is wide. The hard
+subset is a conditional diagnostic on test queries where the depth-$1$
+BFS majority vote is wrong, so the BFS solver scores near zero on it by
+construction.
 
-The solver depends on Gurobi. The OpenAlex live mode inherits OpenAlex's
-coverage and entity-disambiguation limits. Methodologically, the lazy
-expansion procedure optimises over the discovered frontier; a fully
-formal global optimality claim requires assumptions about oracle
-completeness, so the implementation is best viewed as a practical exact
-method over an adaptively discovered graph region.
+The solver depends on Gurobi. The OpenAlex live mode inherits OpenAlex
+coverage and entity-disambiguation limits. The lazy expansion procedure
+optimises over the discovered graph region; a formal global optimality
+claim requires assumptions about oracle completeness, so the
+implementation is best viewed as a practical exact method over an
+adaptively discovered region. Solver limits (time, branch-and-bound
+nodes, Dinkelbach and column-generation iterations) return possibly
+suboptimal incumbents on the tail of the run distribution.
 
 Future work:
 \begin{enumerate}[leftmargin=1.2cm]
   \item complete the CiteSeer, DBLP, and Cora runs and update the
   per-dataset tables;
-  \item ablate $\kappa$, triangle cuts, branching rule, pruning, and
-  column-generation batch size against the brute-force optima;
-  \item latency-aware OpenAlex experiments separating algorithmic time
-  from network wait time;
-  \item hybrid objectives that combine density with label purity or
-  semantic similarity;
+  \item tighter LP relaxation and inverse-out-degree edge weights to
+  attenuate hub effects;
+  \item warm-start with a densest-subgraph incumbent to reduce
+  Dinkelbach iterations;
+  \item incorporate semantic information (abstract embeddings, author or
+  venue affinity) into the objective;
   \item user studies for interactive paper discovery where compactness
   and interpretability matter more than classification accuracy.
 \end{enumerate}
 
 \subsection{Summary}
 
-This paper presents a query-anchored densest community search system
-for directed citation graphs. The method uses Dinkelbach fractional
+This paper presents a query-anchored densest community search system for
+directed citation graphs. The method uses Dinkelbach fractional
 programming, lazy branch-and-price, frontier pricing, branch-and-bound,
-triangle cuts, incumbent pruning, and optional rooted connectivity cuts.
-On Cora-ML, branch-and-price returns the densest and best-mixed compact
-community, and the cluster-quality ranking is stable on the BFS-hard
-subset. BFS depth 1 wins macro F1 on the full test split because of
-direct citation homophily, while BP closes most of the gap with a
-$\kappa$-feasible community and far fewer oracle queries than the exact
-average-degree baseline.
+Boolean quadratic polytope triangle cuts, incumbent pruning, and optional
+rooted $\kappa$-edge-connectivity cuts. On the Cora-ML val + test pool,
+BP returns the densest and most algebraically connected compact community
+at every $k \in \{3, 4, 5\}$. BFS depth-$1$ wins macro F1 on the
+$402$-query test split because of direct citation homophily; BP runs
+second ($0.811$ versus $0.856$). On the $59$-node BFS-hard test subset,
+BP leads macro F1 ($0.190$) ahead of AvgDeg ($0.146$) and BFS ($0.080$).
+BP is therefore a dense-community retriever; classification F1 is a
+downstream readout of the retrieved geometry.
 
 \subsection*{Reproducibility}
 
-The reported artifacts are generated by the repository scripts. The environment
-used for Python verification is the \texttt{dcs} conda environment.
+The reported artifacts are generated by the repository scripts. The
+environment used for Python verification is the \texttt{dcs} conda
+environment. The grid is $k \in \{3, 4, 5\}$ and, for BP,
+$\kappa \in \{0, 1, 2\}$; BP runs with soft cap $60$ s, hard cap
+$300$ s, and no node, gap, or Dinkelbach limit.
 
 \begin{verbatim}
 ./solver/build.sh
+conda run -n dcs python scripts/classification/cluster_quality.py \
+  --dataset Cora_ML --splits val test
 conda run -n dcs python scripts/classification/tune_methods.py \
-  --dataset Cora_ML --family all --optimize f1 --weighting distance \
-  --bp_time_limit -1 --bp_cg_batch_frac 1.0 --bp_cg_min_batch 50 \
-  --bp_cg_max_batch 50 --bp_node_limit -1 --bp_gap_tol 0.0 \
-  --bp_dinkelbach_iter -1
+  --dataset Cora_ML --family all --optimize f1 \
+  --k_grid 3 4 5 --kappa_grid 0 1 2 \
+  --bp_time_limit 60 --bp_hard_time_limit 300 \
+  --bp_cg_batch_frac 1.0 --bp_cg_min_batch 50 --bp_cg_max_batch 50 \
+  --bp_node_limit -1 --bp_gap_tol 0.0 --bp_dinkelbach_iter -1
 conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
   --dataset Cora_ML --split test \
-  --settings_json exps/classification/Cora_ML/tmp_tune/best_settings_all.json \
-  --output_name test_best_batch_exact
+  --settings_json exps/classification/Cora_ML/tune/best_settings_all.json
 conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
-  --dataset Cora_ML --split val --subset bfs_depth1_wrong \
-  --settings_json exps/classification/Cora_ML/tmp_tune/best_settings_all.json \
-  --output_name val_hard_best_batch_exact
-conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
-  --dataset Cora_ML --split val --subset bfs_depth1_wrong \
-  --bp_k 6 --bp_kappa 3 --bp_time_limit -1 \
-  --bp_cg_batch_frac 1.0 --bp_cg_min_batch 50 --bp_cg_max_batch 50 \
-  --bp_node_limit -1 --bp_gap_tol 0.0 --bp_dinkelbach_iter -1 \
-  --output_name val_hard_bp_k6_kappa3_batch_exact
+  --dataset Cora_ML --split test --subset bfs_depth1_wrong \
+  --settings_json exps/classification/Cora_ML/tune/best_settings_all.json
 conda run -n dcs python -m unittest scripts.classification.test_solver_utils -v
 \end{verbatim}
 
-The exact result files used in this draft are:
-{\small
-\begin{itemize}[leftmargin=1.1cm]
-  \item \path{exps/classification/Cora_ML/tmp_tune/tuning_results_all.csv}
-  \item \path{exps/classification/Cora_ML/tmp_tune/best_settings_all.json}
-  \item \path{exps/classification/Cora_ML/test_best_batch_exact/fixed_methods.csv}
-  \item \path{exps/classification/Cora_ML/val_hard_best_batch_exact/fixed_methods.csv}
-  \item \path{exps/classification/Cora_ML/val_hard_best_batch_exact/subset_nodes.csv}
-  \item \path{exps/classification/Cora_ML/val_hard_bp_k6_kappa3_batch_exact/fixed_methods.csv}
-\end{itemize}
-}
-
 \begin{thebibliography}{10}
+\sloppy
 
 \bibitem{goldberg1984}
 A.~V. Goldberg.
@@ -984,7 +1068,7 @@ M. Fey and J.~E. Lenssen.
 \bibitem{pygcitationfull}
 PyTorch Geometric documentation.
 \newblock \texttt{torch\_geometric.datasets.CitationFull}.
-\newblock \url{https://pytorch-geometric.readthedocs.io/en/stable/generated/torch_geometric.datasets.CitationFull.html}.
+\newblock \url{https://pytorch-geometric.readthedocs.io}.
 
 \bibitem{bojchevski2017}
 A. Bojchevski and S. Guennemann.
