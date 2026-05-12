@@ -11,6 +11,7 @@ using namespace std;
 vector<int> BFSSolver::solve(int query_node, int depth, int k)
 {
     unordered_set<int> visited;
+    unordered_set<int> error_nodes;
     unordered_map<int, unordered_set<int>> adj;
     visited.insert(query_node);
     adj[query_node];
@@ -18,12 +19,18 @@ vector<int> BFSSolver::solve(int query_node, int depth, int k)
     queue<pair<int, int>> q;
     q.push({query_node, 0});
 
+    // Expand while either the depth cap is unmet or the pool is still below k.
+    // Past the depth cap, expansion continues from already-enqueued frontier
+    // nodes only (no further descendants are pushed), so depth keeps its
+    // "minimum layers" meaning while k enforces a minimum pool size.
     while (!q.empty())
     {
         auto [u, d] = q.front();
         q.pop();
 
-        if (depth >= 0 && d >= depth)
+        bool depth_cap_reached = (depth >= 0 && d >= depth);
+        bool pool_target_met = (k <= 0) || ((int)visited.size() >= k);
+        if (depth_cap_reached && pool_target_met)
             continue;
 
         std::pair<std::vector<int>, std::vector<int>> edges;
@@ -33,9 +40,14 @@ vector<int> BFSSolver::solve(int query_node, int depth, int k)
         }
         catch (const std::exception &e)
         {
-            std::cerr << "[" << get_timestamp() << "] BFS baseline failed on query "
-                      << query_node << ": " << e.what() << std::endl;
-            return {};
+            // Skip this node, keep expanding the rest of the frontier. A single
+            // 404 or rate-limit on one neighbour shouldn't void the whole BFS.
+            if (error_nodes.insert(u).second)
+            {
+                std::cerr << "[" << get_timestamp() << "] BFS oracle query failed for "
+                          << u << " (seed " << query_node << "): " << e.what() << std::endl;
+            }
+            continue;
         }
 
         auto record_neighbor = [&](int v)
