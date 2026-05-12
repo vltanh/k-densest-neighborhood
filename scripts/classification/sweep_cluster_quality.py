@@ -46,12 +46,12 @@ def _parse_float_list(raw: str):
     return [float(x) for x in raw.split(",") if x.strip()]
 
 
-def _avgdeg_grid():
-    return [{}]
+def _avgdeg_grid(k_values):
+    return [{"k": k} for k in k_values]
 
 
-def _bfs_grid(depths):
-    return [{"bfs_depth": d} for d in depths]
+def _bfs_grid(depths, k_values):
+    return [{"bfs_depth": d, "k": k, "bfs_use_k": True} for d in depths for k in k_values]
 
 
 def _bp_grid(k_values, kappa_values, time_limits, dinkelbach_iters):
@@ -73,6 +73,10 @@ def _bp_grid(k_values, kappa_values, time_limits, dinkelbach_iters):
 
 def _k_for(method, params):
     if method == "bp":
+        return int(params["k"])
+    if method == "avgdeg":
+        return int(params["k"])
+    if method == "bfs" and params.get("bfs_use_k", True) and "k" in params:
         return int(params["k"])
     return None
 
@@ -206,8 +210,11 @@ def main():
     manifest_rows = []
     for fam in families:
         grid_fn = {
-            "avgdeg": lambda: _avgdeg_grid(),
-            "bfs": lambda: _bfs_grid(_parse_int_list(args.bfs_depth)),
+            "avgdeg": lambda: _avgdeg_grid(_parse_int_list(args.bp_k)),
+            "bfs": lambda: _bfs_grid(
+                _parse_int_list(args.bfs_depth),
+                _parse_int_list(args.bp_k),
+            ),
             "bp": lambda: _bp_grid(
                 _parse_int_list(args.bp_k),
                 _parse_int_list(args.bp_kappa),
