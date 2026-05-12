@@ -382,16 +382,17 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
           <div className="text-center max-w-lg px-8">
             <div className="eyebrow text-[var(--ink-dim)]">An invitation</div>
             <h3 className="type-hero mt-3 text-[var(--ink)]">
-              Enter a seed,<br />
-              <span className="text-[var(--accent)] italic font-normal">read its block.</span>
-            </h3>
-            <p className="text-[length:var(--text-base)] max-[900px]:text-[length:var(--text-sm)] text-[var(--ink-soft)] mt-5 leading-relaxed">
               <span className="max-[900px]:hidden">
-                Type a paper ID into the sidebar, choose a solver, then press <span className="font-mono text-[var(--ink)]">Extract</span> (or <span className="font-mono text-[var(--ink)]">⌘↵</span>).
+                Enter a seed paper ID in the sidebar,<br />
+                <span className="text-[var(--accent)] italic font-normal">then press Extract.</span>
               </span>
               <span className="hidden max-[900px]:inline">
-                Open <span className="font-mono text-[var(--ink)]">Config</span>, set a seed, then press Run.
+                Open <span className="text-[var(--accent)] italic font-normal">Config</span>,<br />
+                set a seed, then Run.
               </span>
+            </h3>
+            <p className="text-[length:var(--text-base)] max-[900px]:text-[length:var(--text-sm)] text-[var(--ink-soft)] mt-5 leading-relaxed max-[900px]:hidden">
+              Choose a solver in the sidebar, then press <span className="font-mono text-[var(--ink)]">Extract</span> (or <span className="font-mono text-[var(--ink)]">⌘↵</span>).
             </p>
             <p className="type-sub text-[var(--ink-dim)] mt-4 italic">
               the explorer will find the densest community around your seed and typeset it below.

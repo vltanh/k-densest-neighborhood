@@ -260,13 +260,13 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
             <div className="eyebrow text-[var(--ink-dim)]">Colophon</div>
             <p className="text-[length:var(--text-base)] text-[var(--ink)] leading-snug mt-4">
               {isSim
-                ? 'No run yet. Choose a dataset and a query node in the sidebar, then press Extract.'
-                : 'No run yet. Enter a seed paper ID in the sidebar, then press Extract.'}
+                ? 'Choose a dataset and a query node in the sidebar, then press Extract.'
+                : 'Enter a seed paper ID in the sidebar, then press Extract.'}
             </p>
             <p className="text-[length:var(--text-lg)] text-[var(--ink-dim)] leading-relaxed mt-3 italic">
               {isSim
-                ? 'the densest block will be typeset here — colored by class label.'
-                : 'the papers of the densest block will be typeset here — numbered, sorted, and ready to read.'}
+                ? 'the densest block will be typeset here, colored by class label.'
+                : 'the papers of the densest block will be typeset here, numbered, sorted, and ready to read.'}
             </p>
           </div>
         </div>
