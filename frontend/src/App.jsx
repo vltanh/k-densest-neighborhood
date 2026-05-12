@@ -15,6 +15,7 @@ const SHARED_DEFAULTS = {
   k: 5,
   kappa: 0,
   bfsDepth: 1,
+  bfsUseK: true,
   timeLimit: -1,
   nodeLimit: -1,
   maxInEdges: 0,
@@ -241,38 +242,37 @@ function MobileShell({
     <div className="h-[100dvh] w-full flex flex-col overflow-hidden relative texture-paper">
       {modal}
 
-      {/* ═══ TOP BAR ══════════════════════════════════════════════════════ */}
+      {/* ═══ TOP BAR — stacked: title row + action row ════════════════════ */}
       <header
         className="shrink-0 border-b border-[var(--rule-paper-2)] bg-[var(--paper)]/95 backdrop-blur relative z-20"
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
       >
-        <div className="px-4 pt-3 pb-2.5 flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="eyebrow text-[var(--ink-dim)] flex items-center gap-1.5 flex-wrap">
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                status === 'running' ? 'bg-[var(--accent)] pulse-dot' :
-                status === 'error' ? 'bg-[var(--danger)]' :
-                status === 'converged' ? 'bg-[#94C466]' :
-                'bg-[var(--ink-faint)]'
-              }`} />
-              <span>{statusLabel}</span>
-              {coreCount > 0 && (
-                <>
-                  <span className="rule-dot" />
-                  <span className="font-mono tnum normal-case tracking-normal">{coreCount} core</span>
-                </>
-              )}
-            </div>
-            <h1 className="font-display text-[length:var(--text-lg)] leading-tight lowercase text-[var(--ink)] truncate">
-              k-densest explorer
-            </h1>
-          </div>
-
+        {/* Title row — status dot + label + masthead. Free of action chrome. */}
+        <div className="px-4 pt-2.5 pb-1 flex items-center gap-2 min-w-0">
+          <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
+            status === 'running' ? 'bg-[var(--accent)] pulse-dot' :
+            status === 'error' ? 'bg-[var(--danger)]' :
+            status === 'converged' ? 'bg-[#94C466]' :
+            'bg-[var(--ink-faint)]'
+          }`} />
+          <span className="eyebrow text-[var(--ink-dim)] shrink-0">{statusLabel}</span>
+          <span className="rule-dot text-[var(--ink-faint)] shrink-0" />
+          <h1 className="font-display text-[length:var(--text-lg)] leading-tight lowercase text-[var(--ink)] truncate min-w-0">
+            k-densest explorer
+          </h1>
+        </div>
+        {/* Action row — core count on the left, primary action on the right. */}
+        <div className="px-4 pb-2.5 flex items-center justify-between gap-3">
+          <span className="eyebrow text-[var(--ink-faint)] font-mono tnum normal-case tracking-normal">
+            {coreCount > 0
+              ? <>{coreCount} core <span className="text-[var(--ink-dim)]">·</span> {graphData?.nodes?.length ?? 0} total</>
+              : <span className="italic">no run</span>}
+          </span>
           {!loading ? (
             <button
               type="button"
               onClick={onExtract}
-              className="shrink-0 inline-flex items-center gap-2 bg-[var(--accent)] text-[var(--paper)] px-4 py-2.5 font-semibold text-[length:var(--text-sm)] tracking-[0.14em] uppercase border border-[var(--accent)] shadow-[2px_2px_0_0_var(--night-3)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform"
+              className="shrink-0 inline-flex items-center gap-2 bg-[var(--accent)] text-[var(--paper)] px-4 py-2 font-semibold text-[length:var(--text-sm)] tracking-[0.14em] uppercase border border-[var(--accent)] shadow-[2px_2px_0_0_var(--night-3)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform"
               title="Extract"
             >
               <Play size={12} fill="currentColor" />
@@ -282,7 +282,7 @@ function MobileShell({
             <button
               type="button"
               onClick={onStop}
-              className="shrink-0 inline-flex items-center gap-2 bg-[var(--night)] text-[var(--danger)] px-4 py-2.5 border border-[var(--danger)] transition-colors active:bg-[var(--danger)] active:text-[var(--paper)]"
+              className="shrink-0 inline-flex items-center gap-2 bg-[var(--night)] text-[var(--danger)] px-4 py-2 border border-[var(--danger)] transition-colors active:bg-[var(--danger)] active:text-[var(--paper)]"
               title="Stop"
             >
               <Square size={12} fill="currentColor" />
@@ -290,7 +290,7 @@ function MobileShell({
             </button>
           )}
         </div>
-        {loading && <div className="h-[3px] marquee-bar" />}
+        {loading && <div className="h-[4px] marquee-bar" />}
       </header>
 
       {/* ═══ TAB PANES — all mounted, toggled via display ═════════════════ */}

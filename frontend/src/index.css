@@ -373,20 +373,25 @@ input[type="range"].slider-obs::-moz-range-thumb {
   animation: marquee-bar 900ms linear infinite;
 }
 
-/* Divider handles — static grip always visible, glows on hover */
+/* Divider handles — 1px hairline by default, the centered thumb grows and the
+   surrounding hit area gets a faint accent wash on hover so the affordance
+   reads at a glance. ::before is the hit zone (12px overall), ::after is the
+   visible grip. A boxed two-stroke grip glyph adds tactile cue. */
 .divider-v {
   position: relative;
   width: 1px;
   background: var(--rule-paper-2);
   cursor: col-resize;
   flex-shrink: 0;
-  transition: background 160ms ease;
+  transition: background 160ms ease, width 160ms ease;
 }
 .divider-v::before {
   content: "";
   position: absolute;
-  left: -6px; right: -6px;
+  left: -8px; right: -8px;
   top: 0; bottom: 0;
+  background: transparent;
+  transition: background 160ms ease;
 }
 .divider-v::after {
   content: "";
@@ -398,10 +403,18 @@ input[type="range"].slider-obs::-moz-range-thumb {
   background: var(--ink);
   opacity: 0.55;
   border-radius: 2px;
-  transition: opacity 160ms ease, background 160ms ease, height 160ms ease;
+  /* Two-stroke grip glyph: two vertical lines centered on the thumb. */
+  background-image:
+    linear-gradient(to right, currentColor 1px, transparent 1px, transparent 2px, currentColor 2px);
+  background-size: 3px 100%;
+  background-repeat: no-repeat;
+  color: var(--paper);
+  transition: opacity 160ms ease, background 160ms ease, height 160ms ease, width 160ms ease;
 }
-.divider-v:hover { background: var(--accent); }
-.divider-v:hover::after { background: var(--accent); opacity: 1; height: 64px; }
+.divider-v:hover { background: var(--accent); width: 2px; }
+.divider-v:hover::before { background: rgba(217, 119, 87, 0.10); }
+.divider-v:hover::after { background-color: var(--accent); opacity: 1; height: 72px; width: 5px; }
+.divider-v:active::after { height: 96px; }
 
 .divider-h {
   position: relative;
@@ -409,13 +422,15 @@ input[type="range"].slider-obs::-moz-range-thumb {
   background: var(--rule-paper-2);
   cursor: row-resize;
   flex-shrink: 0;
-  transition: background 160ms ease;
+  transition: background 160ms ease, height 160ms ease;
 }
 .divider-h::before {
   content: "";
   position: absolute;
-  top: -6px; bottom: -6px;
+  top: -8px; bottom: -8px;
   left: 0; right: 0;
+  background: transparent;
+  transition: background 160ms ease;
 }
 .divider-h::after {
   content: "";
@@ -427,10 +442,17 @@ input[type="range"].slider-obs::-moz-range-thumb {
   background: var(--ink);
   opacity: 0.55;
   border-radius: 2px;
-  transition: opacity 160ms ease, background 160ms ease, width 160ms ease;
+  background-image:
+    linear-gradient(to bottom, currentColor 1px, transparent 1px, transparent 2px, currentColor 2px);
+  background-size: 100% 3px;
+  background-repeat: no-repeat;
+  color: var(--paper);
+  transition: opacity 160ms ease, background 160ms ease, width 160ms ease, height 160ms ease;
 }
-.divider-h:hover { background: var(--accent); }
-.divider-h:hover::after { background: var(--accent); opacity: 1; width: 64px; }
+.divider-h:hover { background: var(--accent); height: 2px; }
+.divider-h:hover::before { background: rgba(217, 119, 87, 0.10); }
+.divider-h:hover::after { background-color: var(--accent); opacity: 1; width: 72px; height: 5px; }
+.divider-h:active::after { width: 96px; }
 
 /* Ticker decoration */
 .ticker-rule {
