@@ -15,12 +15,13 @@ FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, 
                                                    double tol, int bb_node_limit, double bb_time_limit,
                                                    double bb_gap_tol, int dinkelbach_max_iter,
                                                    double cg_batch_fraction, int cg_min_batch, int cg_max_batch,
-                                                   int kappa, double bb_hard_time_limit)
+                                                   int kappa, double bb_hard_time_limit,
+                                                   bool skip_materialize)
     : oracle(oracle), q(q), k(k), env(env), tol(tol), bb_node_limit(bb_node_limit),
       bb_time_limit(bb_time_limit), bb_hard_time_limit(bb_hard_time_limit),
       bb_gap_tol(bb_gap_tol), dinkelbach_max_iter(dinkelbach_max_iter),
       cg_batch_fraction(cg_batch_fraction), cg_min_batch(cg_min_batch), cg_max_batch(cg_max_batch),
-      kappa(std::max(0, kappa)), rmp(nullptr)
+      kappa(std::max(0, kappa)), skip_materialize(skip_materialize), rmp(nullptr)
 {
     _initialize_active_set();
     _init_global_model();
@@ -525,7 +526,7 @@ void FullBranchAndPriceSolver::_materialize_adjacency(int f)
     }
     catch (const std::exception &e)
     {
-        std::cerr << "[" << get_timestamp() << "] Blacklisting frontier node " << oracle.mapper.get_str(f) << " during materialisation: " << e.what() << "\n";
+        std::cerr << "[" << get_timestamp() << "] Blacklisting node " << oracle.mapper.get_str(f) << " during materialisation: " << e.what() << "\n";
         error_nodes.insert(f);
         F.erase(f);
     }
@@ -544,8 +545,6 @@ int FullBranchAndPriceSolver::_materialize_unqueried_frontier()
     int materialised = 0;
     for (int f : to_query)
     {
-        if (queried_nodes.count(f) || error_nodes.count(f))
-            continue;
         _materialize_adjacency(f);
         if (queried_nodes.count(f))
             ++materialised;
@@ -1137,24 +1136,6 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
             return {std::move(local_x_bar), local_lp_obj};
         }
 
-        // Materialise the adjacency of every frontier node we have not yet
-        // queried. Pricing must score columns against the true subgraph
-        // induced by V_active ∪ F; without this an edge among two F members
-        // is invisible (neither endpoint has been queried), and the joint
-        // pricer cannot detect a frontier clique that completes a k-set.
-        // Snapshot F first so a fetch that discovers new neighbours (joining
-        // F) does not grow the round; new F entries get their turn the next
-        // time we loop here.
-        {
-            std::vector<int> to_query;
-            to_query.reserve(F.size());
-            for (int f : F)
-                if (!queried_nodes.count(f) && !error_nodes.count(f))
-                    to_query.push_back(f);
-            for (int f : to_query)
-                _materialize_adjacency(f);
-        }
-
         t0 = chrono::high_resolution_clock::now();
         _sync_rmp_structure(lambda_val);
         t1 = chrono::high_resolution_clock::now();
@@ -1202,6 +1183,12 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
                 _expand_node(f);
             continue;
         }
+
+        // Frontier-internal edges are invisible to solo pricing. Materialise
+        // lazily so the next round sees true degrees; returns 0 once F is fully
+        // queried.
+        if (!skip_materialize && _materialize_unqueried_frontier() > 0)
+            continue;
 
         // Individual reduced-cost pricing returned no improving column. Before
         // declaring LP-optimality, run one structural pass that scores frontier

@@ -43,7 +43,8 @@ void print_usage(const char *prog_name)
          << "  --k <int>                 Target subgraph size (REQUIRED for --bp; optional for --avgdeg and --bfs; triggers at-least-k grow heuristic; BP requires k >= 2, AvgDeg/BFS accept k >= 1)\n"
          << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
          << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n"
-         << "  --gurobi-seed <int>       Gurobi Seed parameter (default: -1; unset)\n\n"
+         << "  --gurobi-seed <int>       Gurobi Seed parameter (default: -1; unset)\n"
+        << "  --no-materialize          Disable lazy materialisation of unqueried frontier adjacencies (BP only; trades possibly weaker pricing for zero extra oracle hits per CG iter)\n\n"
          << "Solver Variants:\n"
          << "  --bp                      Run BP; uses --k and --kappa\n"
          << "  --avgdeg                  Run exact query-anchored avgdeg with at-least-k growth; uses --k\n"
@@ -112,6 +113,8 @@ int main(int argc, char *argv[])
     bool k_provided = false;
     bool kappa_provided = false;
     bool bfs_depth_provided = false;
+    bool skip_materialize = false;
+    bool skip_materialize_provided = false;
 
     // ---------------------------------------------------------
     // 2. Command Line Argument Parsing
@@ -161,6 +164,13 @@ int main(int argc, char *argv[])
             if (arg == "--bfs")
             {
                 run_bfs = true;
+                continue;
+            }
+
+            if (arg == "--no-materialize")
+            {
+                skip_materialize = true;
+                skip_materialize_provided = true;
                 continue;
             }
 
@@ -292,6 +302,11 @@ int main(int argc, char *argv[])
         cerr << "Error: --bfs-depth is only valid for --bfs.\n";
         return 1;
     }
+    if (!run_bp && solver_count != 0 && skip_materialize_provided)
+    {
+        cerr << "Error: --no-materialize is only valid for --bp.\n";
+        return 1;
+    }
 
     // ---------------------------------------------------------
     // 4. Engine Execution
@@ -391,7 +406,7 @@ int main(int argc, char *argv[])
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
                                             dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
-                                            kappa, hard_time_limit);
+                                            kappa, hard_time_limit, skip_materialize);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
@@ -448,7 +463,7 @@ int main(int argc, char *argv[])
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
                                             dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
-                                            kappa, hard_time_limit);
+                                            kappa, hard_time_limit, skip_materialize);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());

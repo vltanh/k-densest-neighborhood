@@ -1,4 +1,5 @@
 #include "subgraph_quality.hpp"
+#include <iostream>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -52,8 +53,9 @@ SubgraphQualities compute_subgraph_qualities(const std::vector<int> &nodes, IGra
                 }
             }
         }
-        catch (...)
+        catch (const std::exception &e)
         {
+            std::cerr << "[subgraph_quality] oracle.query(" << u << ") failed: " << e.what() << "\n";
         }
     }
 

@@ -72,8 +72,9 @@ vector<int> BFSSolver::solve(int query_node, int depth, int k)
     if (k <= 0)
         return pool;
 
-    unordered_set<int> S;
-    S.insert(query_node);
+    // S seeded with full BFS pool; grow_to_k only fires if the component was
+    // exhausted before |pool| reached k.
+    unordered_set<int> S(pool.begin(), pool.end());
     grow_to_k(S, pool, adj, k);
     return vector<int>(S.begin(), S.end());
 }
