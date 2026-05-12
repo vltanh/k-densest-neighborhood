@@ -46,7 +46,7 @@ function OracleDropdown({ value, onChange, disabled }) {
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="appearance-none bg-transparent border border-[var(--rule-night)] hover:border-[var(--gold)] text-[var(--on-night)] text-[11px] uppercase tracking-[0.16em] pl-3 pr-7 py-1.5 font-mono cursor-pointer focus:outline-none focus:border-[var(--gold)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="appearance-none bg-transparent border border-[var(--rule-night)] hover:border-[var(--gold)] text-[var(--on-night)] text-[length:var(--text-xs)] uppercase tracking-[0.16em] pl-3 pr-7 py-1.5 font-mono cursor-pointer focus:outline-none focus:border-[var(--gold)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         title="Switch oracle backend"
       >
         {ORACLE_MODES.map(m => (
@@ -89,13 +89,13 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
       {!hideHeader && (
       <header className="px-7 pt-8 pb-6 shrink-0 relative">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="font-display text-[26px] leading-tight text-[var(--on-night)] lowercase">
+          <h1 className="font-display text-[length:var(--text-xl)] leading-tight text-[var(--on-night)] lowercase">
             k-densest subgraph explorer
           </h1>
           <OracleDropdown value={oracleMode} onChange={onOracleChange} disabled={loading} />
         </div>
         {isSim && (
-          <div className="mt-2 text-[11px] tracking-[0.14em] uppercase text-[var(--gold)] font-mono">
+          <div className="mt-2 text-[length:var(--text-xs)] tracking-[0.14em] uppercase text-[var(--gold)] font-mono">
             Simulation · annotated citation graphs
           </div>
         )}
@@ -136,7 +136,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                     ))}
                   </select>
                   {isSim && (
-                    <div className="mt-1.5 text-[11px] text-[var(--gold)] italic">
+                    <div className="mt-1.5 text-[length:var(--text-xs)] text-[var(--gold)] italic">
                       [S] = simulated · annotated citation graph
                     </div>
                   )}
@@ -164,7 +164,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 <div>
                   <label htmlFor="seed-input" className="field-label flex justify-between items-baseline">
                     <span>Query Node ID</span>
-                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-[var(--on-night-faint)]">
+                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[length:var(--text-xs)] text-[var(--on-night-faint)]">
                       press <kbd className="kbd-hint" style={{ background: 'var(--night-3)', color: 'var(--on-night-dim)', borderColor: 'var(--rule-night-2)' }}>/</kbd>
                     </span>
                   </label>
@@ -182,7 +182,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 <div>
                   <label htmlFor="seed-input" className="field-label flex justify-between items-baseline">
                     <span>Seed Paper ID</span>
-                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-[var(--on-night-faint)]">
+                    <span className="inline-flex items-center gap-1.5 normal-case tracking-normal text-[length:var(--text-xs)] text-[var(--on-night-faint)]">
                       press <kbd className="kbd-hint" style={{ background: 'var(--night-3)', color: 'var(--on-night-dim)', borderColor: 'var(--rule-night-2)' }}>/</kbd>
                     </span>
                   </label>
@@ -196,7 +196,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                     className="field-input"
                   />
                   {params.queryNode && !/^W\d+$/.test(params.queryNode) && (
-                    <div className="mt-1 text-[11px] text-[var(--ember)] italic">
+                    <div className="mt-1 text-[length:var(--text-xs)] text-[var(--danger)] italic">
                       expected OpenAlex work ID (e.g. W2741809807)
                     </div>
                   )}
@@ -220,7 +220,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                   <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--on-night-faint)]" />
                 </div>
                 {spec.blurb && (
-                  <div className="mt-1.5 text-[11px] leading-snug text-[var(--on-night-faint)] italic">
+                  <div className="mt-1.5 text-[length:var(--text-xs)] leading-snug text-[var(--on-night-faint)] italic">
                     {spec.blurb}
                   </div>
                 )}
@@ -238,7 +238,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                     <div>
                       <label className="field-label">κ · Edge-Connectivity</label>
                       <input type="number" min="0" step="1" value={params.kappa} onChange={set('kappa')} className="field-input" />
-                      <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">0 disables</div>
+                      <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">0 disables</div>
                     </div>
                   )}
                 </div>
@@ -248,7 +248,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 <div>
                   <label className="field-label">BFS Depth</label>
                   <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
-                  <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">hops out from the seed</div>
+                  <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">hops out from the seed</div>
                 </div>
               )}
             </div>
@@ -275,7 +275,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
               <div>
                 <label className="field-label">Max In-Edges</label>
                 <input type="number" min="0" step="500" value={params.maxInEdges ?? 0} onChange={set('maxInEdges')} className="field-input" />
-                <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
+                <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">incoming edges to fetch · 0 disables</div>
               </div>
 
               {usesBpInternals && (
@@ -286,17 +286,17 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                       <div>
                         <label className="field-label">Time Limit (s)</label>
                         <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
-                        <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
                       </div>
                       <div>
                         <label className="field-label">Node Limit</label>
                         <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
-                        <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
                       </div>
                       <div>
                         <label className="field-label">Gap Tol</label>
                         <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
-                        <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
                       </div>
                     </div>
                   )}
@@ -305,7 +305,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                     <div>
                       <label className="field-label">Dinkelbach Iter</label>
                       <input type="number" min="-1" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
-                      <div className="mt-1 text-[11px] text-[var(--on-night-faint)] italic">-1 disables</div>
+                      <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
                     </div>
                     <div>
                       <label className="field-label">Num Tol</label>
@@ -346,7 +346,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
             onClick={() => setFeedTab('log')}
             badge={
               logs.length > 0 && (
-                <span className="text-[10px] font-mono tnum text-[var(--on-night-faint)] normal-case tracking-normal">
+                <span className="text-[length:var(--text-xs)] font-mono tnum text-[var(--on-night-faint)] normal-case tracking-normal">
                   {logs.length}
                 </span>
               )

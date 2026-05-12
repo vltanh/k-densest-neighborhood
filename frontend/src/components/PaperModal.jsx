@@ -14,8 +14,8 @@ export default function PaperModal({ content, onClose }) {
         className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[0_12px_40px_-8px_rgba(11,26,46,0.35)] border border-[var(--ink)] fade-in"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header — single ember hairline on top marks modal identity without corner fleet */}
-        <div className="h-[3px] shrink-0 bg-[var(--ember)]" />
+        {/* Header — single accent hairline on top marks modal identity without corner fleet */}
+        <div className="h-[3px] shrink-0 bg-[var(--accent)]" />
         <div className="px-8 pt-7 pb-5 shrink-0 border-b border-[var(--rule-paper-2)] flex justify-between items-start">
           <div>
             <div className="eyebrow text-[var(--ink-dim)]">
@@ -30,7 +30,7 @@ export default function PaperModal({ content, onClose }) {
               {content.type === 'loading_bib' && 'Fetching from the registry…'}
               {content.type === 'error'       && 'Something went amiss'}
             </h3>
-            <p className="text-[11px] text-[var(--ink-faint)] mt-2 italic">press Esc to close</p>
+            <p className="text-[length:var(--text-xs)] text-[var(--ink-faint)] mt-2 italic">press Esc to close</p>
           </div>
           <button
             onClick={onClose}
@@ -47,7 +47,7 @@ export default function PaperModal({ content, onClose }) {
             <div className="space-y-8">
               <div>
                 <div className="eyebrow text-[var(--ink-dim)] mb-2">Title</div>
-                <p className="font-display text-[32px] leading-[1.1] text-[var(--ink)]">
+                <p className="font-display text-[length:var(--text-2xl)] leading-[1.1] text-[var(--ink)]">
                   {content.paper.title}
                 </p>
               </div>
@@ -55,16 +55,16 @@ export default function PaperModal({ content, onClose }) {
               <div className="grid grid-cols-2 gap-8 pt-5 border-t border-[var(--rule-paper)]">
                 <div>
                   <div className="eyebrow text-[var(--ink-dim)] mb-2">Authors</div>
-                  <p className="text-[16px] text-[var(--ink)] leading-snug">
+                  <p className="text-[length:var(--text-base)] text-[var(--ink)] leading-snug">
                     {content.paper.author}
                   </p>
                 </div>
                 <div>
                   <div className="eyebrow text-[var(--ink-dim)] mb-2">Venue</div>
-                  <p className="text-[16px] text-[var(--ink)] leading-snug italic">
+                  <p className="text-[length:var(--text-base)] text-[var(--ink)] leading-snug italic">
                     {content.paper.journal}
                   </p>
-                  <p className="font-mono tnum text-[13px] text-[var(--ink-dim)] mt-1">
+                  <p className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink-dim)] mt-1">
                     {content.paper.date || content.paper.year}
                   </p>
                 </div>
@@ -77,7 +77,7 @@ export default function PaperModal({ content, onClose }) {
                     {content.paper.concepts.map((concept, idx) => (
                       <span
                         key={idx}
-                        className="text-[15px] text-[var(--ink)] leading-none border-b border-[var(--gold)] pb-0.5"
+                        className="text-[length:var(--text-base)] text-[var(--ink)] leading-none border-b border-[var(--gold)] pb-0.5"
                       >
                         {concept}
                       </span>
@@ -89,7 +89,7 @@ export default function PaperModal({ content, onClose }) {
               <div className="pt-5 border-t border-[var(--rule-paper)]">
                 <div className="eyebrow text-[var(--ink-dim)] mb-3">Abstract</div>
                 <p
-                  className="text-[16px] leading-[1.7] text-[var(--ink-soft)]"
+                  className="text-[length:var(--text-base)] leading-[1.7] text-[var(--ink-soft)]"
                   style={{ textAlign: 'justify', hyphens: 'auto' }}
                 >
                   {content.paper.abstract || (
@@ -103,7 +103,7 @@ export default function PaperModal({ content, onClose }) {
           )}
 
           {content.type === 'bibtex' && (
-            <pre className="bg-[var(--night)] text-[var(--gold)] p-5 border border-[var(--night)] font-mono text-[13px] leading-[1.75] overflow-x-auto whitespace-pre-wrap">
+            <pre className="bg-[var(--night)] text-[var(--gold)] p-5 border border-[var(--night)] font-mono text-[length:var(--text-sm)] leading-[1.75] overflow-x-auto whitespace-pre-wrap">
               {content.content}
             </pre>
           )}
@@ -111,14 +111,14 @@ export default function PaperModal({ content, onClose }) {
           {content.type === 'loading_bib' && (
             <div className="flex flex-col items-center justify-center py-14 gap-4">
               <div className="animate-spin w-10 h-10 border-[3px] border-[var(--ink)] border-t-transparent rounded-full" />
-              <span className="text-[15px] text-[var(--ink-dim)] italic">
+              <span className="text-[length:var(--text-base)] text-[var(--ink-dim)] italic">
                 the wire is humming…
               </span>
             </div>
           )}
 
           {content.type === 'error' && (
-            <div className="text-[17px] text-[var(--vermillion)] leading-snug p-5 border-l-4 border-[var(--vermillion)] bg-[var(--paper-2)]">
+            <div className="text-[length:var(--text-base)] text-[var(--danger)] leading-snug p-5 border-l-4 border-[var(--danger)] bg-[var(--paper-2)]">
               {content.content}
             </div>
           )}
@@ -127,14 +127,14 @@ export default function PaperModal({ content, onClose }) {
         {/* Footer */}
         {content.type === 'abstract' && (
           <div className="px-8 py-5 border-t border-[var(--rule-paper-2)] bg-[var(--paper-2)] shrink-0 flex justify-between items-center">
-            <div className="font-mono tnum text-[13px] text-[var(--ink-dim)]">
+            <div className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink-dim)]">
               ID · {content.paper.id}
             </div>
             <a
               href={`https://openalex.org/${content.paper.id}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="eyebrow text-[var(--ink)] hover:text-[var(--vermillion)] transition-colors flex items-center gap-2 border-b border-[var(--ink)] hover:border-[var(--vermillion)] pb-0.5"
+              className="link-tap eyebrow text-[var(--ink)] hover:text-[var(--accent)] transition-colors flex items-center gap-2 border-b border-[var(--ink)] hover:border-[var(--accent)] pb-0.5"
             >
               Open in OpenAlex <ExternalLink size={13} />
             </a>

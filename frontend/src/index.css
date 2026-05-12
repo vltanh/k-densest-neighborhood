@@ -38,18 +38,41 @@
   --moss:         #3A6FA8;
   --lapis:        #1B3A66;
 
-  /* Hot accent — one true warm note for seed / CTA / danger */
+  /* Hot accent — warm CTA + seed highlight */
   --ember:        #D97757;
   --ember-2:      #B85C3F;
   --ember-dim:    rgba(217, 119, 87, 0.18);
 
-  /* Legacy aliases — keep name space stable for existing components */
-  --vermillion:   var(--ember);
-  --vermillion-2: var(--ember-2);
+  /* True danger — cool crimson, distinct from the warm CTA */
+  --danger:       #B8344A;
+  --danger-2:     #8E2237;
+  --danger-dim:   rgba(184, 52, 74, 0.18);
+
+  /* Semantic role aliases — components should reference these by intent.
+     --accent: interactive / CTA / focus.
+     --danger: error / erratum / retracted state.
+     --seed-stroke: ring around the seed node + seed numerals in the ledger. */
+  --accent:       var(--ember);
+  --accent-2:     var(--ember-2);
+  --seed-stroke:  var(--ember);
+
+  /* Legacy aliases — keep name space stable for existing components.
+     --vermillion stays in callsites that mean "error". */
+  --vermillion:   var(--danger);
+  --vermillion-2: var(--danger-2);
   --gold:         var(--ice);
   --gold-2:       var(--ice-2);
 
-  /* Type */
+  /* Type — 6-step scale (xs / sm / base / lg / xl / 2xl) plus a single
+     display step. Components snap to these; ad-hoc px sizes are off-spec. */
+  --text-xs:      11px;
+  --text-sm:      13px;
+  --text-base:    15px;
+  --text-lg:      18px;
+  --text-xl:      24px;
+  --text-2xl:     36px;
+  --text-display: 48px;
+
   --font-display: 'Fraunces', 'Times New Roman', serif;
   --font-italic:  'Instrument Serif', 'Georgia', serif;
   --font-sans:    'Inter Tight', system-ui, sans-serif;
@@ -63,7 +86,7 @@ html, body, #root {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--text-base);
   line-height: 1.5;
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
@@ -116,24 +139,24 @@ body { margin: 0; }
 
 .eyebrow {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
-/* Typographic hierarchy — hero / plate / sub */
-.type-hero  { font-family: var(--font-display); font-size: 48px; line-height: 0.95; letter-spacing: -0.025em; }
-.type-plate { font-family: var(--font-display); font-size: 28px; line-height: 1.0;  letter-spacing: -0.015em; }
-.type-sub   { font-family: var(--font-italic);  font-size: 16px; line-height: 1.35; font-style: italic; }
+/* Typographic hierarchy — hero / plate / sub, all snap to scale tokens. */
+.type-hero  { font-family: var(--font-display); font-size: var(--text-display); line-height: 0.95; letter-spacing: -0.025em; }
+.type-plate { font-family: var(--font-display); font-size: var(--text-xl);      line-height: 1.0;  letter-spacing: -0.015em; }
+.type-sub   { font-family: var(--font-italic);  font-size: var(--text-lg);      line-height: 1.35; font-style: italic; }
 
-/* Accessible focus ring — single convention across inputs/buttons */
+/* Accessible focus ring — single convention, routed through --accent. */
 .focus-ring:focus-visible {
-  outline: 2px solid var(--ember);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 *:focus-visible {
-  outline: 2px solid var(--ember);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -180,7 +203,7 @@ body { margin: 0; }
   border-bottom: 1px solid var(--rule-night-2);
   padding: 8px 0;
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: var(--text-base);
   font-variant-numeric: tabular-nums;
   outline: none;
   transition: border-color 180ms ease;
@@ -191,7 +214,7 @@ body { margin: 0; }
 .field-label {
   display: block;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--on-night-dim);
@@ -235,20 +258,20 @@ input[type="range"].slider-obs::-moz-range-thumb {
   gap: 10px;
   width: 100%;
   padding: 14px 18px;
-  background: var(--ember);
+  background: var(--accent);
   color: var(--paper);
   font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--text-sm);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  border: 1px solid var(--ember);
+  border: 1px solid var(--accent);
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 220ms ease, background 220ms ease;
   box-shadow: 3px 3px 0 0 var(--night-3);
 }
 .btn-press:hover {
-  background: var(--ember-2);
+  background: var(--accent-2);
   transform: translate(-1px, -1px);
   box-shadow: 4px 4px 0 0 var(--night-3);
 }
@@ -273,7 +296,7 @@ input[type="range"].slider-obs::-moz-range-thumb {
   background: rgba(0,0,0,0.25);
   border-radius: 3px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-xs);
   letter-spacing: 0;
   text-transform: none;
   font-weight: 500;
@@ -282,15 +305,15 @@ input[type="range"].slider-obs::-moz-range-thumb {
 .btn-stop {
   padding: 14px;
   background: var(--night);
-  color: var(--vermillion);
-  border: 1px solid var(--vermillion);
+  color: var(--danger);
+  border: 1px solid var(--danger);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: background 180ms ease, color 180ms ease;
 }
-.btn-stop:hover { background: var(--vermillion); color: var(--paper); }
+.btn-stop:hover { background: var(--danger); color: var(--paper); }
 
 /* Small chrome button on paper side (zoom, reset, download) */
 .btn-chrome {
@@ -343,7 +366,7 @@ input[type="range"].slider-obs::-moz-range-thumb {
 .marquee-bar {
   background-image: repeating-linear-gradient(
     -45deg,
-    var(--vermillion) 0 8px,
+    var(--accent) 0 8px,
     var(--night) 8px 16px
   );
   background-size: 28px 28px;
@@ -377,8 +400,8 @@ input[type="range"].slider-obs::-moz-range-thumb {
   border-radius: 2px;
   transition: opacity 160ms ease, background 160ms ease, height 160ms ease;
 }
-.divider-v:hover { background: var(--ember); }
-.divider-v:hover::after { background: var(--ember); opacity: 1; height: 64px; }
+.divider-v:hover { background: var(--accent); }
+.divider-v:hover::after { background: var(--accent); opacity: 1; height: 64px; }
 
 .divider-h {
   position: relative;
@@ -406,8 +429,8 @@ input[type="range"].slider-obs::-moz-range-thumb {
   border-radius: 2px;
   transition: opacity 160ms ease, background 160ms ease, width 160ms ease;
 }
-.divider-h:hover { background: var(--ember); }
-.divider-h:hover::after { background: var(--ember); opacity: 1; width: 64px; }
+.divider-h:hover { background: var(--accent); }
+.divider-h:hover::after { background: var(--accent); opacity: 1; width: 64px; }
 
 /* Ticker decoration */
 .ticker-rule {
@@ -420,7 +443,7 @@ input[type="range"].slider-obs::-moz-range-thumb {
   opacity: 0.4;
 }
 
-/* SVG graph-node default cursor */
+/* SVG graph-node default cursor — accent-warm halo on hover. */
 .graph-node { transition: filter 180ms ease; }
 .graph-node:hover { filter: drop-shadow(0 0 6px rgba(217, 119, 87, 0.55)); }
 
@@ -431,15 +454,16 @@ input[type="range"].slider-obs::-moz-range-thumb {
   .telemetry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
-/* Mobile-specific tuning — prevent iOS auto-zoom on input focus (≥16px rule) */
+/* Mobile-specific tuning — prevent iOS auto-zoom on input focus (≥16px rule).
+   Mobile hero shrinks one step (display → xl), plate compresses to lg. */
 @media (max-width: 900px) {
   .field-input   { font-size: 16px; padding: 10px 0; }
-  .field-label   { font-size: 11px; }
-  .eyebrow       { font-size: 10.5px; }
-  .type-hero     { font-size: 22px; line-height: 1.15; }
-  .type-plate    { font-size: 17px; }
+  .field-label   { font-size: var(--text-xs); }
+  .eyebrow       { font-size: var(--text-xs); }
+  .type-hero     { font-size: var(--text-xl); line-height: 1.15; }
+  .type-plate    { font-size: var(--text-lg); }
   .font-display  { letter-spacing: -0.01em; }
-  h1.font-display { font-size: 18px !important; }
+  h1.font-display { font-size: var(--text-lg) !important; }
   /* Tappable targets — 44px Apple HIG min */
   .btn-chrome    { width: 42px; height: 42px; }
   .btn-press     { padding: 14px 16px; }
@@ -459,7 +483,7 @@ html { -webkit-text-size-adjust: 100%; }
   border: 1px solid var(--rule-paper-2);
   border-bottom-width: 2px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--ink-soft);
   border-radius: 3px;
 }

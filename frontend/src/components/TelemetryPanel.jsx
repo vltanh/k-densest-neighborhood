@@ -11,7 +11,7 @@ const LINE_STYLES = {
   prune:     'text-[#E8B04E]',
   warn:      'text-[#E08A3C]',
   success:   'text-[#94C466] font-semibold',
-  error:     'text-[var(--vermillion)] font-semibold',
+  error:     'text-[var(--danger)] font-semibold',
   info:      'text-[#8FB070]',
 };
 
@@ -43,11 +43,11 @@ const fmtElapsed = (startedAt, finishedAt) => {
 // ── Stat cell — editorial, no boxes ───────────────────────────────────────────
 const Stat = ({ label, value, accent = false, big = false }) => (
   <div className="flex flex-col min-w-0 py-1">
-    <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--on-night-faint)] font-semibold">
+    <span className="text-[length:var(--text-xs)] uppercase tracking-[0.18em] text-[var(--on-night-faint)] font-semibold">
       {label}
     </span>
     <span
-      className={`font-mono tnum truncate mt-1 ${big ? 'text-[20px]' : 'text-[15px]'} ${
+      className={`font-mono tnum truncate mt-1 ${big ? 'text-[length:var(--text-lg)]' : 'text-[length:var(--text-base)]'} ${
         accent ? 'text-[var(--gold)]' : 'text-[var(--on-night)]'
       }`}
       title={value ?? ''}
@@ -62,7 +62,7 @@ const STATUS_STYLES = {
   running:   { label: 'On-Press',  cls: 'text-[var(--gold)]',             dot: 'bg-[var(--gold)] pulse-dot' },
   converged: { label: 'Filed',     cls: 'text-[#94C466]',                 dot: 'bg-[#94C466]' },
   stopped:   { label: 'Halted',    cls: 'text-[#E08A3C]',                 dot: 'bg-[#E08A3C]' },
-  error:     { label: 'Retracted', cls: 'text-[var(--vermillion)]',       dot: 'bg-[var(--vermillion)]' },
+  error:     { label: 'Retracted', cls: 'text-[var(--danger)]',           dot: 'bg-[var(--danger)]' },
 };
 
 export const StatusBadge = ({ status }) => {
@@ -140,7 +140,7 @@ export function DispatchView({ telemetry, loading }) {
 
       {/* Empty-state hint */}
       {!showFinalBlock && telemetry.iteration == null && telemetry.blacklisted.length === 0 && (
-        <div className="pt-6 text-[14px] text-[var(--on-night-faint)] italic leading-snug shrink-0">
+        <div className="pt-6 text-[length:var(--text-sm)] text-[var(--on-night-faint)] italic leading-snug shrink-0">
           No run in progress. Press <span className="text-[var(--gold)] not-italic">Extract Community</span> to
           begin — live metrics will appear here.
         </div>
@@ -151,7 +151,7 @@ export function DispatchView({ telemetry, loading }) {
         <div className="mt-4 flex flex-col flex-grow min-h-0">
           <div className="flex items-baseline justify-between mb-2 shrink-0">
             <span className="eyebrow text-[var(--on-night-faint)]">Blacklisted</span>
-            <span className="font-mono tnum text-[11px] text-[var(--on-night-faint)]">
+            <span className="font-mono tnum text-[length:var(--text-xs)] text-[var(--on-night-faint)]">
               {telemetry.blacklisted.length}
             </span>
           </div>
@@ -159,14 +159,14 @@ export function DispatchView({ telemetry, loading }) {
             {telemetry.blacklisted.map((b) => (
               <li
                 key={b.id}
-                className="flex items-start gap-2 text-[12px] leading-snug"
+                className="flex items-start gap-2 text-[length:var(--text-sm)] leading-snug"
                 title={b.reason}
               >
-                <span className="text-[var(--vermillion)] mt-[2px]">✕</span>
+                <span className="text-[var(--danger)] mt-[2px]">✕</span>
                 <div className="min-w-0 flex-grow">
                   <div className="font-mono tnum text-[var(--on-night)] truncate">{b.id}</div>
                   {(b.phase || b.reason) && (
-                    <div className="text-[11px] text-[var(--on-night-faint)] italic truncate">
+                    <div className="text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic truncate">
                       {b.phase && <span>{b.phase}</span>}
                       {b.phase && b.reason && <span> · </span>}
                       {b.reason}
@@ -215,7 +215,7 @@ export function LogView({ logs, loading }) {
         <button
           type="button"
           onClick={jumpToBottom}
-          className="absolute top-2 right-3 z-20 flex items-center gap-1 text-[11px] text-[var(--gold)] hover:text-[var(--on-night)] bg-[var(--night-2)]/90 backdrop-blur border border-[var(--rule-night)] px-2 py-1 transition-colors normal-case tracking-normal"
+          className="absolute top-2 right-3 z-20 flex items-center gap-1 text-[length:var(--text-xs)] text-[var(--gold)] hover:text-[var(--on-night)] bg-[var(--night-2)]/90 backdrop-blur border border-[var(--rule-night)] px-2 py-1 transition-colors normal-case tracking-normal"
           title="Resume auto-scroll"
         >
           <ChevronDown size={12} /> latest
@@ -224,10 +224,10 @@ export function LogView({ logs, loading }) {
       <div
         ref={containerRef}
         onScroll={onScroll}
-        className="p-3 overflow-y-auto custom-scrollbar font-mono text-[12px] leading-[1.65] flex-grow min-h-0 relative z-10"
+        className="p-3 overflow-y-auto custom-scrollbar font-mono text-[length:var(--text-sm)] leading-[1.65] flex-grow min-h-0 relative z-10"
       >
         {logs.length === 0 ? (
-          <div className="text-[var(--on-night-faint)] text-[14px] italic">
+          <div className="text-[var(--on-night-faint)] text-[length:var(--text-sm)] italic">
             Awaiting dispatch from the compositor…
           </div>
         ) : (

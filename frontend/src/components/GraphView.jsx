@@ -340,21 +340,21 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
             <div className="mt-2 bg-[var(--paper)]/95 backdrop-blur border border-[var(--rule-paper-2)] px-4 py-3 max-w-[640px] max-[900px]:max-w-[min(calc(100vw-2rem),240px)] fade-in">
               {!isSim ? (
                 <div className="flex items-center gap-5">
-                  <LegendDot color="#1B3A66" ring="var(--ember)" label="seed" />
+                  <LegendDot color="#1B3A66" ring="var(--seed-stroke)" label="seed" />
                   <LegendDot color="#1B3A66" ring="var(--ice)" label="core member" />
                   <LegendDot color="#AFC0D6" size={8} label="frontier" />
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 pb-2 border-b border-[var(--rule-paper)]">
-                    <span className="w-3 h-3 rounded-full border-2 border-[var(--ember)]" style={{ boxSizing: 'border-box' }} />
-                    <span className="text-[12px] font-mono tnum text-[var(--ink-soft)]">seed · ember ring</span>
+                    <span className="w-3 h-3 rounded-full border-2 border-[var(--seed-stroke)]" style={{ boxSizing: 'border-box' }} />
+                    <span className="text-[length:var(--text-sm)] font-mono tnum text-[var(--ink-soft)]">seed · ember ring</span>
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1.5 max-h-40 overflow-y-auto scrollbar-paper pr-2">
                     {presentClasses.map(({ label, count }) => (
                       <div key={label} className="flex items-center gap-1.5">
                         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: classColor(label, numClasses) }} />
-                        <span className="text-[11px] font-mono tnum text-[var(--ink-soft)]">c{label}·{count}</span>
+                        <span className="text-[length:var(--text-xs)] font-mono tnum text-[var(--ink-soft)]">c{label}·{count}</span>
                       </div>
                     ))}
                   </div>
@@ -366,9 +366,9 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
       )}
 
       {error && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[var(--paper)] text-[var(--ink)] px-7 py-6 border border-[var(--vermillion)] z-10 max-w-md shadow-[6px_6px_0_0_var(--vermillion)]">
-          <div className="eyebrow text-[var(--vermillion)] mb-2">Erratum</div>
-          <div className="text-[16px] leading-snug">{error}</div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[var(--paper)] text-[var(--ink)] px-7 py-6 border border-[var(--danger)] z-10 max-w-md shadow-[6px_6px_0_0_var(--danger)]">
+          <div className="eyebrow text-[var(--danger)] mb-2">Erratum</div>
+          <div className="text-[length:var(--text-base)] leading-snug">{error}</div>
         </div>
       )}
 
@@ -376,14 +376,20 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center max-w-lg px-8">
             <div className="eyebrow text-[var(--ink-dim)]">An invitation</div>
-            <h3 className="font-display text-[48px] max-[900px]:text-[26px] leading-[0.95] mt-3 text-[var(--ink)]">
-              Pick a paper.<br />
-              <span className="text-[var(--vermillion)] italic font-normal">Read its block.</span>
+            <h3 className="type-hero mt-3 text-[var(--ink)]">
+              Enter a seed,<br />
+              <span className="text-[var(--accent)] italic font-normal">read its block.</span>
             </h3>
-            <p className="text-[16px] max-[900px]:text-[13px] text-[var(--ink-soft)] mt-5 leading-relaxed">
-              <span className="max-[900px]:hidden">Configure your parameters to the left — the explorer will find the densest
-              community around your seed paper and typeset it below.</span>
-              <span className="hidden max-[900px]:inline">Tap the gear to configure, then Run.</span>
+            <p className="text-[length:var(--text-base)] max-[900px]:text-[length:var(--text-sm)] text-[var(--ink-soft)] mt-5 leading-relaxed">
+              <span className="max-[900px]:hidden">
+                Type a paper ID into the sidebar, choose a solver, then press <span className="font-mono text-[var(--ink)]">Extract</span> (or <span className="font-mono text-[var(--ink)]">⌘↵</span>).
+              </span>
+              <span className="hidden max-[900px]:inline">
+                Open <span className="font-mono text-[var(--ink)]">Config</span>, set a seed, then press Run.
+              </span>
+            </p>
+            <p className="type-sub text-[var(--ink-dim)] mt-4 italic">
+              the explorer will find the densest community around your seed and typeset it below.
             </p>
           </div>
         </div>
@@ -409,7 +415,7 @@ const LegendDot = ({ color, label, ring = null, size = 12 }) => (
         boxShadow: ring ? `0 0 0 1px ${ring}` : 'none',
       }}
     />
-    <span className="text-[13px] text-[var(--ink-soft)] italic">{label}</span>
+    <span className="text-[length:var(--text-sm)] text-[var(--ink-soft)] italic">{label}</span>
   </div>
 );
 
@@ -417,8 +423,8 @@ const StatCell = ({ label, value, muted = false, accent = false, mono = false })
   <div className="flex flex-col items-end">
     <span className="eyebrow text-[var(--ink-dim)]">{label}</span>
     <span
-      className={`${mono ? 'font-mono tnum' : 'font-display'} leading-none mt-1 ${
-        accent ? 'text-[var(--vermillion)] text-[26px]' : muted ? 'text-[var(--ink-soft)] text-[28px]' : 'text-[var(--ink)] text-[28px]'
+      className={`${mono ? 'font-mono tnum' : 'font-display'} leading-none mt-1 text-[length:var(--text-xl)] ${
+        accent ? 'text-[var(--accent)]' : muted ? 'text-[var(--ink-soft)]' : 'text-[var(--ink)]'
       }`}
     >
       {value}

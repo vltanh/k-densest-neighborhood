@@ -51,8 +51,8 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
   const renderSortIcon = (columnKey) => {
     if (sortConfig.key !== columnKey) return <span className="w-3 inline-block" />;
     return sortConfig.direction === 'asc'
-      ? <ArrowUp size={11} className="inline ml-1 text-[var(--vermillion)]" />
-      : <ArrowDown size={11} className="inline ml-1 text-[var(--vermillion)]" />;
+      ? <ArrowUp size={11} className="inline ml-1 text-[var(--accent)]" />
+      : <ArrowDown size={11} className="inline ml-1 text-[var(--accent)]" />;
   };
 
   const renderTh = (columnKey, title, className = '') => {
@@ -79,12 +79,12 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
   const splitBadge = (split) => {
     const colors = {
       train: 'bg-[var(--ink)]/10 text-[var(--ink)] border-[var(--ink)]/30',
-      val:   'bg-[var(--vermillion)]/10 text-[var(--vermillion)] border-[var(--vermillion)]/40',
+      val:   'bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40',
       test:  'bg-[var(--gold)]/15 text-[var(--ink)] border-[var(--gold)]/50',
       unlabeled: 'bg-transparent text-[var(--ink-faint)] border-[var(--rule-paper-2)]',
     };
     return (
-      <span className={`inline-block px-2 py-0.5 border text-[10px] font-mono uppercase tracking-[0.12em] ${colors[split] || colors.unlabeled}`}>
+      <span className={`inline-block px-2 py-0.5 border text-[length:var(--text-xs)] font-mono uppercase tracking-[0.12em] ${colors[split] || colors.unlabeled}`}>
         {split}
       </span>
     );
@@ -102,10 +102,10 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
               <span>Plate II</span><span className="rule-dot" />
               <span>{isSim ? `The Register · ${meta?.dataset || 'sim'}` : 'The Register'}</span>
             </div>
-            <h2 className="font-display text-[36px] max-[900px]:text-[15px] max-[900px]:tracking-normal leading-none mt-1.5 max-[900px]:mt-0 text-[var(--ink)]">
+            <h2 className="font-display text-[length:var(--text-2xl)] max-[900px]:text-[length:var(--text-base)] max-[900px]:tracking-normal leading-none mt-1.5 max-[900px]:mt-0 text-[var(--ink)]">
               {isSim ? 'Core Nodes' : 'Table of Contents'}
             </h2>
-            <p className="text-[14px] max-[900px]:text-[11px] text-[var(--ink-soft)] mt-1.5 max-[900px]:mt-0.5 italic truncate">
+            <p className="text-[length:var(--text-sm)] max-[900px]:text-[length:var(--text-xs)] text-[var(--ink-soft)] mt-1.5 max-[900px]:mt-0.5 italic truncate">
               {sortedNodes.length} {sortedNodes.length === 1 ? 'node' : 'nodes'} in the densest block
             </p>
           </div>
@@ -116,7 +116,7 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                 .map(([lbl, cnt]) => (
                   <div key={lbl} className="flex items-center gap-1.5 shrink-0">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: classColor(parseInt(lbl), meta?.numClasses) }} />
-                    <span className="text-[12px] font-mono tnum text-[var(--ink-soft)]">c{lbl}·{cnt}</span>
+                    <span className="text-[length:var(--text-sm)] font-mono tnum text-[var(--ink-soft)]">c{lbl}·{cnt}</span>
                   </div>
                 ))}
             </div>
@@ -168,15 +168,15 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                 <td className="px-5 py-5 align-top">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`font-display text-[26px] leading-none tnum ${
-                        isSeed ? 'text-[var(--vermillion)]' : 'text-[var(--ink)]'
+                      className={`font-display text-[length:var(--text-xl)] leading-none tnum ${
+                        isSeed ? 'text-[var(--seed-stroke)]' : 'text-[var(--ink)]'
                       }`}
                     >
                       {node.displayNum}
                     </span>
                     {isSeed && (
                       <span
-                        className="eyebrow text-[var(--vermillion)] writing-mode-vertical"
+                        className="eyebrow text-[var(--seed-stroke)] writing-mode-vertical"
                         style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                       >
                         seed
@@ -188,7 +188,7 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                 {isSim ? (
                   <>
                     <td className="px-5 py-5 align-top">
-                      <span className="font-mono tnum text-[15px] text-[var(--ink)]">{node.rawId}</span>
+                      <span className="font-mono tnum text-[length:var(--text-base)] text-[var(--ink)]">{node.rawId}</span>
                     </td>
                     <td className="px-5 py-5 align-top">
                       <div className="flex items-center gap-2">
@@ -196,37 +196,37 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                           className="w-4 h-4 rounded-full border border-[var(--ink)]/20"
                           style={{ backgroundColor: classColor(node.label, meta?.numClasses) }}
                         />
-                        <span className="font-mono tnum text-[14px] text-[var(--ink)]">c{node.label}</span>
+                        <span className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink)]">c{node.label}</span>
                       </div>
                     </td>
                     <td className="px-5 py-5 align-top">
                       {splitBadge(node.split)}
                     </td>
                     <td className="px-5 py-5 align-top">
-                      <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.degree ?? '—'}</span>
+                      <span className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink-soft)]">{node.degree ?? '—'}</span>
                     </td>
                     <td className="px-5 py-5 align-top" />
                   </>
                 ) : (
                   <>
                     <td className="px-5 py-5 align-top">
-                      <span className="font-mono tnum text-[14px] text-[var(--ink-soft)]">{node.year}</span>
+                      <span className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink-soft)]">{node.year}</span>
                     </td>
                     <td className="px-5 py-5 align-top max-w-0">
-                      <div className="text-[16px] font-semibold leading-[1.3] text-[var(--ink)] mb-1.5">
+                      <div className="text-[length:var(--text-base)] font-semibold leading-[1.3] text-[var(--ink)] mb-1.5">
                         {node.title}
                       </div>
-                      <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                      <div className="text-[length:var(--text-sm)] text-[var(--ink-soft)] leading-snug italic">
                         {node.author}
                       </div>
                     </td>
                     <td className="px-5 py-5 align-top">
-                      <div className="text-[14px] text-[var(--ink-soft)] leading-snug italic">
+                      <div className="text-[length:var(--text-sm)] text-[var(--ink-soft)] leading-snug italic">
                         {node.journal}
                       </div>
                     </td>
                     <td className="px-5 py-5 align-top">
-                      <span className="font-mono tnum text-[14px] text-[var(--ink)]">
+                      <span className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink)]">
                         {node.citations ? node.citations.toLocaleString() : '—'}
                       </span>
                     </td>
@@ -234,13 +234,13 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                       <div className="flex items-center gap-3 opacity-60 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => onDetails(node)}
-                          className="eyebrow text-[var(--ink)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--ink)] hover:border-[var(--vermillion)] pb-0.5"
+                          className="link-tap eyebrow text-[var(--ink)] hover:text-[var(--accent)] transition-colors border-b border-[var(--ink)] hover:border-[var(--accent)] pb-0.5"
                         >
                           Read
                         </button>
                         <button
                           onClick={() => onBib(node.doi)}
-                          className="eyebrow text-[var(--ink-dim)] hover:text-[var(--vermillion)] transition-colors border-b border-[var(--rule-paper-2)] hover:border-[var(--vermillion)] pb-0.5"
+                          className="link-tap eyebrow text-[var(--ink-dim)] hover:text-[var(--accent)] transition-colors border-b border-[var(--rule-paper-2)] hover:border-[var(--accent)] pb-0.5"
                         >
                           .bib
                         </button>
@@ -258,10 +258,15 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
         <div className="h-full flex items-center justify-center py-16 px-8">
           <div className="text-center max-w-xl">
             <div className="eyebrow text-[var(--ink-dim)]">Colophon</div>
-            <p className="text-[18px] text-[var(--ink-soft)] leading-relaxed mt-4 italic">
+            <p className="text-[length:var(--text-base)] text-[var(--ink)] leading-snug mt-4">
               {isSim
-                ? 'The register is empty. Pick a dataset and node, and the densest block will be typeset here — colored by class label.'
-                : 'The register is empty. Once the solver finishes its round, the papers of the densest block will be typeset here — numbered, sorted, and ready to read.'}
+                ? 'No run yet. Choose a dataset and a query node in the sidebar, then press Extract.'
+                : 'No run yet. Enter a seed paper ID in the sidebar, then press Extract.'}
+            </p>
+            <p className="text-[length:var(--text-lg)] text-[var(--ink-dim)] leading-relaxed mt-3 italic">
+              {isSim
+                ? 'the densest block will be typeset here — colored by class label.'
+                : 'the papers of the densest block will be typeset here — numbered, sorted, and ready to read.'}
             </p>
           </div>
         </div>
@@ -269,9 +274,9 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
 
       {nodes.length === 0 && error && (
         <div className="h-full flex items-center justify-center py-16 px-8">
-          <div className="max-w-xl border-l-4 border-[var(--ember)] bg-[var(--paper-2)] px-5 py-4">
-            <div className="eyebrow text-[var(--ember)]">Erratum</div>
-            <p className="text-[15px] text-[var(--ink)] leading-snug mt-2">{error}</p>
+          <div className="max-w-xl border-l-4 border-[var(--danger)] bg-[var(--paper-2)] px-5 py-4">
+            <div className="eyebrow text-[var(--danger)]">Erratum</div>
+            <p className="text-[length:var(--text-base)] text-[var(--ink)] leading-snug mt-2">{error}</p>
           </div>
         </div>
       )}

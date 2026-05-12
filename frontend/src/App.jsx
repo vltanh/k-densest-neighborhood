@@ -250,8 +250,8 @@ function MobileShell({
           <div className="flex-1 min-w-0">
             <div className="eyebrow text-[var(--ink-dim)] flex items-center gap-1.5 flex-wrap">
               <span className={`w-1.5 h-1.5 rounded-full ${
-                status === 'running' ? 'bg-[var(--ember)] pulse-dot' :
-                status === 'error' ? 'bg-[var(--ember)]' :
+                status === 'running' ? 'bg-[var(--accent)] pulse-dot' :
+                status === 'error' ? 'bg-[var(--danger)]' :
                 status === 'converged' ? 'bg-[#94C466]' :
                 'bg-[var(--ink-faint)]'
               }`} />
@@ -263,7 +263,7 @@ function MobileShell({
                 </>
               )}
             </div>
-            <h1 className="font-display text-[20px] leading-tight lowercase text-[var(--ink)] truncate">
+            <h1 className="font-display text-[length:var(--text-lg)] leading-tight lowercase text-[var(--ink)] truncate">
               k-densest explorer
             </h1>
           </div>
@@ -272,7 +272,7 @@ function MobileShell({
             <button
               type="button"
               onClick={onExtract}
-              className="shrink-0 inline-flex items-center gap-2 bg-[var(--ember)] text-[var(--paper)] px-4 py-2.5 font-semibold text-[12px] tracking-[0.14em] uppercase border border-[var(--ember)] shadow-[2px_2px_0_0_var(--night-3)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform"
+              className="shrink-0 inline-flex items-center gap-2 bg-[var(--accent)] text-[var(--paper)] px-4 py-2.5 font-semibold text-[length:var(--text-sm)] tracking-[0.14em] uppercase border border-[var(--accent)] shadow-[2px_2px_0_0_var(--night-3)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform"
               title="Extract"
             >
               <Play size={12} fill="currentColor" />
@@ -282,11 +282,11 @@ function MobileShell({
             <button
               type="button"
               onClick={onStop}
-              className="shrink-0 inline-flex items-center gap-2 bg-[var(--night)] text-[var(--ember)] px-4 py-2.5 border border-[var(--ember)] transition-colors active:bg-[var(--ember)] active:text-[var(--paper)]"
+              className="shrink-0 inline-flex items-center gap-2 bg-[var(--night)] text-[var(--danger)] px-4 py-2.5 border border-[var(--danger)] transition-colors active:bg-[var(--danger)] active:text-[var(--paper)]"
               title="Stop"
             >
               <Square size={12} fill="currentColor" />
-              <span className="font-semibold text-[12px] tracking-[0.14em] uppercase">Stop</span>
+              <span className="font-semibold text-[length:var(--text-sm)] tracking-[0.14em] uppercase">Stop</span>
             </button>
           )}
         </div>
@@ -409,20 +409,20 @@ function TabButton({ active, onClick, icon, label, badge }) {
       type="button"
       onClick={onClick}
       className={`relative py-2 flex flex-col items-center gap-0.5 transition-colors ${
-        active ? 'text-[var(--ember)]' : 'text-[var(--ink-dim)] active:text-[var(--ink)]'
+        active ? 'text-[var(--accent)]' : 'text-[var(--ink-dim)] active:text-[var(--ink)]'
       }`}
       aria-current={active ? 'page' : undefined}
     >
       <span className="relative">
         {icon}
         {badge > 0 && (
-          <span className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--ember)] text-[var(--paper)] text-[9px] font-mono tnum flex items-center justify-center">
+          <span className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--accent)] text-[var(--paper)] text-[length:var(--text-xs)] font-mono tnum flex items-center justify-center">
             {badge > 99 ? '99+' : badge}
           </span>
         )}
       </span>
-      <span className="text-[9px] tracking-[0.14em] uppercase font-mono">{label}</span>
-      {active && <span className="absolute top-0 left-3 right-3 h-[2px] bg-[var(--ember)]" />}
+      <span className="text-[length:var(--text-xs)] tracking-[0.14em] uppercase font-mono">{label}</span>
+      {active && <span className="absolute top-0 left-3 right-3 h-[2px] bg-[var(--accent)]" />}
     </button>
   );
 }
