@@ -50,6 +50,9 @@ class SolverRequest(SolverParams):
     query_node: str = Field(..., pattern=r"^[a-zA-Z0-9]+$", description="OpenAlex ID")
 
 
+_DATASET_NAME_PATTERN = r"^[A-Za-z0-9_]+$"
+
+
 def _variant_argv(req: "SolverParams") -> list:
     """Translate a SolverParams payload into solver CLI arguments.
 
@@ -113,15 +116,21 @@ async def cleanup_solver_process(session_id: str, process):
 @app.post("/api/stop")
 async def stop_solver(session_id: str):
     process = active_processes.get(session_id)
-    if process:
-        try:
+    if process is None:
+        return {"status": "no process running"}
+    try:
+        if process.returncode is None:
             process.terminate()
-            del active_processes[session_id]
-            return {"status": "terminated"}
-        except Exception as e:
-            logger.error(f"Error terminating process {session_id}: {e}")
-            return {"status": "error", "detail": str(e)}
-    return {"status": "no process running"}
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        # Dict cleanup is owned by event_stream's finally (cleanup_solver_process).
+        return {"status": "terminated"}
+    except Exception as e:
+        logger.error(f"Error terminating process {session_id}: {e}")
+        return {"status": "error", "detail": str(e)}
 
 
 @app.get("/api/bibtex")
@@ -141,6 +150,7 @@ async def get_bibtex(doi: str):
                 return {"bibtex": res.text}
             return {"error": f"Failed: {res.status_code}"}
     except Exception as e:
+        logger.warning(f"BibTeX fetch failed for {clean_doi}: {e}")
         return {"error": str(e)}
 
 
@@ -249,7 +259,11 @@ SIM_DATASETS = ("Cora", "PubMed", "DBLP", "CiteSeer", "Cora_ML")
 
 class SimSolverRequest(SolverParams):
     session_id: str = Field(..., description="Unique ID for this extraction run")
-    dataset: str = Field(..., description="Dataset name under data/")
+    dataset: str = Field(
+        ...,
+        pattern=_DATASET_NAME_PATTERN,
+        description="Dataset name under data/",
+    )
     query_node: int = Field(..., ge=0, description="Integer node id")
     ghost_sample_frac: Optional[float] = 0.1
     ghost_max_per_node: Optional[int] = 5
@@ -372,7 +386,8 @@ def _compute_sim_qualities(
                 int_ncut = cut_value * (vol_a + vol_b) / (vol_a * vol_b)
             else:
                 int_ncut = 0.0
-        except Exception:
+        except Exception as e:
+            logger.warning(f"int_ncut computation failed (n={n}, m_int={internal_undirected_edges}): {e}")
             int_ncut = float("nan")
 
     return {
@@ -438,7 +453,10 @@ async def extract_sim(req: SimSolverRequest):
             ) + "\n"
 
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
             active_processes[req.session_id] = process
 
@@ -452,8 +470,6 @@ async def extract_sim(req: SimSolverRequest):
 
             await process.wait()
             rc = process.returncode
-            if req.session_id in active_processes:
-                del active_processes[req.session_id]
 
             if rc != 0:
                 msg = (
@@ -602,7 +618,10 @@ async def extract_subgraph(req: SolverRequest):
             ) + "\n"
 
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
             active_processes[req.session_id] = process
 
@@ -615,8 +634,6 @@ async def extract_subgraph(req: SolverRequest):
 
             await process.wait()
             rc = process.returncode
-            if req.session_id in active_processes:
-                del active_processes[req.session_id]
 
             if rc != 0:
                 msg = (
