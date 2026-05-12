@@ -40,14 +40,14 @@ void print_usage(const char *prog_name)
          << "  --cg-min-batch <int>      Minimum columns to add per pricing round (default: 0)\n"
          << "  --cg-max-batch <int>      Maximum columns to add per pricing round (default: 50)\n"
          << "  --tol <float>             Numerical tolerance for zero-checks (default: 1e-6)\n"
-         << "  --k <int>                 Target subgraph size (REQUIRED for --bp; k >= 2)\n"
+         << "  --k <int>                 Target subgraph size (REQUIRED for --bp; optional for --avgdeg and --bfs; triggers at-least-k grow heuristic; k >= 2)\n"
          << "  --kappa <int>             Edge-connectivity threshold for --bp (default: 0; 0 disables)\n"
          << "  --bfs-depth <int>         Max BFS depth for --bfs (default: 1)\n"
          << "  --gurobi-seed <int>       Gurobi Seed parameter (default: -1; unset)\n\n"
          << "Solver Variants:\n"
          << "  --bp                      Run BP; uses --k and --kappa\n"
-         << "  --avgdeg                  Run exact query-anchored avgdeg; no method-specific CLI parameter\n"
-         << "  --bfs                     Run BFS; uses --bfs-depth\n"
+         << "  --avgdeg                  Run exact query-anchored avgdeg with at-least-k growth; uses --k\n"
+         << "  --bfs                     Run BFS; uses --bfs-depth; optional --k triggers grow-to-k\n"
          << "  --help, -h                Print this help menu and exit\n";
 }
 
@@ -261,15 +261,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    const bool uses_k = run_bp || solver_count == 0;
-    if (uses_k && k < 2)
+    const bool uses_k_required = run_bp || solver_count == 0;
+    if (uses_k_required && k < 2)
     {
         cerr << "Error: --k must be specified and >= 2 for this solver.\n";
         return 1;
     }
-    if (!uses_k && k_provided)
+    if ((run_avgdeg || run_bfs) && k_provided && k < 2)
     {
-        cerr << "Error: --k is only valid for --bp.\n";
+        cerr << "Error: --k must be >= 2 when provided.\n";
         return 1;
     }
     if (mode == "sim" && input_file.empty())
@@ -412,7 +412,7 @@ int main(int argc, char *argv[])
             auto t_start = chrono::high_resolution_clock::now();
             AverageDegreeSolver baseline_solver(oracle_ptr.get());
 
-            vector<int> res = baseline_solver.solve(q_node_int, -1);
+            vector<int> res = baseline_solver.solve(q_node_int, -1, k_provided ? k : -1);
             auto t_end = chrono::high_resolution_clock::now();
             wall_time_s = chrono::duration<double>(t_end - t_start).count();
 
@@ -431,7 +431,7 @@ int main(int argc, char *argv[])
 
             auto t_start = chrono::high_resolution_clock::now();
             BFSSolver bfs_solver(oracle_ptr.get());
-            vector<int> res = bfs_solver.solve(q_node_int, bfs_depth);
+            vector<int> res = bfs_solver.solve(q_node_int, bfs_depth, k_provided ? k : -1);
             auto t_end = chrono::high_resolution_clock::now();
             wall_time_s = chrono::duration<double>(t_end - t_start).count();
 
@@ -561,9 +561,9 @@ int main(int argc, char *argv[])
             std::string method_name = run_avgdeg ? "avgdeg" : run_bfs ? "bfs" : "bp";
             j["method"] = method_name;
             j["query_node"] = query_node;
-            bool uses_k_out = (method_name == "bp");
-            j["k"] = uses_k_out ? json(k) : json(nullptr);
-            j["kappa"] = uses_k_out ? json(kappa) : json(nullptr);
+            bool k_in_output = (method_name == "bp") || ((method_name == "avgdeg" || method_name == "bfs") && k_provided);
+            j["k"] = k_in_output ? json(k) : json(nullptr);
+            j["kappa"] = (method_name == "bp") ? json(kappa) : json(nullptr);
             j["bfs_depth"] = (method_name == "bfs") ? json(bfs_depth) : json(nullptr);
             std::vector<std::string> node_strs;
             node_strs.reserve(best_nodes.size());

@@ -1,10 +1,12 @@
 #include "average_degree_solver.hpp"
+#include "grow_to_k.hpp"
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/push_relabel_max_flow.hpp>
 #include <queue>
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 #include <limits>
 
@@ -83,7 +85,7 @@ AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(int st
     return lg;
 }
 
-std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
+std::vector<int> AverageDegreeSolver::solve(int query_node, int depth, int k)
 {
     LocalGraph lg = explore_neighborhood(query_node, depth);
 
@@ -236,6 +238,23 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth)
 
     if (best_nodes.empty())
         best_nodes.push_back(query_node);
+
+    if (k > 0 && (int)best_nodes.size() < k)
+    {
+        std::unordered_map<int, std::unordered_set<int>> adj;
+        for (int u : lg.nodes)
+            adj[u];
+        for (const auto &[ui, vi] : directed_edges)
+        {
+            int u = lg.nodes[ui];
+            int v = lg.nodes[vi];
+            adj[u].insert(v);
+            adj[v].insert(u);
+        }
+        std::unordered_set<int> S(best_nodes.begin(), best_nodes.end());
+        grow_to_k(S, lg.nodes, adj, k);
+        best_nodes.assign(S.begin(), S.end());
+    }
 
     return best_nodes;
 }
