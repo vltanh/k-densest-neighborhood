@@ -294,56 +294,57 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
               )}
 
               {advancedTab === 'solver' && (
-                <div className="space-y-5 fade-in">
+                <div className="space-y-6 fade-in">
                   {usesBpInternals ? (
                     <>
                       {usesTimeBudget && (
-                        <>
+                        <div className="space-y-3">
+                          <div className="eyebrow text-[var(--on-night-faint)]">Stopping</div>
                           <div className="grid grid-cols-2 gap-x-5 gap-y-5">
                             <div>
                               <label className="field-label">Soft Time (s)</label>
                               <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
-                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">no-improvement cap · -1 disables</div>
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">no-improvement cap · -1 off</div>
                             </div>
                             <div>
                               <label className="field-label">Hard Time (s)</label>
                               <input type="number" min="-1" step="10" value={params.hardTimeLimit} onChange={set('hardTimeLimit')} className="field-input" />
-                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">wall cap · -1 off</div>
                             </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-x-5 gap-y-5">
                             <div>
                               <label className="field-label">Node Limit</label>
                               <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
-                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 off</div>
                             </div>
                             <div>
                               <label className="field-label">Gap Tol</label>
                               <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
-                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                              <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 off</div>
                             </div>
                           </div>
-                        </>
+                        </div>
                       )}
 
-                      <div>
-                        <label className="field-label">Dinkelbach Iter</label>
-                        <input type="number" min="-1" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
-                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-x-5 gap-y-5">
-                        <div>
-                          <label className="field-label">CG Batch Frac</label>
-                          <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
-                        </div>
-                        <div>
-                          <label className="field-label">Min Batch</label>
-                          <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
-                        </div>
-                        <div>
-                          <label className="field-label">Max Batch</label>
-                          <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
+                      <div className="space-y-3">
+                        <div className="eyebrow text-[var(--on-night-faint)]">Inner loop</div>
+                        <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                          <div>
+                            <label className="field-label">Dinkelbach Iter</label>
+                            <input type="number" min="-1" step="1" value={params.dinkelbachIter} onChange={set('dinkelbachIter')} className="field-input" />
+                            <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 off</div>
+                          </div>
+                          <div>
+                            <label className="field-label">CG Batch Frac</label>
+                            <input type="number" min="0.01" max="1.0" step="0.01" value={params.cgBatchFrac} onChange={set('cgBatchFrac')} className="field-input" />
+                          </div>
+                          <div>
+                            <label className="field-label">Min Batch</label>
+                            <input type="number" min="0" step="1" value={params.cgMinBatch} onChange={set('cgMinBatch')} className="field-input" />
+                          </div>
+                          <div>
+                            <label className="field-label">Max Batch</label>
+                            <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
+                          </div>
                         </div>
                       </div>
                     </>
