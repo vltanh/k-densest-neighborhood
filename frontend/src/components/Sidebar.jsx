@@ -198,8 +198,8 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
                 )}
               </div>
 
-              {(usesK || usesKappa) && (
-                <div className={`grid gap-x-5 gap-y-5 ${usesK && usesKappa ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {(usesK || usesKappa || usesBfsDepth) && (
+                <div className={`grid gap-x-5 gap-y-5 ${(usesK && usesKappa) || (usesK && usesBfsDepth) ? 'grid-cols-2' : 'grid-cols-1'}`}>
                   {usesK && (
                     <div>
                       <label className="field-label">Min Community Size · k</label>
@@ -225,14 +225,13 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
                       <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">0 disables</div>
                     </div>
                   )}
-                </div>
-              )}
-
-              {usesBfsDepth && (
-                <div>
-                  <label className="field-label">BFS Depth</label>
-                  <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
-                  <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">hops out from the seed</div>
+                  {usesBfsDepth && (
+                    <div>
+                      <label className="field-label">BFS Depth</label>
+                      <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
+                      <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">hops out from the seed</div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
