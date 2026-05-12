@@ -37,9 +37,8 @@ University of Illinois Urbana-Champaign \\
 }
 \date{}
 
-% Insert a divider frame at the start of each of the four top-level sections
-% (Motivation and Problem Statements, Approaches, Experiments, Conclusion) so
-% the audience sees the structural break clearly in the deck.
+% Insert a divider frame at the start of each top-level section so the
+% audience sees the structural break clearly in the deck.
 \AtBeginSection[]{
   \begin{frame}
     \centering
@@ -57,7 +56,7 @@ University of Illinois Urbana-Champaign \\
   \tableofcontents
 \end{frame}
 
-\section{Motivation and Problem Statements}
+\section{Motivation and problem statements}
 
 \begin{frame}{Motivation}
   \begin{itemize}
@@ -68,7 +67,7 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{Question} Can we search for a neighborhood that is dense, query-centered, and structurally constrained?
+  \textbf{Question.} Can we search for a neighborhood that is dense, query-centered, and structurally constrained?
 \end{frame}
 
 \begin{frame}{Oracle access}
@@ -134,34 +133,9 @@ University of Illinois Urbana-Champaign \\
 
   \textbf{Note}
   \begin{itemize}
-    \item $\kappa = 0$ disables the constraint
-    \item This will be enforced lazily in the solver by min-cut cuts.
+    \item $\kappa = 0$ disables the constraint.
+    \item Enforced lazily by min-cut cuts inside the solver.
   \end{itemize}
-\end{frame}
-
-\begin{frame}{Nonlinear fractional 0-1 program}
-  Let
-  \begin{itemize}
-    \item $x_v \in \{0,1\}$ indicate $v \in S$
-    \item $y_{uv} \in \{0,1\}$ indicate directed edge $(u,v)$ is internal
-  \end{itemize}
-
-  \begin{align*}
-    \max \quad          &
-    \frac{\sum_{(u,v)\in E} y_{uv}}
-    {\left(\sum_{u\in V}x_u\right)
-      \left(\sum_{u\in V}x_u - 1\right)}
-    \\
-    \mathrm{s.t.} \quad &
-    x_q = 1                                                  \\
-                        & \sum_{u\in V} x_u \ge k            \\
-                        & y_{uv} \le x_u,\quad y_{uv}\le x_v
-    \quad \forall (u,v)\in E
-  \end{align*}
-
-  \vfill
-
-  \textbf{Note} The lower bound $y_{uv}\ge x_u+x_v-1$ is not needed because $y$ has positive objective coefficient.
 \end{frame}
 
 \section{Approaches}
@@ -179,7 +153,7 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{Key property}
+  \textbf{Property}
   \[
     \lambda^\star \text{ is optimal}
     \quad \Longleftrightarrow \quad
@@ -210,62 +184,10 @@ University of Illinois Urbana-Champaign \\
   \vfill
 
   \textbf{Inner loop} solves the parametric problem by branch-and-price.
-\end{frame}
-
-\begin{frame}{Dinkelbach parametric subproblem}
-  At parameter $\lambda$:
-  \begin{align*}
-    Z(\lambda) = \max \quad &
-    \sum_{(u,v)\in E} y_{uv} - \lambda \left[ \left(\sum_{u\in V} x_u\right)^{\!2} - \sum_{u\in V} x_u \right] \\
-    \mathrm{s.t.} \quad     &
-    x_q = 1                                                                                                    \\
-                            & \sum_{u\in V} x_u \ge k                                                          \\
-                            & y_{uv} \le x_u,\quad y_{uv} \le x_v \quad \forall (u,v) \in E                    \\
-                            & x \in \{0,1\}^{|V|},\ y \in \{0,1\}^{|E|}
-  \end{align*}
-\end{frame}
-
-\begin{frame}{Linearizing the penalty}
-  The Dinkelbach penalty is
-  \[
-    |S|(|S|-1)
-    =
-    \left(\sum_v x_v\right)^2 - \sum_v x_v.
-  \]
-
-  Since $x_v^2=x_v$ for binary variables:
-  \[
-    |S|(|S|-1)
-    =
-    2\sum_{u<v}x_u x_v.
-  \]
 
   \vfill
 
-  Introduce pair variables:
-  \[
-    w_{uv} \approx x_u x_v,
-    \qquad
-    w_{uv} \ge x_u+x_v-1.
-  \]
-
-  \vfill
-
-  Because $w$ has negative coefficient, this lower bound is enough at integer solutions.
-\end{frame}
-
-\begin{frame}{Linearized parametric subproblem}
-  At parameter $\lambda$:
-  \begin{align*}
-    Z(\lambda) = \max \quad &
-    \sum_{(u,v)\in E} y_{uv} - 2\lambda \sum_{u<v} w_{uv}                                                \\
-    \mathrm{s.t.} \quad     &
-    x_q = 1                                                                                              \\
-                            & \sum_{u\in V} x_u \ge k                                                    \\
-                            & y_{uv} \le x_u,\quad y_{uv} \le x_v \quad \forall (u,v) \in E              \\
-                            & w_{uv} \ge x_u + x_v - 1 \quad \forall u<v                                 \\
-                            & x \in \{0,1\}^{|V|},\ y \in \{0,1\}^{|E|},\ w \in \{0,1\}^{\binom{|V|}{2}}
-  \end{align*}
+  \footnotesize See appendix A5 for the LP formulation and linearisation.
 \end{frame}
 
 \begin{frame}{Active set and frontier}
@@ -285,131 +207,34 @@ University of Illinois Urbana-Champaign \\
   \end{itemize}
 \end{frame}
 
-\begin{frame}{Restricted Master Problem}
-  For active set $A$:
-
-  \begin{align*}
-    \max \quad         &
-    \sum_{(u,v)\in E(A)} y_{uv}
-    -2\lambda\sum_{\substack{u,v\in A\\u<v}}w_{uv}         \\
-    \mathrm{s.t.}\quad &
-    x_q = 1                                                \\
-                       & \sum_{u\in A}x_u \ge k
-    \quad (\text{dual: }\pi)                               \\
-                       & y_{uv}\le x_u,\quad y_{uv}\le x_v
-    \quad \forall (u,v)\in E(A)                            \\
-                       & w_{uv}\ge x_u+x_v-1
-    \quad \forall u<v \in A                                \\
-                       & 0\le x,y,w\le 1
-  \end{align*}
-
-  \vfill
-
-  This LP gives the bound inside branch-and-bound.
-\end{frame}
-
-\begin{frame}{Pricing a frontier node}
-  Let $\bar{x}$ be the RMP LP solution and $\pi$ the dual price of $\sum_{u \in A} x_u \ge k$.
-
-  \vfill
-
-  \textbf{Fractional degree of $f \in F$}
-  \[
-    d_{\mathrm{frac}}(f) = \sum_{v \in N(f) \cap A} \bar{x}_v
-  \]
-
-  \vfill
-
-  \textbf{Reduced cost}
+\begin{frame}{Column generation}
+  Reduced cost of a frontier node $f \in F$ at RMP optimum $\bar{x}$ with size-constraint dual $\pi$:
   \[
     \bar{c}_f
     = \underbrace{d_{\mathrm{frac}}(f)}_{\text{edge gain}}
     \;-\; \underbrace{2\lambda \sum_{v \in A} \bar{x}_v}_{\text{pair penalty}}
-    \;-\; \underbrace{\pi}_{\text{size dual}}
+    \;-\; \underbrace{\pi}_{\text{size dual}},
+    \qquad d_{\mathrm{frac}}(f) = \sum_{v \in N(f) \cap A} \bar{x}_v.
   \]
+
+  Pick $f^\star = \argmax_{f \in F} \bar{c}_f$. If $\bar{c}_{f^\star} \le 0$, RMP is a valid upper bound and CG terminates. Otherwise promote the top-$b$ frontier nodes (batched) into $A$ and resolve.
 
   \vfill
 
   \footnotesize See appendix A1 (fractional degree) and A2 (reduced cost derivation).
 \end{frame}
 
-\begin{frame}{Column generation}
-  \textbf{Pricing rule}
-  \[
-    f^\star = \argmax_{f\in F}\bar{c}_f.
-  \]
-
-  \vfill
-
-  \begin{itemize}
-    \item \underline{Case $\bar{c}_{f^\star} \le 0$} no frontier node improves the LP. The RMP objective is a valid upper bound.
-    \item \underline{Case $\bar{c}_{f^\star} > 0$} promote frontier nodes into $A$ and resolve.
-  \end{itemize}
-
-  \vfill
-
-  Add the top-$b$ frontier nodes by $\bar{c}_f$ per round, not one at a time:
-  \[
-    b =
-    \mathrm{clamp}
-    \left(
-    \lfloor \rho |A| \rfloor,\ b_{\min},\ b_{\max}
-    \right).
-  \]
-  $\rho \in (0, 1]$ scales the batch with $|A|$; $b_{\min}$ and $b_{\max}$ floor and cap it.
-
-  \vfill
-
-  \textbf{Interpretation} Column generation is also graph expansion.
-\end{frame}
-
 \begin{frame}{Branch-and-bound}
-  Each B\&B node stores $V_1$ (fixed in) and $V_0$ (fixed out).
+  Each B\&B node stores $V_1$ (fixed in) and $V_0$ (fixed out). At each node: apply bounds, run column generation, prune if LP bound cannot beat incumbent. If $\bar{x}$ integral, accept as a candidate; else branch.
 
   \vfill
 
-  At each node:
-  \begin{enumerate}
-    \item apply bounds, run column generation
-    \item prune if LP bound cannot beat incumbent
-    \item if $\bar{x}$ is integral, check as a candidate
-    \item else branch on a fractional variable
-  \end{enumerate}
-
-  \vfill
-
-  Root fixes $x_q = 1$.
-\end{frame}
-
-\begin{frame}{Branching rule}
-  A fractional node is judged by its fractional internal degree.
-
-  \vfill
-
-  \[
-    d_{\mathrm{frac}}(v)
-    =
-    \sum_{u\in N(v)\cap A}\bar{x}_u.
-  \]
-
-  \vfill
-
+  \textbf{Branching rule.} Classify a fractional node by $d_{\mathrm{frac}}(v) = \sum_{u \in N(v) \cap A} \bar{x}_u$ versus $2\lambda$.
   \begin{itemize}
-    \item If $d_{\mathrm{frac}}(v) < 2\lambda$:
-          \begin{itemize}
-            \item $v$ is a hanging node
-            \item branch zero-first
-          \end{itemize}
-    \item Otherwise:
-          \begin{itemize}
-            \item $v$ is more core-like
-            \item branch one-first
-          \end{itemize}
+    \item $d_{\mathrm{frac}}(v) < 2\lambda$: "hanging", branch zero-first.
+    \item $d_{\mathrm{frac}}(v) \ge 2\lambda$: "core", branch one-first.
   \end{itemize}
-
-  \vfill
-
-  \textbf{Reason} $2\lambda$ is the marginal pair penalty rate.
+  $2\lambda$ is the marginal pair-penalty rate. Root fixes $x_q = 1$.
 
   \vfill
 
@@ -417,11 +242,11 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Triangle cuts}
-  \textbf{Problem} LP relaxation can spread fractional $x$ mass across nodes while keeping pair variables $w_{ij}$ at zero (e.g., $x_u = x_v = 0.5$ and $w_{uv} = 0$).
+  \textbf{Problem.} LP relaxation can spread fractional $x$ mass across nodes while keeping pair variables $w_{ij}$ at zero (e.g., $x_u = x_v = 0.5$ and $w_{uv} = 0$).
 
   \vfill
 
-  \textbf{Solution} Add constraints that forbid this pattern:
+  \textbf{Solution.} Add constraints that forbid this pattern:
   \[
     x_u + x_v + x_w - w_{uv} - w_{vw} - w_{uw} \le 1.
   \]
@@ -461,23 +286,6 @@ University of Illinois Urbana-Champaign \\
   \footnotesize See appendix A4.
 \end{frame}
 
-\begin{frame}{Pruning integer incumbents}
-  Since $|S| \ge k$, integer solutions may exceed $k$. Greedily remove nodes whose removal strictly improves the parametric objective.
-
-  \vfill
-
-  \begin{itemize}
-    \item candidate: node with the smallest internal degree (weakest edge contribution)
-    \item never remove $q$
-    \item stop at $|S| = k$ or when no single removal helps
-    \item preserve connectivity when $\kappa > 0$
-  \end{itemize}
-
-  \vfill
-
-  \textbf{Effect} stronger incumbent, smaller returned community.
-\end{frame}
-
 \begin{frame}{Practical considerations}
   \textbf{Early stopping}
   \begin{itemize}
@@ -489,7 +297,35 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
+  \textbf{Lazy frontier materialization}
+  \begin{itemize}
+    \item fetch unqueried frontier adjacencies only when solo pricing finds no improving column
+  \end{itemize}
+
+  \vfill
+
   With any limit active, the solver returns the best incumbent. The LP bound stays a valid upper envelope on the parametric optimum.
+\end{frame}
+
+\begin{frame}{BFS baseline}
+  \textbf{Problem.} Topology-only frontier expansion from $q$.
+
+  \vfill
+
+  \textbf{Algorithm.} Layered breadth-first expansion from the query: each dequeued node is oracle-queried, its predecessors and successors enter the pool. Depth $d$ bounds the number of layers explored.
+
+  \vfill
+
+  \textbf{vs BP}
+  \begin{itemize}
+    \item no density objective: returns the whole frontier
+    \item no size constraint $|S| \ge k$
+    \item no $\kappa$-connectivity constraint
+  \end{itemize}
+
+  \vfill
+
+  \footnotesize Cheapest baseline: one oracle query per visited node, no flow, no LP. Output size grows with $d$; comparable per-$k$ analysis needs the grow-to-$k$ post-processing.
 \end{frame}
 
 \begin{frame}{Average-degree baseline}
@@ -512,162 +348,116 @@ University of Illinois Urbana-Champaign \\
 
   \footnotesize Algorithm: adapted Goldberg's $s$--$t$ max-flow algorithm (polynomial time)
   \begin{itemize}
-    \item materialising the local subgraph up-front
+    \item materializing the local subgraph up-front
     \item forcing $q \in S$ by keeping $q$ on the source side of the cut
   \end{itemize}
+\end{frame}
+
+\begin{frame}{Grow-to-$k$}
+  Equalizes baseline output cardinality with BP for per-$k$ comparison.
+
+  \vfill
+
+  \textbf{Rule.} Seed $S$, pool $P \supseteq S$. Repeat
+  \[
+    v^* = \arg\max_{v \in P \setminus S} \bigl|N(v) \cap S\bigr|
+  \]
+  until $|S| = k$ (or $P$ is exhausted).
+
+  \vfill
+
+  \begin{itemize}
+    \item BFS: seed $= \{q\}$, depth $d$ becomes a minimum; expansion continues until the pool reaches $k$.
+    \item AvgDeg: seed $= S^*$, fires only when $|S^*| < k$.
+  \end{itemize}
+
+  \vfill
+
+  \footnotesize Greedy heuristic. Densest-at-least-$k$ is NP-hard; no approximation guarantee.
 \end{frame}
 
 \section{Experiments}
 
 \begin{frame}{Exp 1: solver correctness on enumerable graphs}
-  \textbf{Goal}
+  Erd\H{o}s--R\'enyi $G(n=20, p)$ for $p \in \{0.25, 0.50, 0.75\}$, seeds $0..4$ (15 graphs). Brute-force enumerates every $S \ni q$.
+
+  \vfill
+
+  \textbf{Result on the grid $(k, \kappa) \in \{3,4,5\} \times \{0,1,2\}$}
   \begin{itemize}
-    \item check that the solver recovers the true optimum on graphs
-          small enough to enumerate every subset
+    \item AvgDeg matches BF optimum on $15/15$ graphs.
+    \item BP returned $S$ satisfies $|S| \ge k$ and rooted $\kappa$-edge-connectivity on $30/30$ cells; edge density matches BF on every feasible cell.
+    \item Zero solver errors.
   \end{itemize}
 
   \vfill
 
-  \textbf{Fixture}
-  \begin{itemize}
-    \item Erd\H{o}s--R\'enyi random graphs $G(n, p)$
-    \item $n = 20$
-    \item $p \in \{0.25,\, 0.50,\, 0.75\}$
-    \item seed $\in \{ 0, 1, 2, 3, 4 \}$ (so 15 graphs total)
-    \item query $q$: highest-degree node per graph
-  \end{itemize}
+  \footnotesize See appendix A6 for protocol details.
 \end{frame}
 
-\begin{frame}{Exp 1: protocol}
-  \textbf{Brute-force oracle}
+\begin{frame}{Dataset, split, methods}
+  \textbf{Cora-ML (CitationFull)}
   \begin{itemize}
-    \item enumerate every $S \ni q$ with $|S| \ge k$
-    \item for each $(k, \kappa) \in \{3,4,5\} \times \{0,1,2\}$, record the maximum-density $S$ with $\lambda(S) \ge \kappa$
-    \item mark cells with no feasible $S$ as infeasible
+    \item $2{,}995$ nodes, $8{,}416$ directed edges, $7$ paper labels
   \end{itemize}
 
-  \vfill
-
-  \textbf{Solver}
+  \textbf{Pool} pure sources with out-degree $\ge 2$
   \begin{itemize}
-    \item run on every (method, $k$, $\kappa$, seed) cell
-    \item no time, node, gap, or Dinkelbach limit
-    \item skip cells the brute force flagged infeasible (solver otherwise exhausts the search proving infeasibility; wall time blows up on sparse seeds)
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Exp 1: result}
-  \textbf{AvgDeg}
-  \begin{itemize}
-    \item exact match on $15/15$ graphs at every $p$
+    \item val $402$, test $402$
+    \item train pool $2{,}191$ provides labels, never queried
+    \item hard subset: $59$ test nodes where depth-$1$ BFS is wrong
   \end{itemize}
 
-  \vfill
-
-  \textbf{BP}
+  \textbf{Methods}
   \begin{itemize}
-    \item every returned $S$ satisfies $|S| \ge k$ and rooted $\kappa$-edge-connectivity ($30/30$ cells)
-    \item edge density matches BF optimum on $30/30$ cells
-    \item zero solver errors
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Citation dataset and split}
-  \textbf{Dataset} PyTorch Geometric's CitationFull Cora-ML
-  \begin{itemize}
-    \item 2,995 nodes
-    \item 8,416 directed edges
-    \item 7 paper labels
-  \end{itemize}
-
-  \vfill
-
-  \textbf{Train pool} every other node ($2{,}191$ on Cora\_ML): provides labels for the majority-vote prediction rule. Never used as a query.
-
-  \vfill
-
-  \textbf{Query pool} pure sources with out-degree $\ge 2$:
-  \begin{itemize}
-    \item val: 402 queries
-    \item test: 402 queries
-  \end{itemize}
-
-  \textbf{Hard subset} 59 test nodes where the depth-1 BFS vote is wrong.
-\end{frame}
-
-\begin{frame}{Baselines and BP}
-  \begin{itemize}
-    \item \textbf{BFS} outgoing-citation neighborhood at depth $d \in \{1, 2, 3\}$ ($d = 1$ is the cheapest baseline)
-    \item \textbf{AvgDeg} exact densest local subgraph by average degree
-    \item \textbf{BP} branch-and-price for directed edge density, swept over $k$ and $\kappa$
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Exp 2: scope}
-  \begin{itemize}
-    \item intrinsic perspective: label-agnostic geometry of the
-          returned community
-    \item evaluated on val + test combined, so every queried node
-          contributes
-  \end{itemize}
-
-  \vfill
-
-  Grid:
-  \begin{itemize}
-    \item BFS depth $\in \{1, 2, 3\}$
-    \item AvgDeg single cell
-    \item BP $k \in \{3, 4, 5\}$, $\kappa \in \{0, 1, 2\}$
-    \item one Gurobi seed for BP $(42)$; deterministic methods once
-    \item soft no-improvement cap $60$ s, hard wall cap $300$ s on BP cells
+    \item BFS depth-$1$, AvgDeg (Goldberg), BP
+    \item all grown to $|S| \ge k$ (unless not possible)
+    \item sweep $k \in \{3, 4, 5\}$; BP also $\kappa \in \{0, 1, 2\}$
   \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 2: cluster quality on val + test}
-  Mean $\pm$ std over val + test (804 queries), Cora-ML, single Gurobi seed.
+  Cora-ML val + test ($804$ queries), single seed.
 
   \vfill
 
   \tiny
   \begin{center}
-  \begin{tabular}{lcccccc}
+  \begin{tabular}{lccccc}
     \toprule
-    Method & size & $\lambda_2$ & ncut & cond. & avg.deg & dens. \\
+    Method & $|S|$ & $\lambda_2$ & ncut & avg.deg & dens. \\
     \midrule
-    BFS $d=1$                & 4.9 $\pm$ 2.8   & 0.96 $\pm$ 0.30 & 1.23 $\pm$ 0.15 & 0.78 $\pm$ 0.18 & 1.17 $\pm$ 0.50 & 0.35 $\pm$ 0.11 \\
-    BFS $d=2$                & 13.1 $\pm$ 11.5 & 0.40 $\pm$ 0.29 & 1.07 $\pm$ 0.11 & 0.77 $\pm$ 0.17 & 1.68 $\pm$ 0.69 & 0.21 $\pm$ 0.11 \\
-    BFS $d=3$                & 24.6 $\pm$ 26.2 & 0.26 $\pm$ 0.29 & 1.05 $\pm$ 0.12 & 0.76 $\pm$ 0.17 & 1.86 $\pm$ 0.76 & 0.15 $\pm$ 0.11 \\
-    AvgDeg                   & 21.2 $\pm$ 15.2 & 0.32 $\pm$ 0.38 & 0.70 $\pm$ 0.53 & 0.69 $\pm$ 0.16 & 3.02 $\pm$ 1.55 & 0.21 $\pm$ 0.12 \\
-    BP $k{=}3$ $\kappa{=}0$  & 3.3 $\pm$ 0.7   & 1.23 $\pm$ 0.34 & 1.36 $\pm$ 0.26 & 0.81 $\pm$ 0.17 & 1.20 $\pm$ 0.42 & 0.51 $\pm$ 0.10 \\
-    BP $k{=}3$ $\kappa{=}1$  & 3.3 $\pm$ 0.7   & 1.25 $\pm$ 0.28 & 1.39 $\pm$ 0.13 & 0.80 $\pm$ 0.17 & 1.19 $\pm$ 0.41 & 0.51 $\pm$ 0.10 \\
-    BP $k{=}3$ $\kappa{=}2$  & 3.3 $\pm$ 0.7   & 1.27 $\pm$ 0.27 & 1.41 $\pm$ 0.11 & 0.81 $\pm$ 0.17 & 1.10 $\pm$ 0.44 & 0.48 $\pm$ 0.12 \\
-    BP $k{=}4$ $\kappa{=}0$  & 4.4 $\pm$ 0.8   & 0.75 $\pm$ 0.48 & 0.94 $\pm$ 0.53 & 0.78 $\pm$ 0.16 & 1.59 $\pm$ 0.48 & 0.47 $\pm$ 0.09 \\
-    BP $k{=}4$ $\kappa{=}1$  & 4.2 $\pm$ 0.8   & 0.92 $\pm$ 0.28 & 1.21 $\pm$ 0.10 & 0.80 $\pm$ 0.17 & 1.47 $\pm$ 0.42 & 0.46 $\pm$ 0.09 \\
-    BP $k{=}4$ $\kappa{=}2$  & 4.2 $\pm$ 0.7   & 0.94 $\pm$ 0.28 & 1.24 $\pm$ 0.08 & 0.80 $\pm$ 0.17 & 1.34 $\pm$ 0.46 & 0.42 $\pm$ 0.12 \\
-    BP $k{=}5$ $\kappa{=}0$  & 5.0 $\pm$ 0.7   & 0.51 $\pm$ 0.44 & 0.74 $\pm$ 0.57 & 0.77 $\pm$ 0.15 & 1.76 $\pm$ 0.50 & 0.44 $\pm$ 0.09 \\
-    BP $k{=}5$ $\kappa{=}1$  & 5.1 $\pm$ 1.0   & 0.73 $\pm$ 0.27 & 1.14 $\pm$ 0.08 & 0.79 $\pm$ 0.17 & 1.67 $\pm$ 0.47 & 0.41 $\pm$ 0.09 \\
-    BP $k{=}5$ $\kappa{=}2$  & 5.2 $\pm$ 1.1   & 0.72 $\pm$ 0.28 & 1.16 $\pm$ 0.08 & 0.79 $\pm$ 0.17 & 1.52 $\pm$ 0.54 & 0.37 $\pm$ 0.11 \\
+    \multicolumn{6}{l}{\textit{$k = 3$}} \\
+    BFS $d{=}1$              & 4.87 $\pm$ 2.75   & 0.96 $\pm$ 0.30 & 1.23 $\pm$ 0.15 & 1.17 $\pm$ 0.50 & 0.35 $\pm$ 0.11 \\
+    AvgDeg                   & 21.20 $\pm$ 15.20 & 0.32 $\pm$ 0.38 & 0.70 $\pm$ 0.53 & \underline{\textbf{3.02 $\pm$ 1.55}} & 0.21 $\pm$ 0.12 \\
+    BP $\kappa{=}0$          & 3.34 $\pm$ 0.71   & 1.23 $\pm$ 0.34 & 1.36 $\pm$ 0.26 & 1.20 $\pm$ 0.42 & \underline{\textbf{0.51 $\pm$ 0.10}} \\
+    BP $\kappa{=}1$          & 3.32 $\pm$ 0.67   & 1.25 $\pm$ 0.28 & 1.39 $\pm$ 0.13 & 1.19 $\pm$ 0.41 & \underline{0.51 $\pm$ 0.10} \\
+    BP $\kappa{=}2$          & 3.28 $\pm$ 0.72   & \underline{\textbf{1.27 $\pm$ 0.27}} & \underline{\textbf{1.41 $\pm$ 0.11}} & 1.10 $\pm$ 0.44 & 0.48 $\pm$ 0.12 \\
+    \midrule
+    \multicolumn{6}{l}{\textit{$k = 4$}} \\
+    BFS $d{=}1$              & 5.83 $\pm$ 3.20   & 0.74 $\pm$ 0.27 & 1.15 $\pm$ 0.10 & 1.31 $\pm$ 0.49 & 0.30 $\pm$ 0.10 \\
+    AvgDeg                   & 21.21 $\pm$ 15.18 & 0.31 $\pm$ 0.35 & 0.69 $\pm$ 0.53 & \underline{3.02 $\pm$ 1.55} & 0.21 $\pm$ 0.11 \\
+    BP $\kappa{=}0$          & 4.35 $\pm$ 0.78   & 0.75 $\pm$ 0.48 & 0.94 $\pm$ 0.53 & 1.59 $\pm$ 0.48 & \underline{0.47 $\pm$ 0.09} \\
+    BP $\kappa{=}1$          & 4.23 $\pm$ 0.76   & 0.92 $\pm$ 0.28 & 1.21 $\pm$ 0.10 & 1.47 $\pm$ 0.42 & 0.46 $\pm$ 0.09 \\
+    BP $\kappa{=}2$          & 4.19 $\pm$ 0.72   & \underline{0.94 $\pm$ 0.28} & \underline{1.24 $\pm$ 0.08} & 1.34 $\pm$ 0.46 & 0.42 $\pm$ 0.12 \\
+    \midrule
+    \multicolumn{6}{l}{\textit{$k = 5$}} \\
+    BFS $d{=}1$              & 6.60 $\pm$ 3.21   & 0.61 $\pm$ 0.26 & 1.11 $\pm$ 0.09 & 1.39 $\pm$ 0.50 & 0.27 $\pm$ 0.09 \\
+    AvgDeg                   & 21.25 $\pm$ 15.14 & 0.30 $\pm$ 0.34 & 0.69 $\pm$ 0.52 & \underline{3.02 $\pm$ 1.55} & 0.20 $\pm$ 0.11 \\
+    BP $\kappa{=}0$          & 5.03 $\pm$ 0.72   & 0.50 $\pm$ 0.44 & 0.74 $\pm$ 0.57 & 1.76 $\pm$ 0.51 & \underline{0.43 $\pm$ 0.09} \\
+    BP $\kappa{=}1$          & 5.14 $\pm$ 1.03   & \underline{0.73 $\pm$ 0.27} & 1.14 $\pm$ 0.08 & 1.67 $\pm$ 0.47 & 0.41 $\pm$ 0.09 \\
+    BP $\kappa{=}2$          & 5.16 $\pm$ 1.13   & 0.72 $\pm$ 0.28 & \underline{1.16 $\pm$ 0.08} & 1.52 $\pm$ 0.54 & 0.37 $\pm$ 0.11 \\
     \bottomrule
   \end{tabular}
   \end{center}
-\end{frame}
-
-\begin{frame}{Exp 2: cluster quality reading}
-  \begin{itemize}
-    \item BP at small $k$: highest density and $\lambda_2$ (density $0.51$, $\lambda_2 \approx 1.25$).
-    \item AvgDeg: best external isolation (ncut $0.70$, cond.\ $0.69$) and highest avg.deg by construction.
-    \item BFS: dominated on internal density at every depth.
-    \item Raising $k$ in BP trades density for size; $k{=}5$ $\kappa{=}0$ lands close to AvgDeg's ncut at much higher density.
-  \end{itemize}
 
   \vfill
 
-  \textbf{Claim} BP wins density and algebraic connectivity; AvgDeg wins external isolation.
+  \scriptsize \underline{Section best} per column (higher better, $|S|$ excluded); \textbf{overall best} across $k$.
 \end{frame}
 
 \begin{frame}{Exp 2: cost on val + test}
-  Mean $\pm$ std over val + test (804 queries), Cora-ML, single seed. Distributions are long-tailed (timeouts on hardest queries).
-
+  $n = 804$ queries.
   \vfill
 
   \tiny
@@ -676,26 +466,33 @@ University of Illinois Urbana-Champaign \\
     \toprule
     Method & wall (s) & queries & BB nodes & LP solves & cuts & $t_{\text{LP}}$ (s) \\
     \midrule
-    BFS $d=1$                & 0.015 $\pm$ 0.004   & 1.0 $\pm$ 0.0     & --                 & --                  & --                  & --              \\
-    BFS $d=2$                & 0.016 $\pm$ 0.005   & 4.9 $\pm$ 2.8     & --                 & --                  & --                  & --              \\
-    BFS $d=3$                & 0.019 $\pm$ 0.006   & 13.1 $\pm$ 11.5   & --                 & --                  & --                  & --              \\
-    AvgDeg                   & 0.042 $\pm$ 0.034   & 202 $\pm$ 210     & --                 & --                  & --                  & --              \\
-    BP $k{=}3$ $\kappa{=}0$  & 1.39 $\pm$ 13.24    & 179 $\pm$ 201     & 119 $\pm$ 807      & 129 $\pm$ 831       & 87 $\pm$ 311        & 0.83 $\pm$ 9.88 \\
-    BP $k{=}3$ $\kappa{=}1$  & 1.47 $\pm$ 13.71    & 179 $\pm$ 201     & 121 $\pm$ 772      & 132 $\pm$ 796       & 90 $\pm$ 308        & 0.87 $\pm$ 10.4 \\
-    BP $k{=}3$ $\kappa{=}2$  & 10.3 $\pm$ 53.1     & 180 $\pm$ 202     & 81 $\pm$ 429       & 1106 $\pm$ 5877     & 1107 $\pm$ 5868     & 6.26 $\pm$ 36.3 \\
-    BP $k{=}4$ $\kappa{=}0$  & 9.2 $\pm$ 36.5      & 200 $\pm$ 210     & 867 $\pm$ 2239     & 915 $\pm$ 2292      & 491 $\pm$ 670       & 8.55 $\pm$ 34.8 \\
-    BP $k{=}4$ $\kappa{=}1$  & 28.2 $\pm$ 79.7     & 200 $\pm$ 210     & 1549 $\pm$ 3593    & 1618 $\pm$ 3697     & 756 $\pm$ 1348      & 26.9 $\pm$ 76.8 \\
-    BP $k{=}4$ $\kappa{=}2$  & 47.9 $\pm$ 103.3    & 200 $\pm$ 210     & 1363 $\pm$ 3061    & 3795 $\pm$ 9691     & 3300 $\pm$ 9483     & 44.1 $\pm$ 95.6 \\
-    BP $k{=}5$ $\kappa{=}0$  & 66.3 $\pm$ 109.7    & 202 $\pm$ 210     & 3235 $\pm$ 4689    & 3345 $\pm$ 4807     & 1343 $\pm$ 1588     & 63.0 $\pm$ 105.3 \\
-    BP $k{=}5$ $\kappa{=}1$  & 92.4 $\pm$ 130.6    & 202 $\pm$ 210     & 3799 $\pm$ 5311    & 3961 $\pm$ 5485     & 1992 $\pm$ 2825     & 88.4 $\pm$ 126.3 \\
-    BP $k{=}5$ $\kappa{=}2$  & 96.0 $\pm$ 131.8    & 202 $\pm$ 210     & 3197 $\pm$ 4493    & 4409 $\pm$ 7318     & 3326 $\pm$ 6744     & 90.8 $\pm$ 126.7 \\
+    \multicolumn{7}{l}{\textit{$k = 3$}} \\
+    BFS $d{=}1$              & 0.02 $\pm$ 0.01  & 1 $\pm$ 0     & --                 & --                  & --                  & --              \\
+    AvgDeg                   & 0.05 $\pm$ 0.04  & 202 $\pm$ 210 & --                 & --                  & --                  & --              \\
+    BP $\kappa{=}0$          & 1.54 $\pm$ 15.19 & 179 $\pm$ 201 & 121 $\pm$ 837      & 131 $\pm$ 861       & 87 $\pm$ 315        & 0.93 $\pm$ 11.50 \\
+    BP $\kappa{=}1$          & 1.47 $\pm$ 13.71 & 179 $\pm$ 201 & 121 $\pm$ 772      & 132 $\pm$ 796       & 90 $\pm$ 308        & 0.87 $\pm$ 10.4 \\
+    BP $\kappa{=}2$          & 10.3 $\pm$ 53.1  & 180 $\pm$ 202 & 81 $\pm$ 429       & 1106 $\pm$ 5876     & 1106 $\pm$ 5868     & 6.26 $\pm$ 36.3 \\
+    \midrule
+    \multicolumn{7}{l}{\textit{$k = 4$}} \\
+    BFS $d{=}1$              & 0.02 $\pm$ 0.01  & 1 $\pm$ 1     & --                 & --                  & --                  & --              \\
+    AvgDeg                   & 0.05 $\pm$ 0.04  & 202 $\pm$ 210 & --                 & --                  & --                  & --              \\
+    BP $\kappa{=}0$          & 9.85 $\pm$ 38.12 & 200 $\pm$ 210 & 833 $\pm$ 2025     & 881 $\pm$ 2079      & 492 $\pm$ 677       & 9.21 $\pm$ 36.31 \\
+    BP $\kappa{=}1$          & 28.2 $\pm$ 79.7  & 200 $\pm$ 210 & 1549 $\pm$ 3593    & 1618 $\pm$ 3696     & 756 $\pm$ 1348      & 26.9 $\pm$ 76.8 \\
+    BP $\kappa{=}2$          & 47.9 $\pm$ 103.3 & 200 $\pm$ 210 & 1363 $\pm$ 3061    & 3794 $\pm$ 9691     & 3300 $\pm$ 9483     & 44.1 $\pm$ 95.6 \\
+    \midrule
+    \multicolumn{7}{l}{\textit{$k = 5$}} \\
+    BFS $d{=}1$              & 0.02 $\pm$ 0.01  & 2 $\pm$ 1     & --                 & --                  & --                  & --              \\
+    AvgDeg                   & 0.05 $\pm$ 0.04  & 202 $\pm$ 210 & --                 & --                  & --                  & --              \\
+    BP $\kappa{=}0$          & 66.7 $\pm$ 110.0 & 202 $\pm$ 210 & 2967 $\pm$ 4275    & 3079 $\pm$ 4392     & 1291 $\pm$ 1477     & 63.2 $\pm$ 105.6 \\
+    BP $\kappa{=}1$          & 92.4 $\pm$ 130.6 & 202 $\pm$ 210 & 3799 $\pm$ 5311    & 3961 $\pm$ 5485     & 1992 $\pm$ 2825     & 88.4 $\pm$ 126.3 \\
+    BP $\kappa{=}2$          & 96.0 $\pm$ 131.8 & 202 $\pm$ 210 & 3197 $\pm$ 4493    & 4409 $\pm$ 7318     & 3326 $\pm$ 6744     & 90.8 $\pm$ 126.7 \\
     \bottomrule
   \end{tabular}
   \end{center}
 
   \vfill
 
-  \scriptsize BB = B\&B nodes; LP = LP solves; cuts = cuts added; $t_{\text{LP}}$ = LP-solve time.
+  \scriptsize BP soft cap $60$ s, hard cap $300$ s.
 \end{frame}
 
 \begin{frame}{Exp 3: scope and prediction rule}
@@ -722,313 +519,130 @@ University of Illinois Urbana-Champaign \\
 \end{frame}
 
 \begin{frame}{Exp 3: tuning on val}
-  Macro precision, recall, F1 on val (Cora-ML, 402 queries), single Gurobi seed.
+  Cora-ML val ($402$ queries). Mean $\pm$ bootstrap std.
 
-  \vfill
-
-  \scriptsize
+  \tiny
   \begin{center}
-  \begin{tabular}{llrrr}
+  \begin{tabular}{llll}
     \toprule
-    Method & params                       & P     & R     & F1    \\
+    Method                       & P     & R     & F1 \\
     \midrule
-    BFS    & $d = 1$                      & \underline{\textbf{0.836}} & \underline{\textbf{0.832}} & \underline{\textbf{0.826}} \\
-    BFS    & $d = 2$                      & 0.802 & 0.800 & 0.796 \\
-    BFS    & $d = 3$                      & 0.781 & 0.764 & 0.763 \\
+    \multicolumn{4}{l}{\textit{$k = 3$}} \\
+    BFS $d = 1$                  & \underline{0.836 $\pm$ 0.019} & \underline{0.832 $\pm$ 0.020} & \underline{0.826 $\pm$ 0.020} \\
+    AvgDeg                       & 0.714 $\pm$ 0.025 & 0.540 $\pm$ 0.024 & 0.558 $\pm$ 0.026 \\
+    BP $\kappa = 0$              & 0.797 $\pm$ 0.021 & 0.787 $\pm$ 0.022 & 0.782 $\pm$ 0.022 \\
+    BP $\kappa = 1$              & 0.799 $\pm$ 0.020 & 0.790 $\pm$ 0.021 & 0.785 $\pm$ 0.021 \\
+    BP $\kappa = 2$              & 0.801 $\pm$ 0.020 & 0.794 $\pm$ 0.021 & 0.785 $\pm$ 0.022 \\
     \midrule
-    AvgDeg & ---                          & \underline{0.714} & \underline{0.540} & \underline{0.558} \\
+    \multicolumn{4}{l}{\textit{$k = 4$}} \\
+    BFS $d = 1$                  & \underline{\textbf{0.838 $\pm$ 0.019}} & \underline{\textbf{0.838 $\pm$ 0.020}} & \underline{\textbf{0.834 $\pm$ 0.020}} \\
+    AvgDeg                       & 0.717 $\pm$ 0.024 & 0.544 $\pm$ 0.024 & 0.563 $\pm$ 0.026 \\
+    BP $\kappa = 0$              & 0.762 $\pm$ 0.021 & 0.683 $\pm$ 0.025 & 0.694 $\pm$ 0.025 \\
+    BP $\kappa = 1$              & 0.808 $\pm$ 0.020 & 0.789 $\pm$ 0.021 & 0.789 $\pm$ 0.022 \\
+    BP $\kappa = 2$              & 0.827 $\pm$ 0.020 & 0.810 $\pm$ 0.021 & 0.811 $\pm$ 0.021 \\
     \midrule
-    BP     & $k = 3,\ \kappa = 0$         & 0.797 & 0.787 & 0.782 \\
-    BP     & $k = 3,\ \kappa = 1$         & 0.799 & 0.790 & 0.785 \\
-    BP     & $k = 3,\ \kappa = 2$         & 0.801 & 0.794 & 0.785 \\
-    BP     & $k = 4,\ \kappa = 0$         & 0.762 & 0.683 & 0.694 \\
-    BP     & $k = 4,\ \kappa = 1$         & 0.808 & 0.789 & 0.789 \\
-    BP     & $k = 4,\ \kappa = 2$         & \underline{0.827} & \underline{0.810} & \underline{0.811} \\
-    BP     & $k = 5,\ \kappa = 0$         & 0.726 & 0.616 & 0.628 \\
-    BP     & $k = 5,\ \kappa = 1$         & 0.772 & 0.744 & 0.741 \\
-    BP     & $k = 5,\ \kappa = 2$         & 0.795 & 0.784 & 0.780 \\
+    \multicolumn{4}{l}{\textit{$k = 5$}} \\
+    BFS $d = 1$                  & \underline{0.819 $\pm$ 0.021} & \underline{0.820 $\pm$ 0.020} & \underline{0.814 $\pm$ 0.021} \\
+    AvgDeg                       & 0.717 $\pm$ 0.026 & 0.544 $\pm$ 0.025 & 0.563 $\pm$ 0.028 \\
+    BP $\kappa = 0$              & 0.725 $\pm$ 0.023 & 0.616 $\pm$ 0.026 & 0.628 $\pm$ 0.026 \\
+    BP $\kappa = 1$              & 0.772 $\pm$ 0.024 & 0.744 $\pm$ 0.023 & 0.741 $\pm$ 0.024 \\
+    BP $\kappa = 2$              & 0.795 $\pm$ 0.022 & 0.784 $\pm$ 0.021 & 0.780 $\pm$ 0.022 \\
     \bottomrule
   \end{tabular}
   \end{center}
 
-  \vfill
-
-  \scriptsize \underline{Underline} = per-family best per column; \textbf{bold} = overall best per column. BP soft cap $60$ s, hard cap $300$ s.
+  \scriptsize \underline{Section best} (max per column within $k$); \textbf{overall best} (max across $k$).
 \end{frame}
 
 \begin{frame}{Exp 3: evaluation on test}
-  Best per-method val params applied to test split (Cora-ML, 402 queries), single Gurobi seed.
+  Per-method val-best applied to Cora-ML test ($402$ queries). Mean $\pm$ bootstrap std.
 
   \vfill
 
   \scriptsize
   \begin{center}
-  \begin{tabular}{llrrr}
+  \begin{tabular}{lllll}
     \toprule
-    Method & val-best params     & P     & R     & F1    \\
+    Method & val-best params           & P     & R     & F1 \\
     \midrule
-    BFS    & $d = 1$              & 0.876 & 0.852 & 0.856 \\
-    AvgDeg & ---                  & 0.770 & 0.575 & 0.599 \\
-    BP     & $k = 4,\ \kappa = 2$  & 0.818 & 0.815 & 0.811 \\
+    BFS    & $d = 1,\ k = 4$           & \textbf{0.871 $\pm$ 0.016} & \textbf{0.849 $\pm$ 0.020} & \textbf{0.852 $\pm$ 0.019} \\
+    AvgDeg & $k = 4$                   & 0.772 $\pm$ 0.021 & 0.579 $\pm$ 0.026 & 0.603 $\pm$ 0.026 \\
+    BP     & $k = 4,\ \kappa = 2$      & 0.818 $\pm$ 0.023 & 0.815 $\pm$ 0.022 & 0.811 $\pm$ 0.022 \\
     \bottomrule
   \end{tabular}
   \end{center}
 
-  \vfill
-
-  \scriptsize BP val-best is $(k, \kappa) = (4, 2)$.
-\end{frame}
-
-\begin{frame}{Exp 3: hard subset motivation}
-  The full test split mixes two regimes.
-
-  \vfill
-
-  \begin{itemize}
-    \item easy regime: the immediate citations already carry the
-          right label, so depth-1 BFS is hard to beat
-    \item hard regime: the immediate citations carry the wrong label,
-          so the retrieval has to look further
-  \end{itemize}
-
-  \vfill
-
-  BFS-hard test subset:
-  \begin{itemize}
-    \item test nodes where the depth-1 BFS vote disagrees with the
-          true label
-    \item 59 nodes on Cora-ML
-  \end{itemize}
 \end{frame}
 
 \begin{frame}{Exp 3: evaluation on the hard subset}
-  Best per-method val params applied to BFS-hard test nodes (Cora-ML, 59 queries). Conditional diagnostic: subset selected by test labels, so BFS $d=1$ scores 0 by construction.
+  $59$ Cora-ML test nodes where the plain depth-$1$ BFS vote is wrong. Mean $\pm$ bootstrap std.
 
   \vfill
 
   \scriptsize
   \begin{center}
-  \begin{tabular}{llrrr}
+  \begin{tabular}{lllll}
     \toprule
-    Method & val-best params      & P     & R     & F1    \\
+    Method & val-best params           & P     & R     & F1 \\
     \midrule
-    BFS    & $d = 1$              & 0.000 & 0.000 & 0.000 \\
-    AvgDeg & ---                  & 0.269 & 0.251 & 0.146 \\
-    BP     & $k = 4,\ \kappa = 2$ & 0.174 & 0.282 & 0.190 \\
+    BFS    & $d = 1,\ k = 4$           & 0.074 $\pm$ 0.041 & 0.113 $\pm$ 0.063 & 0.079 $\pm$ 0.039 \\
+    AvgDeg & $k = 4$                   & \textbf{0.269 $\pm$ 0.092} & 0.251 $\pm$ 0.077 & 0.146 $\pm$ 0.061 \\
+    BP     & $k = 4,\ \kappa = 2$      & 0.174 $\pm$ 0.051 & \textbf{0.282 $\pm$ 0.094} & \textbf{0.190 $\pm$ 0.053} \\
     \bottomrule
   \end{tabular}
   \end{center}
 
   \vfill
 
-  \scriptsize BP val-best is $(k, \kappa) = (4, 2)$. Different BP cells score very differently on hard cases.
-\end{frame}
-
-\section{CiteSeer cross-check}
-
-\begin{frame}{CiteSeer: pool}
-  \begin{itemize}
-    \item train: $3{,}319$; val: $455$; test: $456$
-    \item pure sources with out-degree $\ge 2$, same protocol as Cora-ML
-    \item BFS-hard subset: $15$ test nodes
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{CiteSeer: cluster quality on val + test}
-  Mean $\pm$ std over val + test (911 queries), CiteSeer, single seed.
-
-  \vfill
-
-  \tiny
-  \begin{center}
-  \begin{tabular}{lcccccc}
-    \toprule
-    Method & size & $\lambda_2$ & ncut & cond. & avg.deg & dens. \\
-    \midrule
-    BFS $d=1$                & 3.7 $\pm$ 1.2  & 1.05 $\pm$ 0.27 & 1.30 $\pm$ 0.14 & 0.71 $\pm$ 0.21 & 0.91 $\pm$ 0.29 & 0.36 $\pm$ 0.10 \\
-    BFS $d=2$                & 5.8 $\pm$ 3.1  & 0.66 $\pm$ 0.39 & 1.18 $\pm$ 0.14 & 0.71 $\pm$ 0.21 & 1.06 $\pm$ 0.35 & 0.27 $\pm$ 0.12 \\
-    BFS $d=3$                & 6.8 $\pm$ 4.6  & 0.59 $\pm$ 0.43 & 1.17 $\pm$ 0.15 & 0.71 $\pm$ 0.21 & 1.07 $\pm$ 0.33 & 0.26 $\pm$ 0.13 \\
-    AvgDeg                   & 5.2 $\pm$ 2.7  & 0.78 $\pm$ 0.45 & 1.22 $\pm$ 0.19 & 0.70 $\pm$ 0.22 & 1.12 $\pm$ 0.42 & 0.32 $\pm$ 0.13 \\
-    BP $k{=}3$ $\kappa{=}0$  & 3.0 $\pm$ 0.3  & 1.24 $\pm$ 0.25 & 1.41 $\pm$ 0.09 & 0.73 $\pm$ 0.21 & 0.87 $\pm$ 0.22 & 0.43 $\pm$ 0.09 \\
-    BP $k{=}3$ $\kappa{=}2$  & 3.1 $\pm$ 0.3  & 1.24 $\pm$ 0.25 & 1.41 $\pm$ 0.09 & 0.73 $\pm$ 0.21 & 0.86 $\pm$ 0.22 & 0.42 $\pm$ 0.09 \\
-    BP $k{=}4$ $\kappa{=}0$  & 3.8 $\pm$ 0.5  & 0.93 $\pm$ 0.29 & 1.26 $\pm$ 0.11 & 0.71 $\pm$ 0.22 & 1.00 $\pm$ 0.26 & 0.36 $\pm$ 0.09 \\
-    BP $k{=}4$ $\kappa{=}2$  & 3.8 $\pm$ 0.5  & 0.93 $\pm$ 0.30 & 1.27 $\pm$ 0.10 & 0.72 $\pm$ 0.22 & 0.98 $\pm$ 0.26 & 0.36 $\pm$ 0.09 \\
-    BP $k{=}5$ $\kappa{=}0$  & 4.4 $\pm$ 0.9  & 0.78 $\pm$ 0.33 & 1.21 $\pm$ 0.14 & 0.71 $\pm$ 0.21 & 1.06 $\pm$ 0.31 & 0.33 $\pm$ 0.09 \\
-    BP $k{=}5$ $\kappa{=}2$  & 4.4 $\pm$ 0.9  & 0.78 $\pm$ 0.34 & 1.22 $\pm$ 0.12 & 0.71 $\pm$ 0.21 & 1.04 $\pm$ 0.32 & 0.32 $\pm$ 0.10 \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \vfill
-
-  \scriptsize $\kappa = 1$ rows match $\kappa = 0$ at every $k$ on CiteSeer (constraint not binding), omitted.
-\end{frame}
-
-\begin{frame}{CiteSeer: cost on val + test}
-  Mean $\pm$ std over val + test (911 queries), CiteSeer, single seed.
-
-  \vfill
-
-  \tiny
-  \begin{center}
-  \begin{tabular}{lcccccc}
-    \toprule
-    Method & wall (s) & queries & BB nodes & LP solves & cuts & $t_{\text{LP}}$ (s) \\
-    \midrule
-    BFS $d=1$                & 0.02 $\pm$ 0.00  & 1 $\pm$ 0   & --              & --              & --              & --              \\
-    BFS $d=2$                & 0.01 $\pm$ 0.00  & 4 $\pm$ 1   & --              & --              & --              & --              \\
-    BFS $d=3$                & 0.02 $\pm$ 0.01  & 6 $\pm$ 3   & --              & --              & --              & --              \\
-    AvgDeg                   & 0.01 $\pm$ 0.00  & 7 $\pm$ 5   & --              & --              & --              & --              \\
-    BP $k{=}3$ $\kappa{=}0$  & 0.02 $\pm$ 0.01  & 7 $\pm$ 5   & 6 $\pm$ 12      & 8 $\pm$ 13      & 12 $\pm$ 18     & 0.00 $\pm$ 0.00 \\
-    BP $k{=}3$ $\kappa{=}2$  & 0.35 $\pm$ 9.94  & 7 $\pm$ 5   & 7 $\pm$ 13      & 66 $\pm$ 1742   & 70 $\pm$ 1743   & 0.29 $\pm$ 8.85 \\
-    BP $k{=}4$ $\kappa{=}0$  & 0.02 $\pm$ 0.01  & 7 $\pm$ 5   & 8 $\pm$ 17      & 11 $\pm$ 20     & 28 $\pm$ 44     & 0.00 $\pm$ 0.01 \\
-    BP $k{=}4$ $\kappa{=}2$  & 1.33 $\pm$ 19.85 & 7 $\pm$ 5   & 9 $\pm$ 18      & 259 $\pm$ 3735  & 275 $\pm$ 3736  & 1.17 $\pm$ 17.6 \\
-    BP $k{=}5$ $\kappa{=}0$  & 0.02 $\pm$ 0.06  & 7 $\pm$ 5   & 10 $\pm$ 25     & 13 $\pm$ 30     & 46 $\pm$ 80     & 0.01 $\pm$ 0.03 \\
-    BP $k{=}5$ $\kappa{=}2$  & 1.02 $\pm$ 17.20 & 7 $\pm$ 5   & 12 $\pm$ 31     & 208 $\pm$ 3343  & 240 $\pm$ 3345  & 0.89 $\pm$ 15.3 \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \vfill
-
-  \scriptsize CiteSeer is roughly $100\times$ cheaper than Cora-ML on every BP cell; hard caps almost never fire.
-\end{frame}
-
-\begin{frame}{CiteSeer: tuning on val}
-  Macro precision, recall, F1 on val (CiteSeer, 455 queries), single Gurobi seed.
-
-  \vfill
-
-  \scriptsize
-  \begin{center}
-  \begin{tabular}{llrrr}
-    \toprule
-    Method & params               & P     & R     & F1    \\
-    \midrule
-    BFS    & $d = 1$              & 0.939 & 0.952 & 0.943 \\
-    BFS    & $d = 2$              & \underline{0.945} & 0.947 & \underline{0.944} \\
-    BFS    & $d = 3$              & 0.943 & 0.946 & 0.943 \\
-    \midrule
-    AvgDeg & ---                  & \underline{0.944} & \underline{0.948} & \underline{0.943} \\
-    \midrule
-    BP     & $k = 3,\ \kappa = 2$ & 0.939 & 0.952 & 0.942 \\
-    BP     & $k = 4,\ \kappa = 2$ & \underline{\textbf{0.946}} & 0.947 & \underline{\textbf{0.945}} \\
-    BP     & $k = 5,\ \kappa = 2$ & 0.943 & \textbf{0.949} & 0.944 \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \vfill
-
-  \scriptsize $\kappa = 0,1$ rows omitted (within $\le 0.005$ of $\kappa = 2$ at every $k$). All three families within $0.005$ F1.
-\end{frame}
-
-\begin{frame}{CiteSeer: evaluation on test and hard subset}
-  Best per-method val params applied to test (456 queries) and to BFS-hard test ($15$ queries).
-
-  \vfill
-
-  \scriptsize
-  \begin{center}
-  \begin{tabular}{llrrrrrr}
-    \toprule
-    & & \multicolumn{3}{c}{full test} & \multicolumn{3}{c}{BFS-hard ($n=15$)} \\
-    \cmidrule(lr){3-5} \cmidrule(lr){6-8}
-    Method & val-best params      & P     & R     & F1    & P     & R     & F1    \\
-    \midrule
-    BFS    & $d = 2$              & 0.938 & 0.948 & 0.942 & 0.000 & 0.000 & 0.000 \\
-    AvgDeg & ---                  & 0.932 & 0.943 & 0.937 & 0.067 & 0.025 & 0.036 \\
-    BP     & $k = 4,\ \kappa = 2$ & 0.938 & 0.946 & 0.942 & 0.000 & 0.000 & 0.000 \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \vfill
-
-  \scriptsize Families tie within noise on full test. Hard subset is tiny ($n=15$); macro F1 is high-variance.
+  \scriptsize \textbf{Bold} = max per column.
 \end{frame}
 
 \section{OpenAlex frontend}
 
-\begin{frame}{From simulation to live citation graph}
+\begin{frame}{Same solver, live oracle}
   \begin{itemize}
-    \item the experiments so far ran on a local CSV of Cora-ML
-    \item the same solver speaks to OpenAlex, an open citation
-          database
-    \item one query returns a paper's outgoing references and (capped)
-          incoming citations
-    \item every node materialised by the solver is fetched live
-    \item lazy oracle keeps API cost proportional to the papers BP
-          pulls in
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Web frontend}
-  \begin{itemize}
-    \item input: a paper identifier as the query
-    \item active set and frontier evolve in real time as the solver runs
-    \item dense community + boundary citations rendered as a graph
-    \item per-paper metadata pulled live from OpenAlex
-    \item fits as a reading-list builder around a single query paper
+    \item Solver is oracle-agnostic; swap simulation client for an OpenAlex client.
+    \item Each oracle call fetches one paper's outgoing references and capped incoming citations.
+    \item Nodes are materialized lazily; API cost scales with what BP actually pulls in.
+    \item Density, $\kappa$-connectivity, grow-to-$k$ behaviour unchanged.
   \end{itemize}
 \end{frame}
 
 \section{Conclusion}
 
 \begin{frame}{Main interpretation}
+  Cora-ML; cluster quality and cost on $n = 804$ (val + test); test F1 on $n = 402$; hard subset on $n = 59$.
+
+  \vfill
+
   \begin{itemize}
-    \item \textbf{BP wins internal geometry.} Densest community at smallest size (density $\approx 0.5$, $\lambda_2 \ge 0.77$, ncut $\ge 1.20$). Tight cliques anchored at $q$.
-    \item \textbf{AvgDeg wins external isolation and raw avg degree.} cond.\ $0.69$ and avg.deg $3.02$; pair density and $\lambda_2$ drop accordingly.
-    \item \textbf{BFS wins classification on Cora-ML} because test papers are pure sources whose direct citations are in the train pool. Depth 1 F1 $= 0.856$ on full test.
-    \item \textbf{On the BFS-hard slice the ranks flip.} BP $k = 4,\ \kappa = 2$ scores F1 $= 0.190$, AvgDeg $0.146$, BFS depth 1 $= 0$ by construction.
-    \item \textbf{Cost is workload-heterogeneous.} BFS sub-ms; AvgDeg $\sim 40$ms; BP median fast but mean blows up at $\kappa = 2$ (timeouts on hardest queries).
+    \item \textbf{BP wins internal geometry at every $k$}: BP$_{\kappa=2}$ leads $\lambda_2$ and ncut, BP$_{\kappa=0}$ leads edge density.
+    \item \textbf{AvgDeg picks the densest set by avg degree}, but via much larger sets ($|S| \approx 21$); per-pair edge density drops.
+    \item \textbf{Same-$k$ test F1}: BFS leads ($0.852$), BP runs second ($0.811$), AvgDeg trails ($0.603$) as its large sets dilute the majority vote.
+    \item \textbf{Hard subset}: BFS near-zero by construction ($0.079$), AvgDeg middle ($0.146$), BP leads ($0.190$).
+    \item \textbf{Cost}: BFS and AvgDeg fast; BP grows steeply with $k$ and $\kappa$.
   \end{itemize}
 
   \vfill
 
-  \textbf{Claim} BP is a dense-community retriever. Classification F1 follows from the geometry, not the other way around.
+  \textbf{Claim.} BP is a dense-community retriever; classification F1 is a downstream readout of the retrieved geometry.
 \end{frame}
 
 \begin{frame}{Limitations}
   \begin{itemize}
-    \item Reported numbers cover Cora\_ML and CiteSeer. DBLP and Cora runs
-          are in progress.
-    \item The temporal split makes one-hop BFS unusually strong: test nodes
-          are pure sources whose direct citations are in the train set.
-    \item The hard subset is a conditional diagnostic on test queries where depth-1 BFS fails; BFS depth 1 scores 0 by construction.
-    \item BP relies on Gurobi.
-    \item Exact global optimality is over the discovered graph region; the
-          oracle interface limits what BP can reason about.
-    \item OpenAlex mode depends on API coverage and latency.
+    \item Numbers only cover Cora\_ML; more datasets in progress.
+    \item Temporal split makes one-hop BFS match the homophily structure: test nodes are pure sources whose direct citations sit in the train set. The hard subset is a conditional diagnostic on queries where the plain depth-$1$ BFS majority vote (no grow-to-$k$) is wrong, so the BFS solver scores near-zero there by construction.
+    \item Exact optimality is over the discovered graph region; the oracle interface bounds what BP can reason about.
+    \item Solver limits (time, branch-and-bound nodes, Dinkelbach / column-generation iterations) return possibly-suboptimal incumbents on the tail.
   \end{itemize}
 \end{frame}
 
 \begin{frame}{Next steps}
   \begin{itemize}
-    \item Multi-dataset classification experiments
-    \item Synthetic planted-community benchmarks
-    \item Ablate:
-          \begin{itemize}
-            \item $\kappa$ cuts
-            \item triangle cuts
-            \item branching rule
-            \item pruning
-            \item batch pricing
-          \end{itemize}
-    \item Add latency-aware OpenAlex experiments
-    \item Explore hybrid objectives:
-          \[
-            \text{density} + \text{label purity} + \text{semantic similarity}
-          \]
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Takeaways}
-  \begin{itemize}
-    \item Query-anchored dense community search is a different task from BFS classification. BP optimises internal density; BFS reads local label structure; AvgDeg picks the broadest densest set.
-    \item BP returns the densest, tightest communities (density $0.5$, $\lambda_2 \ge 0.77$). AvgDeg dominates external isolation. BFS dominates classification F1 on Cora-ML by exploiting local-label structure.
-    \item On the BFS-hard test slice BP narrowly beats AvgDeg ($0.190$ vs $0.146$); BFS depth 1 scores zero by construction.
-    \item BP cost is long-tailed: median fast, tail dominated by hard-cap timeouts at $\kappa = 2$ and $k = 4$.
+    \item Tighter LP relaxation
+    \item Inverse-out-degree edge weights
+    \item Warm-start with densest-subgraph incumbent
+    \item Incorporate semantic information
   \end{itemize}
 \end{frame}
 
@@ -1080,7 +694,7 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{Question} If $f \in F$ joins $A$, does the LP improve?
+  \textbf{Question.} If $f \in F$ joins $A$, does the LP improve?
 \end{frame}
 
 \begin{frame}{A2.2. Reduced cost: probe}
@@ -1224,7 +838,7 @@ University of Illinois Urbana-Champaign \\
 % ── A4. $\kappa$-cut inequality (refs: $\kappa$-connectivity cuts) ───────────
 
 \begin{frame}{A4. $\kappa$-cut inequality: derivation}
-  \textbf{Menger's theorem (undirected)} For $t \in S$,
+  \textbf{Menger's theorem (undirected).} For $t \in S$,
   \[
     \max(\text{edge-disjoint } q\text{-}t \text{ paths in } E(S)) \;=\; \min_{\substack{R \ni q \\ R \not\ni t}} |\delta(R) \cap E(S)|.
   \]
@@ -1232,7 +846,7 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{LP encoding} $y_{uv} = 1$ iff edge $(u,v)$ internal to $S$.
+  \textbf{LP encoding.} $y_{uv} = 1$ iff edge $(u,v)$ internal to $S$.
   \begin{itemize}
     \item $x_t = 1$: need $\sum_{(u,v) \in \delta(R)} y_{uv} \ge \kappa$
     \item $x_t = 0$: no requirement
@@ -1244,7 +858,111 @@ University of Illinois Urbana-Champaign \\
 
   \vfill
 
-  \textbf{Validity} Holds at every $\kappa$-edge-connected integer $S$, so no feasible solution is excluded.
+  \textbf{Validity.} Holds at every $\kappa$-edge-connected integer $S$, so no feasible solution is excluded.
 \end{frame}
+
+% ── A5. LP formulation reference (refs: Dinkelbach transform, RMP) ───────────
+
+\begin{frame}{A5.1. Nonlinear fractional 0-1 program}
+  Let $x_v \in \{0,1\}$ indicate $v \in S$ and $y_{uv} \in \{0,1\}$ indicate edge $(u,v)$ is internal:
+  \begin{align*}
+    \max \quad          &
+    \frac{\sum_{(u,v)\in E} y_{uv}}
+    {\left(\sum_{u\in V}x_u\right)\left(\sum_{u\in V}x_u - 1\right)} \\
+    \mathrm{s.t.} \quad & x_q = 1 \\
+                        & \sum_{u\in V} x_u \ge k \\
+                        & y_{uv} \le x_u,\quad y_{uv}\le x_v \quad \forall (u,v)\in E
+  \end{align*}
+  The lower bound $y_{uv}\ge x_u+x_v-1$ is not needed because $y$ has positive objective coefficient.
+\end{frame}
+
+\begin{frame}{A5.2. Dinkelbach parametric subproblem (bilinear form)}
+  At parameter $\lambda$:
+  \begin{align*}
+    Z(\lambda) = \max \quad &
+    \sum_{(u,v)\in E} y_{uv} - \lambda \left[ \left(\sum_{u\in V} x_u\right)^{\!2} - \sum_{u\in V} x_u \right] \\
+    \mathrm{s.t.} \quad     &
+    x_q = 1                                                                                                    \\
+                            & \sum_{u\in V} x_u \ge k                                                          \\
+                            & y_{uv} \le x_u,\quad y_{uv} \le x_v \quad \forall (u,v) \in E                    \\
+                            & x \in \{0,1\}^{|V|},\ y \in \{0,1\}^{|E|}
+  \end{align*}
+\end{frame}
+
+\begin{frame}{A5.3. Linearizing the penalty}
+  $|S|(|S|-1) = (\sum_v x_v)^2 - \sum_v x_v$. For binary $x$, $x_v^2 = x_v$, so
+  \[
+    |S|(|S|-1) = 2\sum_{u<v} x_u x_v.
+  \]
+  Introduce pair variable $w_{uv} \approx x_u x_v$ with $w_{uv} \ge x_u + x_v - 1$. Since $w$ has negative coefficient, the lower bound is enough at integer solutions.
+\end{frame}
+
+\begin{frame}{A5.4. Linearized parametric subproblem}
+  At parameter $\lambda$:
+  \begin{align*}
+    Z(\lambda) = \max \quad &
+    \sum_{(u,v)\in E} y_{uv} - 2\lambda \sum_{u<v} w_{uv}                                                \\
+    \mathrm{s.t.} \quad     &
+    x_q = 1                                                                                              \\
+                            & \sum_{u\in V} x_u \ge k                                                    \\
+                            & y_{uv} \le x_u,\quad y_{uv} \le x_v \quad \forall (u,v) \in E              \\
+                            & w_{uv} \ge x_u + x_v - 1 \quad \forall u<v                                 \\
+                            & x \in \{0,1\}^{|V|},\ y \in \{0,1\}^{|E|},\ w \in \{0,1\}^{\binom{|V|}{2}}
+  \end{align*}
+\end{frame}
+
+\begin{frame}{A5.5. Restricted Master Problem}
+  For active set $A$:
+  \begin{align*}
+    \max \quad         &
+    \sum_{(u,v)\in E(A)} y_{uv}
+    -2\lambda\sum_{\substack{u,v\in A\\u<v}}w_{uv}         \\
+    \mathrm{s.t.}\quad &
+    x_q = 1                                                \\
+                       & \sum_{u\in A}x_u \ge k
+    \quad (\text{dual: }\pi)                               \\
+                       & y_{uv}\le x_u,\quad y_{uv}\le x_v
+    \quad \forall (u,v)\in E(A)                            \\
+                       & w_{uv}\ge x_u+x_v-1
+    \quad \forall u<v \in A                                \\
+                       & 0\le x,y,w\le 1
+  \end{align*}
+\end{frame}
+
+\begin{frame}{A5.6. Pruning integer incumbents}
+  Since $|S| \ge k$, integer solutions may exceed $k$. Greedily remove nodes whose removal strictly improves the parametric objective.
+
+  \vfill
+
+  \begin{itemize}
+    \item candidate: node with the smallest internal degree (weakest edge contribution)
+    \item never remove $q$
+    \item stop at $|S| = k$ or when no single removal helps
+    \item preserve connectivity when $\kappa > 0$
+  \end{itemize}
+
+  \vfill
+
+  \textbf{Effect.} Stronger incumbent, smaller returned community.
+\end{frame}
+
+\begin{frame}{A6. Exp 1 protocol detail}
+  \textbf{Brute-force oracle}
+  \begin{itemize}
+    \item enumerate every $S \ni q$ with $|S| \ge k$
+    \item for each $(k, \kappa)$, record the maximum-density $S$ with $\lambda(S) \ge \kappa$
+    \item mark cells with no feasible $S$ as infeasible
+  \end{itemize}
+
+  \vfill
+
+  \textbf{Solver}
+  \begin{itemize}
+    \item run on every (method, $k$, $\kappa$, seed) cell
+    \item no time, node, gap, or Dinkelbach limit
+    \item skip cells the brute force flagged infeasible (solver otherwise exhausts B\&B proving infeasibility; wall time blows up on sparse seeds)
+  \end{itemize}
+\end{frame}
+
 
 \end{document}

@@ -1,0 +1,358 @@
+================================================================
+Densest Community Search: 25-minute talk script
+================================================================
+Pace: ~150 words/min conversational; total budget ~25 min.
+Per slide: 30-90 sec depending on density. Section dividers ~5 sec.
+Detail slides moved to appendix A1-A5; defer to Q&A.
+================================================================
+
+
+-- Slide: Title (Densest Community Search) --
+
+Densest Community Search around a query paper, in directed
+citation networks. The-Anh Vu-Le at UIUC.
+
+
+-- Slide: Outline --
+
+Four parts: motivation and problem setup; the solver, branch-
+and-price with Dinkelbach; three experiments on Cora-ML; the
+OpenAlex live frontend; and a brief conclusion. Appendices A1
+through A5 carry derivations and detail tables.
+
+
+-- Section divider: Motivation and problem statements --
+
+First, what problem we solve.
+
+
+-- Slide: Motivation --
+
+Citation networks: nodes are papers, directed edges are
+citations. Pick a query paper q. We want a "good" community
+of papers around q: dense citation activity inside, query-
+anchored, with optional structural constraints. The naive
+baseline (take immediate citation neighbours) is not an
+optimization problem. We turn the retrieval into one.
+
+
+-- Slide: Oracle access --
+
+Edge convention: u to v means u cites v. The graph is large
+in practice; we never load it all. The solver only has 1-hop
+neighborhood queries. Each query for a paper v returns its
+outgoing references and its incoming citations. Incoming
+citations come with a cap because cited-by lists can be
+unbounded and need a maintained citation database, while
+references are read directly off the paper. The cap limits
+how much incoming-edge information we fetch per node.
+
+
+-- Slide: Combinatorial problem --
+
+Formal problem. Given a directed graph G, a query node q, and
+a minimum size k at least 3: maximize edge density |E(S)| over
+n choose 2, over subsets S containing q with size at least k.
+E(S) is the directed edges with both endpoints in S.
+
+
+-- Slide: Optional connectivity --
+
+Optional constraint: rooted kappa-edge-connectivity. For every
+selected node, at least kappa edge-disjoint paths from q to it
+in the underlying undirected graph. kappa equals zero disables
+the constraint. Enforced lazily by min-cut cuts inside the
+solver. The full 0-1 program is in appendix A5.0.
+
+
+-- Section divider: Approaches --
+
+How we solve.
+
+
+-- Slide: Dinkelbach transform --
+
+To handle the fractional objective: Dinkelbach. For a density
+estimate lambda, define Z of lambda as the max of |E(S)| minus
+lambda times the pair count. Property: lambda-star is the
+optimum density if and only if Z of lambda-star equals zero.
+If we find a set with positive Z, current lambda is too low;
+update lambda to the new density and iterate.
+
+
+-- Slide: Dinkelbach loop --
+
+Procedure. Step one: build a feasible set by BFS from q, prune,
+set lambda-one. Step two: solve the parametric integer
+subproblem at lambda-t. Step three: if Z is non-positive,
+terminate. Step four: otherwise update lambda to the new
+subgraph density, increment t, return to step two. Outer loop
+handles the fractional objective; the inner loop is branch-
+and-price. Appendix A5.1 through A5.3 spells out the
+subproblem and its linearization.
+
+
+-- Slide: Active set and frontier --
+
+To avoid loading the full graph, two maintained sets. A:
+active nodes already in the LP. F: frontier, neighbours of A
+not yet in the LP. The subgraph induced by A union F is kept
+up to date via oracle queries, so every internal edge is
+visible. Initialization: BFS rooted at q, each dequeued node
+oracle-queried and added to A, neighbours enter F, loop until
+|A| equals k. The RMP on A is in appendix A5.4.
+
+
+-- Slide: Column generation --
+
+Reduced cost of a frontier node f, given the RMP optimum and
+the size-constraint dual pi, has three terms: edge gain (the
+fractional degree of f into A), pair penalty proportional to
+lambda times the LP mass on A, and a size-dual correction
+minus pi. Pick the frontier node with highest reduced cost.
+If non-positive, the RMP is a valid upper bound and we stop.
+Otherwise promote the top-b frontier nodes (batched) into A
+and resolve. Derivation in appendix A2.
+
+
+-- Slide: Branch-and-bound --
+
+Each B&B node stores V-one fixed in and V-zero fixed out. At
+each node: apply bounds, run column generation, prune if the
+LP bound cannot beat the incumbent. If x is integral, accept
+as a candidate; otherwise branch. Branching rule: classify a
+fractional node by its fractional internal degree compared to
+2 lambda. Below 2 lambda is "hanging", branch zero-first.
+Above 2 lambda is "core", branch one-first. 2 lambda is the
+marginal pair-penalty rate. Root fixes x of q equals one.
+Derivation in A3.
+
+
+-- Slide: Triangle cuts --
+
+The LP can spread fractional x mass across three nodes while
+keeping pair variables w at zero, picking up edge mass without
+paying the penalty. Setting three x's to 0.5 illustrates this.
+The Boolean quadratic polytope cut blocks it: x_u + x_v + x_w
+minus the three w's at most 1. Valid for binary x and w =
+x_i x_j, separated only on fractional nodes, bounded per
+round.
+
+
+-- Slide: kappa-connectivity cuts --
+
+Lazy enforcement of kappa-edge-connectivity. On each integer
+candidate, scan target nodes via max-flow on the unit-capacity
+undirected support. At the first violating target, find the
+source-side min-cut R and add the cut inequality: sum of y
+over delta(R) is at least kappa times x_t. Re-solve and
+repeat. One cut per round. Validity proof and Menger's
+theorem in appendix A4.
+
+
+-- Slide: Practical considerations --
+
+For large active sets branch-and-price can be expensive.
+Early-stopping knobs: soft time limit (no-improvement cap,
+fires only with an incumbent), hard time limit (absolute
+wall-clock), node limit, gap tolerance. With any limit
+active, the LP bound is still a valid upper envelope. Lazy
+frontier materialization defers unqueried frontier adjacency
+fetches to the moment solo pricing finds no improving column.
+Post-processing pruning is in appendix A5.5.
+
+
+-- Slide: BFS baseline --
+
+Topology-only frontier expansion from q. Layered breadth-
+first: each dequeued node is oracle-queried, predecessors and
+successors enter the pool. Depth d bounds the number of
+layers explored. No density objective, no size constraint, no
+kappa-connectivity. Cheapest baseline: one oracle query per
+visited node, no flow, no LP. Output size grows with d.
+
+
+-- Slide: Average-degree baseline --
+
+AvgDeg: maximize |E(S)| over |S| over S containing q within a
+BFS-bounded local subgraph. No size or kappa-connectivity
+constraint. Solver: Goldberg's s-t max-flow densest-subgraph
+method, modified by forcing q in S via s-to-q capacity
+infinity, and materializing the local subgraph up front rather
+than lazily.
+
+
+-- Slide: Grow-to-k --
+
+To compare across methods at the same k, both baselines grow
+their output to at least k by greedy expansion: at each step
+add the pool node with the most neighbours inside the current
+set. BFS uses {q} as the seed, with depth d acting as a
+minimum. AvgDeg uses its optimum S-star as the seed and only
+fires when |S-star| is below k. Greedy heuristic; densest-at-
+least-k is NP-hard, no approximation guarantee.
+
+
+-- Section divider: Experiments --
+
+Three experiments.
+
+
+-- Slide: Exp 1: solver correctness on enumerable graphs --
+
+Correctness check on Erdos-Renyi graphs of n=20, edge
+probability p in {0.25, 0.50, 0.75}, seeds 0 through 4. Brute
+force enumerates every subset of size at least k. On the grid
+(k, kappa) in {3, 4, 5} cross {0, 1, 2}: AvgDeg matches BF on
+15 of 15 graphs; BP returned S satisfies the size and
+kappa-edge-connectivity constraints on 30 of 30 cells; edge
+density matches BF on every feasible cell; zero solver
+errors. Protocol detail in appendix A5.6.
+
+
+-- Slide: Dataset, split, methods --
+
+Real dataset: CitationFull Cora-ML, 2995 nodes, 8416 directed
+edges, 7 paper labels. Query pool: pure sources with out-
+degree at least 2, split into val 402 and test 402. Train
+pool of 2191 provides labels for the prediction rule and is
+never queried. Hard subset: 59 test nodes where depth-1 BFS
+predicts wrong. Three methods compared: BFS at depth 1,
+AvgDeg, BP. All grown to |S| at least k where feasible. Sweep
+k in {3, 4, 5}; BP also sweeps kappa in {0, 1, 2}.
+
+
+-- Slide: Exp 2: cluster quality on val + test --
+
+Cluster quality table is mean plus or minus std over 804
+queries, single seed. At small k, BP returns the densest,
+tightest cliques: pair density around 0.5, lambda-two around
+1.25, internal ncut around 1.4. BFS depth 1 is small with
+modest density 0.41 at k=3, falling to 0.30 at k=5. AvgDeg
+returns big communities, size 21, with the highest average
+degree 3.02 by construction, but pair density only 0.21.
+External conductance: AvgDeg lowest at 0.69, so its
+communities are best isolated from the rest. Bottom line:
+BP wins pair density and lambda-two; AvgDeg wins average
+degree and external isolation; BFS is dominated on internal
+axes.
+
+
+-- Slide: Exp 2: cost on val + test --
+
+BFS is sub-millisecond. AvgDeg is around 50 ms. BP is
+heterogeneous: median fast, but the mean blows up with k.
+At k=3 kappa=2 the BP mean is 10 seconds with std 53. At
+k=4 kappa=2 it climbs to 48 seconds with std 103. At k=5
+kappa=2 it reaches 96 seconds with std 132. Soft cap 60 s,
+hard cap 300 s; the long tail is dominated by kappa=2
+timeouts.
+
+
+-- Slide: Exp 3: scope and prediction rule --
+
+Extrinsic perspective: classification by community. For each
+val or test query, retrieve a community, predict q's label by
+uniform majority vote over training-labelled members. Ties
+broken by ascending label for reproducibility. Fallback
+(rare): walk outward by BFS from q forbidding val and test
+nodes; last resort, the global training majority. Tune on val,
+evaluate on test and on the BFS-hard test subset.
+
+
+-- Slide: Exp 3: tuning on val --
+
+Best per method by val F1. BFS depth 1 at k=4 is family-best
+and overall-best with F1 0.825. AvgDeg at k=4 is family-best
+at F1 0.563. BP at k=4, kappa=2 is family-best at F1 0.811,
+competitive but below BFS depth 1. The temporal split favours
+BFS: pure-source test papers cite same-class training papers,
+so direct citations are a near-perfect signal.
+
+
+-- Slide: Exp 3: evaluation on test --
+
+Test, per-method val-best params applied. BFS d=1 k=4 reaches
+F1 0.829. AvgDeg k=4 reaches F1 0.603. BP k=4 kappa=2 reaches
+F1 0.811. Same ranking as val.
+
+
+-- Slide: Exp 3: evaluation on the hard subset --
+
+The full test mixes two regimes: easy (depth-1 BFS already
+right) and hard (depth-1 BFS wrong). Hard subset isolates the
+latter: 59 Cora-ML test nodes. Conditional diagnostic: subset
+selected by test labels, so BFS d=1 is near zero by
+construction. BFS reaches F1 0.160; AvgDeg reaches 0.146; BP
+val-best (k=4, kappa=2) reaches 0.190. BP narrowly beats BFS
+and AvgDeg in the regime where local citations fail.
+
+
+-- Section divider: OpenAlex frontend --
+
+Live citation graph.
+
+
+-- Slide: Same solver, live oracle --
+
+Cora-ML ran on local CSV. The same solver speaks to OpenAlex,
+a public open citation database; just swap the simulation
+oracle client for an OpenAlex client. One oracle call fetches
+a paper's outgoing references and capped incoming citations.
+Every node materialized by the solver is fetched live, so API
+cost scales with what BP actually pulls in. Density, kappa-
+connectivity, and grow-to-k behaviour are unchanged. The web
+frontend renders the active set and frontier evolving in real
+time as a graph, with per-paper metadata pulled live; fits as
+a reading-list builder around a single query paper.
+
+
+-- Section divider: Conclusion --
+
+Wrapping up.
+
+
+-- Slide: Main interpretation --
+
+BP wins internal geometry at every k: edge density, lambda-
+two, and ncut lead the baselines. AvgDeg picks the densest
+set by average degree, but via much larger sets, so per-pair
+edge density drops. Same-k test F1: BFS leads narrowly,
+AvgDeg trails as its large sets dilute the majority vote, BP
+runs close to BFS. Hard subset: BFS scores zero by
+construction, AvgDeg trails, BP leads narrowly. Cost: BFS
+and AvgDeg fast; BP grows steeply with k and kappa. Claim:
+BP is a dense-community retriever; classification F1 is a
+downstream readout of the retrieved geometry.
+
+
+-- Slide: Limitations --
+
+Numbers reported only for Cora-ML; more datasets in progress.
+The temporal split makes one-hop BFS match the homophily structure: test
+nodes are pure sources whose direct citations sit in the
+train set. The hard subset is a conditional diagnostic on
+queries where depth-1 BFS already fails, so BFS scores zero
+there by construction. Exact optimality is over the
+discovered graph region; the oracle interface bounds what BP
+can reason about. Solver limits (time, branch-and-bound
+nodes, Dinkelbach and column-generation iterations) return
+possibly suboptimal incumbents on the tail.
+
+
+-- Slide: Next steps --
+
+Tighter LP relaxation. Inverse-out-degree edge weights.
+Warm-start with a densest-subgraph incumbent. Incorporate
+semantic information.
+
+
+-- Slide: Thank you --
+
+Thank you. Questions?
+
+
+================================================================
+End of script. Appendix slides (A1 through A5) are reference
+material; defer to Q&A.
+================================================================

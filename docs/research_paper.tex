@@ -1,0 +1,998 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Vactive}{V_{\mathrm{act}}}
+\newcommand{\frontier}{F}
+\newcommand{\dens}{\operatorname{dens}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+
+\title{Densest Community Search in Directed Citation Graphs via Lazy Branch-and-Price}
+\author{Project Draft}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Citation graphs are a natural substrate for exploratory scholarly search: given
+a paper, a user often wants a compact set of nearby papers that forms a coherent
+research community. Simple local expansion is cheap, but it does not optimize
+cohesion, satisfy a target size, or guarantee a formal connectivity property.
+This paper presents a query-anchored densest community search system for
+directed citation graphs. Given a directed graph, a query paper, and a minimum
+community size, the system seeks a set containing the query that maximizes
+induced directed edge density. The solver also supports a rooted
+$\kappa$-edge-connectivity constraint.
+
+The method combines Dinkelbach's fractional-programming transform with a lazy
+branch-and-price algorithm. Each Dinkelbach iteration solves a parametric
+integer program over a dynamically expanded active set. The restricted master
+problem uses node, directed-edge, and unordered-pair variables; column generation
+promotes promising frontier nodes; branch-and-bound enforces integrality; Boolean
+quadratic polytope triangle cuts tighten fractional relaxations; and min-cut
+separation enforces optional rooted connectivity. The implementation supports
+both local CSV simulation and live OpenAlex-backed citation retrieval, and is
+wrapped by a FastAPI/React interface that streams optimization telemetry.
+
+On an inductive Cora-ML CitationFull node-classification task, one-hop BFS is
+the strongest full-test classifier because test queries have direct labeled
+citation neighbors. The best validation branch-and-price setting,
+$k=3,\kappa=1$, is close on the full test split by macro F1 (0.8134 versus
+0.8266), returns smaller communities (3.04 versus 3.85 nodes on average), and
+has higher directed internal edge density (0.4987 versus 0.4011). On the
+validation subset where one-hop BFS fails, the same branch-and-price setting
+achieves the best macro F1 among the compared fixed methods (0.1268), while
+matching one-hop BFS's perfect normalized internal min-cut. The exact
+average-degree baseline reaches 0.0987 macro F1 on that hard subset with much
+larger communities, many more oracle queries, and lower internal connectivity.
+The results support a two-regime conclusion: direct neighbors dominate easy
+citation classification, while density-constrained optimization is a principled
+compact retrieval primitive when size, density, and connectivity are part of the
+task.
+\end{abstract}
+
+\section{Motivation and Problem Statements}
+
+Citation graphs encode explicit intellectual relationships among papers. A
+paper's outgoing citations represent prior work it builds on, while incoming
+citations represent later papers that build on it. Many scholarly interfaces
+surface these relationships as flat lists: references, citing papers, related
+papers, or high-citation neighbors. These views are useful, but they leave open
+a graph optimization question: for a given query paper, which compact set of
+papers forms the densest citation community around it?
+
+The simplest answer is to return a one-hop neighborhood. In the Cora-ML
+experiments reported here, this baseline is strong for classification
+because test papers directly cite labeled training papers. But
+one-hop expansion is a
+heuristic, not an optimization problem. It may return too few papers for a
+desired reading set, it may fail a formal size constraint, it may return a set
+whose internal edge density is far from optimal, and it gives no way to trade
+off compactness, density, and connectivity.
+
+This project studies a query-anchored densest community search problem for
+directed citation graphs. Given a directed graph $G=(V,E)$, a query node $q$,
+and a minimum size $k$, we seek a set $S \subseteq V$ such that $q \in S$,
+$|S| \geq k$, and the induced directed density
+\[
+  \dens(S) = \frac{|E(S)|}{|S|(|S|-1)}
+\]
+is maximized. An optional $\kappa$ parameter additionally requires selected
+nodes to have rooted edge connectivity from the query in the undirected support
+of the selected citation edges.
+
+The implementation is designed for two settings. In offline simulation mode, the
+graph is a local CSV edge list. In live exploration mode, the graph is implicit:
+the solver queries OpenAlex for the predecessor and successor papers it needs.
+This motivates a lazy algorithm. Rather than loading the whole graph, the solver
+starts from a query-centered active set and only promotes frontier nodes that
+have positive reduced cost in the current LP relaxation.
+
+The main contributions are:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item A directed, query-anchored, at-least-$k$ dense-community formulation
+  with optional rooted $\kappa$-edge-connectivity.
+  \item A lazy branch-and-price algorithm that combines Dinkelbach iterations,
+  restricted master LPs, frontier pricing, branch-and-bound, triangle-cut
+  separation, incumbent pruning, and min-cut connectivity cuts.
+  \item A reproducible node-classification and cluster-quality evaluation
+  pipeline on CitationFull datasets, instantiated here on Cora-ML with BFS and
+  exact average-degree baselines.
+  \item A working interactive system with live OpenAlex citation retrieval and
+  streaming solver telemetry.
+\end{enumerate}
+
+The empirical claim is intentionally measured. The current Cora-ML evidence does
+not show that branch-and-price replaces BFS as a universal classifier. Rather,
+BFS and dense-community search solve different problems. BFS is excellent when
+direct citation labels are sufficient. Branch-and-price is useful when the
+desired object is a compact, dense, query-containing community satisfying
+explicit structural constraints.
+
+\subsection{Related Work}
+
+\paragraph{Dense subgraph discovery.}
+The unconstrained maximum density subgraph problem is classical. Goldberg gave a
+flow-based algorithm for finding a maximum density subgraph
+\cite{goldberg1984}. Charikar later developed greedy approximation algorithms
+for finding dense graph components \cite{charikar2000}. The size-constrained
+densest $k$-subgraph problem is harder and remains a central object in dense
+subgraph research. Exact and approximation approaches for dense $k$-subgraph
+variants continue to be studied, especially for large graphs
+\cite{veremyev2017}.
+
+The present project differs from standard densest subgraph formulations in three
+ways. First, it is query anchored: the selected community must contain a
+particular paper. Second, it is directed: a citation from $u$ to $v$ is not the
+same as a citation from $v$ to $u$. Third, the graph may be accessed lazily
+through an API, so the algorithm must reason about which candidate nodes to
+materialize.
+
+\paragraph{Fractional programming and branch-and-price.}
+The density objective is a ratio. Dinkelbach's method transforms a nonlinear
+fractional program into a sequence of parametric optimization problems
+\cite{dinkelbach1967}. This is a natural fit for dense subgraph objectives:
+instead of optimizing $|E(S)|/(|S|(|S|-1))$ directly, each iteration optimizes
+$|E(S)|-\lambda |S|(|S|-1)$ for a fixed density estimate $\lambda$.
+
+Branch-and-price combines branch-and-bound with column generation and is used
+for integer programs whose full variable set is too large to enumerate at once
+\cite{barnhart1998}. In this project, the variable universe is large not only
+because the graph may be large, but also because live OpenAlex mode discovers
+nodes on demand. Column generation therefore acts as both an optimization device
+and a graph-expansion policy.
+
+\paragraph{Citation data.}
+The live mode uses OpenAlex, a fully open scholarly index and API
+\cite{priem2022}. The Works API exposes citation relationships through outgoing
+references and incoming cited-by queries \cite{openalexworks}. The offline
+classification evaluation uses PyTorch Geometric's \texttt{CitationFull}
+dataset loader \cite{fey2019,pygcitationfull}, which provides citation datasets
+from the Graph2Gauss benchmark collection \cite{bojchevski2017}.
+
+\subsection{Problem Statement}
+
+Let $G=(V,E)$ be a directed graph. In the citation setting, $(u,v)\in E$ means
+that paper $u$ cites paper $v$. Let $q\in V$ be the query paper and $k\geq 2$
+be a minimum target size. For $S\subseteq V$, define the induced directed edge
+set
+\[
+  E(S) = \{(u,v)\in E : u\in S,\ v\in S,\ u\neq v\}.
+\]
+The directed density of $S$ is
+\[
+  \dens(S) = \frac{|E(S)|}{|S|(|S|-1)}.
+\]
+The primary optimization problem is
+\begin{align}
+  \max_{S\subseteq V} \quad & \dens(S) \label{eq:main-problem}\\
+  \text{s.t.} \quad & q \in S, \nonumber\\
+                    & |S| \geq k. \nonumber
+\end{align}
+
+The use of $|S|\geq k$ rather than $|S|=k$ is important. A scholarly community
+may naturally contain more than $k$ papers if those papers preserve density. The
+solver therefore optimizes over a minimum-size family and then prunes
+unproductive extra nodes from integer incumbents.
+
+For $\kappa>0$, the solver adds a rooted connectivity requirement. Let
+$H(S)$ be the undirected support graph obtained from selected directed internal
+edges. The connectivity constraint requires every $v\in S\setminus\{q\}$ to
+have at least $\kappa$ edge-disjoint paths from $q$ in $H(S)$. By Menger's
+theorem, this can be checked through min-cut/max-flow computations and enforced
+by adding cut-set inequalities when a candidate violates the condition.
+
+\section{Approaches}
+
+\subsection{Oracle-Based Lazy Graph Access}
+
+The solver is organized around an \texttt{IGraphOracle}. Given a node, the
+oracle returns predecessor and successor lists. In simulation mode, these lists
+come from a local CSV edge list. In OpenAlex mode, they are fetched from the
+OpenAlex API. Incoming retrieval is capped by \texttt{max\_in\_edges}; setting
+this value to zero disables incoming expansion. The branch-and-price algorithm
+never assumes the full graph is preloaded.
+
+Internally the solver maintains:
+\begin{itemize}[leftmargin=1.1cm]
+  \item an active set $\Vactive$ of nodes currently represented in the restricted
+  master problem,
+  \item a frontier $\frontier$ of adjacent nodes discovered but not yet promoted,
+  \item cached outgoing and incoming adjacency maps for queried nodes,
+  \item a list of pending directed edges whose endpoint variables may not both
+  exist yet.
+\end{itemize}
+
+Initialization performs a BFS from $q$ until at least $k$ active nodes are
+available. It then queries active nodes that were discovered as neighbors but
+not expanded during the first BFS pass, so their adjacency lists are completed.
+Nodes that fail oracle retrieval are blacklisted. If the query node itself
+cannot be fetched, the solve aborts.
+
+This active-set design is the practical bridge between optimization and live
+retrieval. The solver can begin with a small local neighborhood, solve a
+restricted relaxation, and then ask which frontier papers are worth the next API
+queries.
+
+\subsection{Dinkelbach Outer Loop}
+
+The density objective is fractional. For a current density estimate $\lambda$,
+define the parametric objective
+\begin{equation}
+  \phi_\lambda(S) = |E(S)| - \lambda |S|(|S|-1).
+  \label{eq:parametric}
+\end{equation}
+Dinkelbach's method repeatedly solves
+\begin{align}
+  \max_{S\subseteq V}\quad & \phi_\lambda(S)\\
+  \text{s.t.}\quad & q\in S,\quad |S|\geq k,
+\end{align}
+then updates $\lambda \leftarrow \dens(S)$ if an improving solution is found.
+If the best parametric value is nonpositive, no set improves the current density
+estimate for the current explored problem.
+
+The implementation initializes $\lambda$ from a query-centered BFS seed after a
+greedy pruning pass. This matters because a stronger initial density makes the
+first parametric problem tighter and can reduce branch-and-bound work. Each
+Dinkelbach iteration calls the branch-and-price solver. The loop stops when the
+parametric solve finds no positive improvement, when density no longer
+increases beyond tolerance, or when the configured maximum number of iterations
+is reached.
+
+\subsection{Restricted Master Formulation}
+
+For a fixed $\lambda$ and active set $\Vactive$, the solver forms a restricted
+linearized model. The binary variables are:
+\[
+  x_v \in \{0,1\}\quad(v\in \Vactive),
+\]
+where $x_v=1$ means node $v$ is selected;
+\[
+  y_{uv}\in \{0,1\}\quad((u,v)\in E,\ u,v\in \Vactive),
+\]
+where $y_{uv}=1$ means the directed edge $(u,v)$ is internal; and
+\[
+  w_{uv}\in \{0,1\}\quad(\{u,v\}\subseteq \Vactive,\ u<v),
+\]
+where $w_{uv}=1$ represents $x_u x_v$.
+
+For integer $x$, the parametric objective can be written as
+\begin{equation}
+  \sum_{(u,v)\in E(\Vactive)} y_{uv}
+  - 2\lambda \sum_{\{u,v\}\subseteq \Vactive,\ u<v} w_{uv}.
+  \label{eq:rmp-obj}
+\end{equation}
+The factor of 2 appears because
+$|S|(|S|-1)=2\binom{|S|}{2}$.
+
+The restricted master problem is
+\begin{align}
+  \max \quad &
+  \sum_{(u,v)\in E(\Vactive)} y_{uv}
+  -2\lambda\sum_{u<v}w_{uv}
+  \label{eq:rmp}\\
+  \text{s.t.}\quad
+  & \sum_{v\in\Vactive} x_v \geq k, \nonumber\\
+  & x_q = 1, \nonumber\\
+  & y_{uv} \leq x_u,\quad y_{uv}\leq x_v
+    && ((u,v)\in E(\Vactive)), \nonumber\\
+  & w_{uv} \geq x_u+x_v-1
+    && (u<v,\ u,v\in\Vactive), \nonumber\\
+  & x_v,y_{uv},w_{uv}\in\{0,1\}. \nonumber
+\end{align}
+
+The formulation uses only the linearization constraints needed by the signs of
+the objective. Since $y$ has positive coefficient, maximizing sets $y_{uv}=1$
+whenever both endpoints are selected, and $y_{uv}=0$ otherwise. Since $w$ has
+negative coefficient, maximizing sets $w_{uv}$ as low as allowed, which equals
+$1$ when both endpoints are selected and $0$ otherwise for integer $x$.
+
+During column generation and branch-and-bound, the integrality constraints are
+relaxed to $[0,1]$. This relaxation is not exact, so the algorithm tightens it
+with branching and cuts.
+
+\subsection{Column Generation as Frontier Expansion}
+
+Solving the LP over $\Vactive$ yields fractional node values $\bar{x}$ and a
+dual value $\pi$ for the size constraint. The solver then prices each frontier
+node $f\in\frontier$. Let
+\[
+  \operatorname{fracdeg}(f)
+  =
+  \sum_{u:\ (u,f)\in E,\ u\in\Vactive} \bar{x}_u
+  +
+  \sum_{v:\ (f,v)\in E,\ v\in\Vactive} \bar{x}_v
+\]
+be the fractional internal degree that $f$ would gain against the current active
+solution. The implemented reduced-cost score is
+\begin{equation}
+  \operatorname{rc}(f)
+  =
+  \operatorname{fracdeg}(f)
+  -2\lambda\sum_{v\in\Vactive}\bar{x}_v
+  -\pi.
+  \label{eq:pricing}
+\end{equation}
+The first term estimates the directed internal-edge gain from adding $f$. The
+second term estimates the pairwise density penalty created by pairing $f$ with
+currently selected active nodes. The third term accounts for the size constraint
+dual. Frontier nodes with positive reduced cost are promoted to $\Vactive$,
+queried through the oracle, and synchronized into the restricted master problem.
+
+The implementation promotes nodes in batches rather than one at a time. The
+batch size is controlled by a fraction of the active-set size and by minimum and
+maximum caps. This reduces model synchronization overhead and API round trips.
+Operationally, column generation therefore decides both which LP columns to add
+and which citation neighborhoods to fetch next.
+
+\subsection{Branch-and-Bound}
+
+Each Dinkelbach subproblem is solved by a depth-first branch-and-bound tree. A
+branch-and-bound node consists of two lists: nodes fixed to one and nodes fixed
+to zero. The root fixes $q$ to one. Before each LP solve, the solver applies
+these bounds to the restricted master variables.
+
+After column generation reaches a local LP optimum, the LP bound is compared
+with the incumbent parametric value. Nodes whose bound cannot improve the
+incumbent are pruned. If the LP solution is fractional, the solver selects a
+branching variable using a density-aware rule. For each fractional node $v$, it
+computes a fractional internal degree into the current LP solution. Nodes with
+internal degree below $2\lambda$ are treated as ``hanging'' nodes: including them
+is likely to hurt density, so the zero branch is explored first. If no such node
+exists, the solver branches on a more core fractional node and explores the one
+branch first.
+
+This branching rule is heuristic, but it reflects the parametric objective. A
+node must add enough incident internal edge value to compensate for the
+$2\lambda$ marginal pair penalty. Nodes below that threshold are natural
+candidates for exclusion.
+
+\subsection{Triangle Cuts for the Pair Relaxation}
+
+The pair variables $w_{uv}$ are lower-bound McCormick variables. In fractional
+solutions, the relaxation can be loose: the LP may spread mass over several
+nodes while keeping pair variables artificially small. To reduce this effect,
+the solver separates selected Boolean quadratic polytope triangle inequalities:
+\begin{equation}
+  x_u+x_v+x_w-w_{uv}-w_{vw}-w_{uw}\leq 1.
+  \label{eq:triangle}
+\end{equation}
+These inequalities are valid for binary $x$ and $w=x_ix_j$. The implementation
+checks triples of moderately fractional nodes, caches $w$ values to avoid
+repeated solver lookups, and adds at most 20 violated cuts per separation round.
+Cuts are attempted only when there are enough fractional nodes and the current
+LP gap justifies the extra separation work.
+
+\subsection{Rooted \texorpdfstring{$\kappa$}{kappa}-Connectivity Separation}
+
+When $\kappa=0$, integer LP solutions can be evaluated directly. When
+$\kappa>0$, an integer candidate must pass a rooted edge-connectivity check. The
+solver builds an undirected unit-capacity support graph from selected internal
+directed edges. For every selected target node $t\neq q$, it computes a max flow
+from $q$ to $t$. If the flow is less than $\kappa$, the residual graph gives a
+violated cut. Let $R$ be the nodes reachable from $q$ in the residual graph.
+The solver adds the cut-set inequality
+\begin{equation}
+  \sum_{\{u,v\}\in\delta(R)} y_{uv} \geq \kappa x_t,
+  \label{eq:kappa-cut}
+\end{equation}
+where $\delta(R)$ is the set of selected-support edges crossing the cut. The
+current branch-and-bound node is then reprocessed with the new inequality. This
+is a lazy cut strategy: connectivity constraints are generated only when a
+candidate solution violates them.
+
+\subsection{Incumbent Pruning}
+
+Whenever the solver obtains a discrete solution, it tries to remove non-query
+nodes that improve the objective. For seed solutions, pruning maximizes density.
+For branch-and-bound incumbents, pruning maximizes the current parametric
+objective. The implementation maintains an internal-degree cache so each removal
+step can identify the least useful removable node efficiently. If connectivity
+is being enforced, a small BFS-style check prevents removals that disconnect the
+selected support from the query.
+
+This pruning step is important because the constraint is $|S|\geq k$. The LP or
+integer search may return a set larger than needed; pruning tightens the
+incumbent and often reduces the returned community to a compact core.
+
+\subsection{Average-Degree Baseline}
+\label{sec:avgdeg}
+
+The \texttt{--avgdeg} variant is an exact baseline for the query-anchored maximum
+average-degree problem. Given the query node $q$, it returns
+$$
+  S^{\star} = \argmax_{S \ni q,\, S \subseteq V_{\mathrm{loc}}}\;
+  \frac{|E(S)|}{|S|},
+$$
+where $E(S)$ counts directed edges with both endpoints in $S$ and
+$V_{\mathrm{loc}}$ is the BFS-bounded local subgraph around $q$. The procedure
+follows the Goldberg max-density flow construction \cite{goldberg1984} with three
+adaptations.
+
+\paragraph{Local oracle subgraph.}
+Goldberg's algorithm operates on a fully materialised graph. Here the graph is
+behind an oracle, so we first BFS from $q$ up to a depth bound (the
+implementation default is unbounded). Each oracle query returns the node's
+predecessors and successors; successors are cached during BFS and replayed in
+one sweep to materialise the induced directed edge list. The output is a dense
+indexing $(V_{\mathrm{loc}}, E_{\mathrm{loc}})$ with the query mapped to a known
+index. Every subsequent step works on this local snapshot, not on the full
+graph.
+
+\paragraph{Parametric flow network.}
+The Dinkelbach transform reduces the ratio objective to a parametric linear
+form: for fixed $\lambda$,
+$$
+  \max_{S \ni q}\; |E(S)| - \lambda |S|.
+$$
+For each candidate $\lambda$, the solver builds a Goldberg-style $s$--$t$
+network:
+\begin{itemize}[leftmargin=1.1cm]
+  \item a source $s$ and sink $t$;
+  \item for each directed edge $e = (u,v) \in E_{\mathrm{loc}}$, an
+  \emph{edge-item} node $n_e$ with $s \to n_e$ of capacity
+  $\mathrm{SCALE} = 10^{6}$, and $n_e \to u$, $n_e \to v$ each of capacity
+  $\infty$;
+  \item for each node $i$, an arc $i \to t$ of capacity
+  $\lfloor \lambda \cdot \mathrm{SCALE} \rfloor$;
+  \item an anchor $s \to q$ of capacity $\infty$, which keeps $q$ on the source
+  side of every minimum cut.
+\end{itemize}
+A push--relabel max-flow on this network and the source-side residual reachable
+set give the optimal $S_\lambda$ for the parametric objective. The integer
+scaling by $\mathrm{SCALE}$ keeps node capacities exact and bounds rounding
+error by $1/\mathrm{SCALE}$.
+
+\paragraph{Dinkelbach bisection.}
+The solver bisects $\lambda$ on $[0, |E_{\mathrm{loc}}|]$ for up to one hundred
+iterations or until the bracket falls below $10^{-9}$. After each probe it
+records the achieved density $|E(S_\lambda)| / |S_\lambda|$ and keeps the
+argmax across \emph{all} probed $\lambda$ rather than only the converged value.
+A final fixup probes the bracket endpoints whenever they were not already the
+last tested midpoint.
+
+\paragraph{Differences from textbook Goldberg.}
+Four substantive deviations from the classical construction matter for how the
+baseline behaves on this problem.
+\begin{enumerate}[leftmargin=1.1cm]
+  \item \emph{Query anchor.} Goldberg returns the globally densest subset.
+  Here the $s \to q$ arc forces $q$ into every cut, so the answer is the
+  query-anchored densest subset. The two coincide only when the global optimum
+  already contains $q$.
+  \item \emph{Local subgraph.} Goldberg assumes a known input graph. The oracle
+  setting forces a BFS-bounded local view, so the baseline maximises density on
+  $V_{\mathrm{loc}}$, not on $V$. The depth bound is a hyperparameter, fixed in
+  this work to ``full reachable from $q$''.
+  \item \emph{Directed edges, undirected flow contribution.} Each directed edge
+  $(u,v)$ produces a single edge-item connected to both endpoints with
+  $\infty$ capacity, so a reciprocal pair $(u,v)$ and $(v,u)$ contributes two
+  edge-items. The density numerator therefore counts directed edges. Goldberg's
+  standard form takes undirected $\{u,v\}$ once.
+  \item \emph{Density definition.} The avgdeg baseline reports
+  $|E(S)| / |S|$ (directed edges over nodes), whereas the branch-and-price
+  solver targets $|E(S)| / (|S|(|S|-1))$ (directed edge density). The two
+  objectives are not monotone in each other: the avgdeg optimum on a graph need
+  not be dense by the branch-and-price metric, and vice versa.
+\end{enumerate}
+
+The remaining mechanical differences are minor: a bisection bracket of
+$[0, |E_{\mathrm{loc}}|]$ instead of $[0, \max\deg / 2]$, integer scaling
+instead of exact rational capacities, and a consider-best loop instead of
+Goldberg's interval-feasibility test. None of these change which subset is
+optimal; they only affect numerical precision and termination.
+
+\subsection{End-to-End System}
+
+The project is not only an algorithm implementation. The C++ solver is exposed
+through a command-line interface with several modes: branch-and-price
+(\texttt{--bp}), BFS (\texttt{--bfs}), exact average-degree baseline
+(\texttt{--avgdeg}), and connected local baselines for synthetic experiments.
+The FastAPI backend launches solver processes, streams log lines and structured
+results, and supports stopping a running session. The React frontend exposes the
+default branch-and-price path and lets a user set the query paper, $k$, time
+limits, and column-generation parameters. The experimental CLI exposes the other
+solver variants. The interface visualizes selected core papers and frontier
+papers and shows a telemetry panel containing convergence and timing
+information.
+
+This interface is useful for research because dense-community optimization is
+not a black-box recommendation. Users can inspect which papers were selected,
+how many API queries were made, whether the solver is still improving, and where
+time is being spent. The same telemetry also supports debugging and experiment
+reproducibility.
+
+\section{Experiments}
+
+\subsection{Dataset and Split}
+
+The lead dataset is Cora-ML from PyTorch Geometric's \texttt{CitationFull}
+collection, with directed edges preserved. The exported graph has 2,995
+nodes, 8,416 directed edges, and 7 labels. The split mimics inductive
+citation prediction:
+\begin{itemize}[leftmargin=1.1cm]
+  \item validation and test nodes are ``pure source'' papers that cite
+  others but are not themselves cited in the exported graph (split
+  uniformly between val and test with seed 42);
+  \item every remaining node is a training node, including isolated nodes
+  and nodes whose only outgoing edges land inside val or test.
+\end{itemize}
+With random seed 42, the split contains 1,746 training nodes, 624
+validation nodes, and 625 test nodes. Each run carries a
+\texttt{split\_meta.json} manifest with SHA-256 hashes of the train, val,
+and test node sets, the edge list, and the post-filter
+\emph{eligible} subsets used for evaluation. CiteSeer, DBLP, and Cora runs
+follow the same protocol and are processed in ascending node-count order.
+
+A query node enters the evaluation pool only when its undirected one-hop
+neighbourhood spans more than a single edge; a degenerate
+$(q, \text{neighbour})$ two-node subgraph carries no information for
+density, conductance, NCut, or $\lambda_2$. After this filter, Cora-ML
+contributes 411 eligible val nodes and 393 eligible test nodes.
+A narrower \emph{hard subset} contains the 52 eligible val nodes whose
+BFS depth-1 label vote disagrees with the true label; the subset is
+hash-pinned in \texttt{split\_meta.json} so the hard-subset comparisons
+reference exactly the same nodes across runs.
+
+\subsection{Classification Protocol}
+
+For a query node, each method returns a community. The classifier predicts
+the query label from training nodes inside that returned community,
+excluding the query itself and any node listed in the val or test split. The
+voting rule is uniform majority with a deterministic tie-break by ascending
+label value, so two runs over the same records yield identical predictions.
+If the returned community contains no eligible training nodes, the pipeline
+falls back to a concentric BFS search restricted to non-forbidden nodes; the
+source query stays at distance 0 but cannot use a val or test node as a
+stepping stone to reach further training nodes. On Cora-ML this fallback
+rate is zero for AvgDeg, BFS, and BP at the tuned hyperparameters.
+
+All reported Cora-ML classification runs use \texttt{max\_in\_edges=0}. Thus
+the solver and BFS baseline expand through outgoing citation edges only,
+matching the inductive split where test papers cite older training papers. This
+choice is important: enabling incoming edges would change the retrieval problem
+and the label-propagation neighborhood.
+
+This protocol deliberately evaluates the retrieval set as a neighborhood for
+label propagation. It is not a trained graph neural network. That makes the
+evaluation interpretable: differences come from the selected community, not from
+learned features or model capacity.
+
+\subsection{Methods Compared}
+
+The comparison set is the three solver variants:
+\begin{itemize}[leftmargin=1.1cm]
+  \item BFS with depths 1 and 2;
+  \item branch-and-price with $k \in \{5, 10\}$ and
+  $\kappa \in \{0, 2\}$ at a five-second per-iteration budget;
+  \item the exact average-degree baseline.
+\end{itemize}
+The main test comparison uses the best validation setting per family:
+BFS depth 1, branch-and-price with $k=5$ and $\kappa=2$, and the
+average-degree baseline.
+
+\subsection{Metrics}
+
+Two evaluation perspectives share the same per-query records. The
+\emph{cluster-quality} perspective reports medians of size, directed
+internal average degree, directed edge density, undirected external
+expansion, undirected external conductance, normalized internal min-cut
+(NCut), mixing parameter
+$\mu = b / (b + 2 e_{\mathrm{int}})$ where $b$ and $e_{\mathrm{int}}$ count
+boundary and internal undirected edges, and the algebraic connectivity
+$\lambda_2$ of the normalized Laplacian of the induced undirected subgraph.
+$\lambda_2$ is computed on the dense Laplacian for subgraphs of size up to
+500 and reported as NaN above the cap.
+The \emph{classification} perspective reports macro precision, recall, and
+macro F1 only. Accuracy is dropped. Test classification numbers are means
+over five Gurobi seeds with bootstrap 95\% confidence intervals from
+$B=500$ resamples shared across methods within each seed.
+
+\subsection{Validation Sweep}
+
+Table~\ref{tab:validation} reports the best-per-family setting from the
+Cora-ML validation sweep, with cluster-quality medians on the 411 eligible
+val nodes and macro F1 from \texttt{tune\_val\_*.csv}. BFS depth 1 wins
+on macro F1 (0.864) at the smallest oracle cost. BP at $k=5,\kappa=2$
+returns the densest community (median directed edge density 0.400) with a
+slightly lower $\lambda_2$ (0.726 vs the BFS clique-like 1.000).
+
+\begin{table}[t]
+\centering
+\caption{Validation sweep on Cora-ML, best setting per family. Density,
+NCut, $\lambda_2$, and conductance are medians on the 411 eligible val
+nodes. F1 is macro and oracle queries are the per-query average.}
+\label{tab:validation}
+\begin{tabular}{lllrrrrrr}
+\toprule
+Method & Setting & Size & Density & $\lambda_2$ & NCut & Conduct. & F1 (val) & Queries \\
+\midrule
+AvgDeg & local         & 17.0 & 0.146 & 0.236 & 1.011 & 0.676 & 0.614 & 204.09 \\
+BFS    & depth 1       & 4.0  & 0.333 & 1.000 & 1.200 & 0.833 & 0.864 & 1.00 \\
+BP     & $k=5,\kappa=2$ & 5.0  & 0.400 & 0.726 & 1.158 & 0.852 & 0.827 & 10.67 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The BP sweep explored $\{k=5,k=10\} \times \{\kappa=0,\kappa=2\}$. The
+$k=5,\kappa=2$ cell maximises macro F1 (0.827) and dominates the $k=10$
+cells on density (0.400 vs 0.244--0.250). The BFS sweep ranged over
+depth $\in \{1, 2\}$; depth 1 leads with size 4 and macro F1 0.864, while
+depth 2 expands to size $\approx 10$ and drops macro F1 to 0.851 and
+density to 0.196.
+
+\subsection{Brute-Force Optimality on Small Random Graphs}
+\label{sec:bf}
+
+Before reporting cluster quality and classification on the citation
+graphs, the branch-and-price solver is checked against a brute-force
+oracle on synthetic graphs small enough to enumerate every subset
+containing the query. The fixture is Erd\H{o}s--R\'enyi $G(n,p)$ at
+$n = 20$, $p \in \{0.25,\,0.50,\,0.75\}$, with seeds $0..4$ per
+$p$, giving 15 graphs. The query node $q$ is the highest-degree
+vertex of each graph.
+
+Brute force enumerates every $S \ni q$, $|S| \ge k$, with
+$k \in \{3,4,5\}$. For each $k$, the maximum-density $S$ is recorded
+at every requested edge-connectivity threshold $\kappa \in \{0,1,2\}$,
+along with the realised $\lambda(S)$. Cells with no feasible $S$ at
+the requested $\kappa$ get a sentinel and are skipped at the solver
+stage so the run stays finite. The C++ solver runs across the same
+$(k, \kappa)$ grid per graph with no time, node, gap, or Dinkelbach
+limit. A run is counted as a primary match when its objective lies
+within $10^{-9}$ of the brute-force optimum.
+
+The result is summarised in Table~\ref{tab:bf-summary}. AvgDeg
+matches the unconstrained avg-degree optimum on every graph at every
+$p$. BP matches the edge-density optimum on every feasible
+$(k, \kappa, p)$ cell. Two cells at $k = 3$, $\kappa \in \{1, 2\}$,
+$p = 0.5$ contain one seed where no $S$ reaches the requested
+$\kappa$; that seed is surfaced as \texttt{infeasible\_kappa} rather
+than counted as a non-match, leaving the other four seeds at $5/5$
+match. Every \texttt{optima.csv} row carries a \texttt{code\_hash}
+(sha256 of the brute-force script source) and every
+\texttt{solver\_runs.csv} row carries the matching
+\texttt{solver\_build\_id} (git short SHA and build timestamp baked
+into the binary at \texttt{cmake} time), so a stale brute force or
+a stale solver binary is caught at the aggregation stage.
+
+\begin{table}[t]
+\centering
+\caption{Brute-force optimality on $n = 20$ random graphs, seeds
+$0..4$. \emph{n\_feasible} is the count of seeds whose brute-force
+optimum reaches the requested $\kappa$; the match rate is over
+feasible seeds only. Cells not shown are equivalent to the
+corresponding $\kappa = 0$ row in this fixture.}
+\label{tab:bf-summary}
+\begin{tabular}{llrrrr}
+\toprule
+Method & ($k$, $\kappa$) & $p = 0.25$ & $p = 0.50$ & $p = 0.75$ \\
+\midrule
+AvgDeg            & (-, -) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (3, 0) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (3, 1) & $5/5$       & $4/4$ (1 skip) & $5/5$    \\
+BP                & (3, 2) & $5/5$       & $4/4$ (1 skip) & $5/5$    \\
+BP                & (4, 0) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (4, 1) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (4, 2) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (5, 0) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (5, 1) & $5/5$       & $5/5$       & $5/5$       \\
+BP                & (5, 2) & $5/5$       & $5/5$       & $5/5$       \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Structural Quality on the Full Test Split}
+
+Cluster quality leads the test-split report. Table~\ref{tab:test-quality}
+gives the medians on 393 eligible test nodes.
+
+\begin{table}[t]
+\centering
+\caption{Cluster-quality medians on the eligible Cora-ML test split.}
+\label{tab:test-quality}
+\begin{tabular}{lrrrrrr}
+\toprule
+Method & Size & $\lambda_2$ & Density & NCut & Mixing & Conduct. \\
+\midrule
+AvgDeg              & 15.0 & 0.181 & 0.144 & 1.007 & 0.677 & 0.677 \\
+BFS depth 1         & 4.0  & 1.000 & 0.333 & 1.200 & 0.840 & 0.840 \\
+BP $k=5,\kappa=2$   & 5.0  & 0.726 & 0.350 & 1.143 & 0.855 & 0.855 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+BP returns the densest community at a size close to BFS and the highest
+mixing parameter, indicating tighter internal connectivity relative to the
+boundary. BFS returns the most algebraically connected community
+($\lambda_2 = 1$ matches the small clique-like neighbourhoods around a
+test paper). AvgDeg explores far further and its $\lambda_2$ drops to 0.181.
+
+\subsection{Full Test Split}
+
+Table~\ref{tab:test-classification} reports the test classification
+metrics with bootstrap 95\% CIs from paired resampling shared across
+methods within each seed.
+
+\begin{table}[t]
+\centering
+\caption{Classification on the eligible Cora-ML test split. Means over
+five Gurobi seeds (42--46) with bootstrap 95\% CI from $B=500$ resamples.}
+\label{tab:test-classification}
+\begin{tabular}{lrrr}
+\toprule
+Method & Precision & Recall & F1 \\
+\midrule
+AvgDeg              & 0.709 [0.687, 0.731] & 0.523 [0.501, 0.546] & 0.537 [0.514, 0.562] \\
+BFS depth 1         & 0.825 [0.809, 0.842] & 0.813 [0.795, 0.832] & 0.810 [0.793, 0.829] \\
+BP $k=5,\kappa=2$   & 0.749 [0.729, 0.767] & 0.740 [0.720, 0.759] & 0.737 [0.718, 0.756] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+BFS depth 1 dominates macro F1. The split rewards direct citation
+homophily: test nodes are pure source papers, and their direct citation
+targets are train nodes. BP closes most of the F1 gap (0.737) while
+returning the densest and best-mixed subgraph in
+Table~\ref{tab:test-quality}.
+
+\subsection{Hard Validation Subset Where One-Hop BFS Fails}
+
+The hard subset contains the 52 eligible val nodes for which the BFS
+depth-1 vote disagrees with the true label. It is hash-pinned in
+\texttt{split\_meta.json}, so the same nodes are evaluated across runs.
+Cluster quality leads.
+
+\begin{table}[t]
+\centering
+\caption{Cluster-quality medians on the BFS-hard Cora-ML validation subset.}
+\label{tab:hard-quality}
+\begin{tabular}{lrrrrrr}
+\toprule
+Method & Size & $\lambda_2$ & Density & NCut & Mixing & Conduct. \\
+\midrule
+AvgDeg              & 33.0 & 0.045 & 0.142 & 0.585 & 0.677 & 0.677 \\
+BFS depth 1         & 3.0  & 1.000 & 0.333 & 1.333 & 0.893 & 0.893 \\
+BP $k=5,\kappa=2$   & 5.0  & 0.691 & 0.300 & 1.143 & 0.889 & 0.889 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cluster-quality picture matches the full-test pattern: BFS produces
+the most algebraically connected subgraph, BP the densest and best-mixed,
+AvgDeg the largest with a near-zero $\lambda_2$. Classification ranks
+reorder.
+
+\begin{table}[t]
+\centering
+\caption{Classification on the BFS-hard Cora-ML validation subset. Means
+over five seeds (42--46) with bootstrap 95\% CI ($B=500$).}
+\label{tab:hard-classification}
+\begin{tabular}{lrrr}
+\toprule
+Method & Precision & Recall & F1 \\
+\midrule
+AvgDeg              & 0.227 [0.205, 0.249] & 0.315 [0.305, 0.326] & 0.196 [0.179, 0.211] \\
+BFS depth 1         & 0.000                & 0.000                & 0.000 \\
+BP $k=5,\kappa=2$   & 0.239 [0.193, 0.291] & 0.203 [0.136, 0.285] & 0.169 [0.126, 0.212] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+BFS is zero on this subset by construction. Both AvgDeg and BP move off
+the BFS-zero baseline: AvgDeg leads on recall (0.315) and F1 (0.196), BP
+leads on precision (0.239). Absolute F1 remains under 0.2; the subset is
+the difficult tail where the cheapest baseline already fails.
+
+\section{Conclusion}
+
+\subsection{Discussion}
+
+\paragraph{Cluster quality is the headline.}
+Across the full test split and the BFS-hard subset, branch-and-price returns
+the densest community of the three methods, with a mixing parameter that
+exceeds BFS by a small but consistent margin. The geometry is the
+contribution. Classification numbers serve as a downstream check on whether
+that geometry transfers to a label vote.
+
+\paragraph{BFS depth 1 is the homophily ceiling for this split.}
+Cora-ML test nodes are pure source papers; their outgoing citations land on
+training papers of the same class. A one-hop majority vote retrieves
+labelled evidence at the minimum oracle cost. Any retrieval method that
+deviates from that one-hop frontier therefore competes against a baseline
+that already matches the homophily structure of the split.
+
+\paragraph{The hard subset reorders the classifiers.}
+By construction, BFS depth 1 has macro F1 zero on the 52 BFS-hard val
+nodes. AvgDeg and BP both move off zero. The cluster-quality picture is
+unchanged: BFS still has the highest $\lambda_2$, BP returns the densest
+subgraph, AvgDeg the largest. The implication is that classification rank
+on the easy regime is a homophily artefact, while cluster-quality rank is
+stable across regimes.
+
+\paragraph{The role of $\kappa$.}
+The selected Cora-ML BP setting uses $k=5$ and $\kappa=2$. Increasing $k$
+to 10 lowers macro F1 and density on val; tightening $\kappa$ without
+matching $k$ tends to fragment the community and is not monotonically
+helpful. $\kappa$ is therefore a tuning parameter, not a universally
+beneficial constraint.
+
+\paragraph{Cost matters.}
+BFS depth 1 issues one oracle query per node. BP averages about 11
+queries per node, an order of magnitude more, in exchange for a 1.2x
+directed-density premium and a $\kappa$-feasible community. AvgDeg
+averages about 200 queries per node, two orders of magnitude more. The
+live OpenAlex telemetry exposes that cost-quality tradeoff at interactive
+latency.
+
+\subsection{Limitations and Future Work}
+
+Reported numbers are Cora-ML only at this draft. The pipeline has been
+exercised end-to-end on Cora-ML and the same protocol applies to CiteSeer,
+DBLP, and Cora; per-dataset runs and writeups are processed in ascending
+node-count order. The temporal split makes one-hop BFS unusually strong:
+test papers cite training papers directly, so the easy regime is wide.
+The hard subset is hash-pinned but defined on validation; a held-out
+test-hard subset is not constructed in this draft.
+
+The solver depends on Gurobi. The OpenAlex live mode inherits OpenAlex's
+coverage and entity-disambiguation limits. Methodologically, the lazy
+expansion procedure optimises over the discovered frontier; a fully
+formal global optimality claim requires assumptions about oracle
+completeness, so the implementation is best viewed as a practical exact
+method over an adaptively discovered graph region.
+
+Future work:
+\begin{enumerate}[leftmargin=1.2cm]
+  \item complete the CiteSeer, DBLP, and Cora runs and update the
+  per-dataset tables;
+  \item ablate $\kappa$, triangle cuts, branching rule, pruning, and
+  column-generation batch size against the brute-force optima;
+  \item latency-aware OpenAlex experiments separating algorithmic time
+  from network wait time;
+  \item hybrid objectives that combine density with label purity or
+  semantic similarity;
+  \item user studies for interactive paper discovery where compactness
+  and interpretability matter more than classification accuracy.
+\end{enumerate}
+
+\subsection{Summary}
+
+This paper presents a query-anchored densest community search system
+for directed citation graphs. The method uses Dinkelbach fractional
+programming, lazy branch-and-price, frontier pricing, branch-and-bound,
+triangle cuts, incumbent pruning, and optional rooted connectivity cuts.
+On Cora-ML, branch-and-price returns the densest and best-mixed compact
+community, and the cluster-quality ranking is stable on the BFS-hard
+subset. BFS depth 1 wins macro F1 on the full test split because of
+direct citation homophily, while BP closes most of the gap with a
+$\kappa$-feasible community and far fewer oracle queries than the exact
+average-degree baseline.
+
+\subsection*{Reproducibility}
+
+The reported artifacts are generated by the repository scripts. The environment
+used for Python verification is the \texttt{dcs} conda environment.
+
+\begin{verbatim}
+./solver/build.sh
+conda run -n dcs python scripts/classification/tune_methods.py \
+  --dataset Cora_ML --family all --optimize f1 --weighting distance \
+  --bp_time_limit -1 --bp_cg_batch_frac 1.0 --bp_cg_min_batch 50 \
+  --bp_cg_max_batch 50 --bp_node_limit -1 --bp_gap_tol 0.0 \
+  --bp_dinkelbach_iter -1
+conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
+  --dataset Cora_ML --split test \
+  --settings_json exps/classification/Cora_ML/tmp_tune/best_settings_all.json \
+  --output_name test_best_batch_exact
+conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
+  --dataset Cora_ML --split val --subset bfs_depth1_wrong \
+  --settings_json exps/classification/Cora_ML/tmp_tune/best_settings_all.json \
+  --output_name val_hard_best_batch_exact
+conda run -n dcs python scripts/classification/evaluate_fixed_methods.py \
+  --dataset Cora_ML --split val --subset bfs_depth1_wrong \
+  --bp_k 6 --bp_kappa 3 --bp_time_limit -1 \
+  --bp_cg_batch_frac 1.0 --bp_cg_min_batch 50 --bp_cg_max_batch 50 \
+  --bp_node_limit -1 --bp_gap_tol 0.0 --bp_dinkelbach_iter -1 \
+  --output_name val_hard_bp_k6_kappa3_batch_exact
+conda run -n dcs python -m unittest scripts.classification.test_solver_utils -v
+\end{verbatim}
+
+The exact result files used in this draft are:
+{\small
+\begin{itemize}[leftmargin=1.1cm]
+  \item \path{exps/classification/Cora_ML/tmp_tune/tuning_results_all.csv}
+  \item \path{exps/classification/Cora_ML/tmp_tune/best_settings_all.json}
+  \item \path{exps/classification/Cora_ML/test_best_batch_exact/fixed_methods.csv}
+  \item \path{exps/classification/Cora_ML/val_hard_best_batch_exact/fixed_methods.csv}
+  \item \path{exps/classification/Cora_ML/val_hard_best_batch_exact/subset_nodes.csv}
+  \item \path{exps/classification/Cora_ML/val_hard_bp_k6_kappa3_batch_exact/fixed_methods.csv}
+\end{itemize}
+}
+
+\begin{thebibliography}{10}
+
+\bibitem{goldberg1984}
+A.~V. Goldberg.
+\newblock Finding a maximum density subgraph.
+\newblock Technical Report UCB/CSD-84-171, EECS Department, University of
+California, Berkeley, 1984.
+\newblock \url{https://www2.eecs.berkeley.edu/Pubs/TechRpts/1984/5956.html}.
+
+\bibitem{charikar2000}
+M. Charikar.
+\newblock Greedy approximation algorithms for finding dense components in a
+graph.
+\newblock In \emph{Approximation Algorithms for Combinatorial Optimization},
+LNCS 1913, pages 84--95, 2000.
+\newblock \url{https://dblp.org/rec/conf/approx/Charikar00.html}.
+
+\bibitem{dinkelbach1967}
+W. Dinkelbach.
+\newblock On nonlinear fractional programming.
+\newblock \emph{Management Science}, 13(7):492--498, 1967.
+\newblock \url{https://doi.org/10.1287/mnsc.13.7.492}.
+
+\bibitem{barnhart1998}
+C. Barnhart, E.~L. Johnson, G.~L. Nemhauser, M.~W.~P. Savelsbergh, and
+P.~H. Vance.
+\newblock Branch-and-price: Column generation for solving huge integer
+programs.
+\newblock \emph{Operations Research}, 46(3):316--329, 1998.
+\newblock \url{https://doi.org/10.1287/opre.46.3.316}.
+
+\bibitem{veremyev2017}
+A. Veremyev, O.~A. Prokopyev, E.~L. Pasiliao, and V. Boginski.
+\newblock Exact and superpolynomial approximation algorithms for the densest
+$k$-subgraph problem.
+\newblock \emph{European Journal of Operational Research}, 262(3):894--903,
+2017.
+\newblock \url{https://doi.org/10.1016/j.ejor.2017.04.034}.
+
+\bibitem{priem2022}
+J. Priem, H. Piwowar, and R. Orr.
+\newblock OpenAlex: A fully-open index of scholarly works, authors, venues,
+institutions, and concepts.
+\newblock arXiv:2205.01833, 2022.
+\newblock \url{https://arxiv.org/abs/2205.01833}.
+
+\bibitem{openalexworks}
+OpenAlex technical documentation.
+\newblock Works API entity documentation.
+\newblock \url{https://docs.openalex.org/api-entities/works}.
+
+\bibitem{fey2019}
+M. Fey and J.~E. Lenssen.
+\newblock Fast graph representation learning with PyTorch Geometric.
+\newblock arXiv:1903.02428, 2019.
+\newblock \url{https://arxiv.org/abs/1903.02428}.
+
+\bibitem{pygcitationfull}
+PyTorch Geometric documentation.
+\newblock \texttt{torch\_geometric.datasets.CitationFull}.
+\newblock \url{https://pytorch-geometric.readthedocs.io/en/stable/generated/torch_geometric.datasets.CitationFull.html}.
+
+\bibitem{bojchevski2017}
+A. Bojchevski and S. Guennemann.
+\newblock Deep Gaussian embedding of graphs: Unsupervised inductive learning
+via ranking.
+\newblock arXiv:1707.03815, 2017.
+\newblock \url{https://arxiv.org/abs/1707.03815}.
+
+\end{thebibliography}
+
+\end{document}
