@@ -29,10 +29,12 @@ VARIANT_FLAGS = {
 class SolverParams(BaseModel):
     """Shared solver-side hyperparameters across both extraction endpoints."""
 
-    k: int = Field(default=5, ge=2, description="Target subgraph size (BP)")
+    k: int = Field(default=5, ge=2, description="Target subgraph size (BP, AvgDeg, BFS-with-grow)")
     variant: str = Field(default="bp", description="Solver variant: bp, avgdeg, bfs")
     kappa: int = Field(default=0, ge=0, description="Edge-connectivity threshold (BP only; 0 disables)")
     bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
+    bfs_use_k: bool = Field(default=True, description="If true, BFS reduces its visited pool to size k via grow-to-k; if false, returns the full pool")
+    avgdeg_use_k: bool = Field(default=True, description="If true, AvgDeg grows its Goldberg optimum to size k when |S*| < k; if false, returns the unconstrained optimum")
 
     time_limit: Optional[float] = -1.0
     node_limit: Optional[int] = -1
@@ -81,8 +83,12 @@ def _variant_argv(req: "SolverParams") -> list:
 
     if variant == "bp":
         args += ["--k", str(req.k), "--kappa", str(req.kappa)]
+    if variant == "avgdeg" and req.avgdeg_use_k:
+        args += ["--k", str(req.k)]
     if variant == "bfs":
         args += ["--bfs-depth", str(req.bfs_depth)]
+        if req.bfs_use_k:
+            args += ["--k", str(req.k)]
     args.append("--compute-qualities")
     return args
 
