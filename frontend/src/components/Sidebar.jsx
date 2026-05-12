@@ -77,6 +77,8 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
   const usesK             = !!spec.uses?.k;
   const usesKappa         = !!spec.uses?.kappa;
   const usesBfsDepth      = !!spec.uses?.bfsDepth;
+  const usesBfsUseK       = !!spec.uses?.bfsUseK;
+  const usesAvgdegUseK    = !!spec.uses?.avgdegUseK;
   const usesBpInternals   = !!spec.uses?.bpInternals;
   const usesTimeBudget    = spec.uses?.timeBudget !== false;
 
@@ -251,6 +253,32 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                   <label className="field-label">BFS Depth</label>
                   <input type="number" min="0" step="1" value={params.bfsDepth} onChange={set('bfsDepth')} className="field-input" />
                   <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">hops out from the seed</div>
+                </div>
+              )}
+              {usesBfsUseK && (
+                <div>
+                  <label className="field-label flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={params.bfsUseK !== false}
+                      onChange={(e) => setParams(prev => ({ ...prev, bfsUseK: e.target.checked }))}
+                    />
+                    <span>Grow-to-k</span>
+                  </label>
+                  <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">when enabled, the visited pool is reduced to size k via the shared at-least-k heuristic</div>
+                </div>
+              )}
+              {usesAvgdegUseK && (
+                <div>
+                  <label className="field-label flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={params.avgdegUseK !== false}
+                      onChange={(e) => setParams(prev => ({ ...prev, avgdegUseK: e.target.checked }))}
+                    />
+                    <span>Grow-to-k</span>
+                  </label>
+                  <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">when enabled, the Goldberg optimum is enlarged to size k when |S*| &lt; k</div>
                 </div>
               )}
             </div>

@@ -39,14 +39,14 @@ export const SOLVER_VARIANTS = [
   {
     value: VARIANT_AVGDEG,
     label: 'Avg-Degree (Goldberg)',
-    blurb: 'Exact query-anchored maximum average degree. No size target.',
-    uses: { timeBudget: false },
+    blurb: 'Exact query-anchored maximum average degree; optional grow-to-k fills the optimum when |S*| < k.',
+    uses: { k: true, avgdegUseK: true, timeBudget: false },
   },
   {
     value: VARIANT_BFS,
     label: 'BFS Expansion',
-    blurb: 'Pure breadth-first frontier around the seed. Fast, no quality guarantee.',
-    uses: { bfsDepth: true },
+    blurb: 'Breadth-first frontier around the seed. Optional grow-to-k reduces the pool to size k.',
+    uses: { bfsDepth: true, bfsUseK: true, k: true },
   },
 ];
 
