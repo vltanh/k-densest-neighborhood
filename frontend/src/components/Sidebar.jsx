@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import { Square, Play, ChevronDown } from 'lucide-react';
-import { DispatchView, LogView, StatusBadge } from './TelemetryPanel';
 import {
   ORACLE_MODES,
   ORACLE_SIM,
@@ -9,36 +8,6 @@ import {
   VARIANT_BP,
   variantSpec,
 } from '../constants';
-
-function Tab({ label, active, onClick, badge = null }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative pb-2 pt-1 eyebrow flex items-center gap-2 transition-colors duration-200 ease-out ${
-        active ? 'text-[var(--on-night)]' : 'text-[var(--on-night-faint)] hover:text-[var(--on-night-dim)]'
-      }`}
-    >
-      <span>{label}</span>
-      {badge}
-      <span
-        className="absolute left-0 right-0 -bottom-px h-[2px] transition-[background-color,transform] duration-200 ease-out origin-left"
-        style={{
-          backgroundColor: active ? 'var(--gold)' : 'transparent',
-          transform: active ? 'scaleX(1)' : 'scaleX(0.4)',
-        }}
-      />
-    </button>
-  );
-}
-
-function TabBar({ children }) {
-  return (
-    <div className="flex items-center gap-7 border-b border-[var(--rule-night)]">
-      {children}
-    </div>
-  );
-}
 
 function OracleDropdown({ value, onChange, disabled }) {
   const current = ORACLE_MODES.find(m => m.value === value) || ORACLE_MODES[0];
@@ -63,13 +32,12 @@ function OracleDropdown({ value, onChange, disabled }) {
   );
 }
 
-export default function Sidebar({ width, fluid = false, hideFeed = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
+export default function Sidebar({ width, fluid = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, loading, onExtract, onStop }) {
   const set = useCallback(
     (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value })),
     [setParams],
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [feedTab, setFeedTab] = useState('dispatch');
   const isSim = oracleMode === ORACLE_SIM;
 
   const variant = params.variant || VARIANT_BP;
@@ -84,7 +52,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
   return (
     <div
       style={fluid ? { width: '100%' } : { width: `${width}px` }}
-      className={`texture-night text-[var(--on-night)] flex flex-col h-full ${hideFeed ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'} shrink-0 z-20 relative`}
+      className="texture-night text-[var(--on-night)] flex flex-col h-full overflow-y-auto custom-scrollbar shrink-0 z-20 relative"
     >
       <div className="absolute inset-0 pointer-events-none border-r border-[var(--rule-night)]" />
 
@@ -283,7 +251,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
 
         <div className="pb-6">
           {advancedOpen && (
-            <div className={`pt-4 ${hideFeed ? '' : 'max-h-[46vh] overflow-y-auto custom-scrollbar pr-2 -mr-2'} fade-in`}>
+            <div className="pt-4 fade-in">
               <div className="space-y-5">
 
               {/* Oracle limits — apply to every variant */}
@@ -359,36 +327,6 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
         </div>
       </section>
 
-      {/* FEED */}
-      {!hideFeed && (
-      <section className="px-7 pb-6 flex flex-col flex-grow overflow-hidden min-h-0">
-        <TabBar>
-          <Tab label="Dispatch" active={feedTab === 'dispatch'} onClick={() => setFeedTab('dispatch')} />
-          <Tab
-            label="Log"
-            active={feedTab === 'log'}
-            onClick={() => setFeedTab('log')}
-            badge={
-              logs.length > 0 && (
-                <span className="text-[length:var(--text-xs)] font-mono tnum text-[var(--on-night-faint)] normal-case tracking-normal">
-                  {logs.length}
-                </span>
-              )
-            }
-          />
-          <div className="flex-grow" />
-          <div className="pb-2">
-            <StatusBadge status={telemetry.status} />
-          </div>
-        </TabBar>
-
-        <div className="pt-5 flex flex-col flex-grow min-h-0">
-          {feedTab === 'dispatch' && <DispatchView telemetry={telemetry} loading={loading} />}
-          {feedTab === 'log' && <LogView logs={logs} loading={loading} />}
-        </div>
-      </section>
-      )}
-
       {/* FOOTER */}
       {!hideFooter && (
       <footer className="px-7 pt-5 pb-7 shrink-0 border-t border-[var(--rule-night)] bg-[var(--night-2)] relative">
@@ -419,7 +357,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
       </footer>
       )}
 
-      {hideFeed && <div className="flex-grow" />}
+      <div className="flex-grow" />
     </div>
   );
 }

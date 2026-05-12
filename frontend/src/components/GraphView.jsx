@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import * as d3 from 'd3';
-import { ZoomIn, ZoomOut, Maximize, Download, Layers, X } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Download, Layers, Activity, X } from 'lucide-react';
 import { ORACLE_SIM, classColor } from '../constants';
 
 // Palette — azure chrome + ember hot accent for seed.
@@ -12,7 +12,7 @@ const COL_GHOST    = '#AFC0D6';
 const COL_GHOST_LN = '#8297B2';
 const COL_CORE     = '#1B3A66';  // core fill — deep navy
 
-export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false }) {
+export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false, onToggleTelemetry, telemetryOpen = false }) {
   const isSim = oracleMode === ORACLE_SIM;
   const numClasses = meta?.numClasses ?? null;
   const coreFill = (d) => {
@@ -322,6 +322,19 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
         <button type="button" onClick={() => handleZoom(0.7)} className="btn-chrome" title="Zoom Out" aria-label="Zoom out"><ZoomOut size={15}/></button>
         <button type="button" onClick={resetZoom}             className="btn-chrome" title="Reset"    aria-label="Reset zoom"><Maximize size={15}/></button>
         <button type="button" onClick={exportSVG}             className="btn-chrome" title="Export SVG" aria-label="Export as SVG"><Download size={15}/></button>
+        {onToggleTelemetry && (
+          <button
+            type="button"
+            onClick={onToggleTelemetry}
+            className="btn-chrome"
+            title="Telemetry"
+            aria-label="Toggle telemetry panel"
+            aria-pressed={telemetryOpen}
+            style={telemetryOpen ? { color: 'var(--accent)' } : undefined}
+          >
+            <Activity size={15} />
+          </button>
+        )}
       </div>
 
       {/* ═══ LEGEND DRAWER — collapsible, bottom-left ═════════════════════ */}

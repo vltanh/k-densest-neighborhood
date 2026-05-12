@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import GraphView from './components/GraphView';
 import PaperLedger from './components/PaperLedger';
 import PaperModal from './components/PaperModal';
+import TelemetryFloatingPanel from './components/TelemetryFloatingPanel';
 import { DispatchView, LogView } from './components/TelemetryPanel';
 
 const SHARED_DEFAULTS = {
@@ -61,6 +62,7 @@ export default function App() {
 
   const isMobile = useMediaQuery('(max-width: 900px)');
   const [mobileTab, setMobileTab] = useState('atlas');
+  const [telemetryOpen, setTelemetryOpen] = useState(false);
 
   const { sidebarWidth, setSidebarWidth, setIsDraggingSidebar,
           ledgerHeightPct, setLedgerHeightPct, setIsDraggingLedger } = useDragResize();
@@ -125,9 +127,9 @@ export default function App() {
         telemetry={telemetry}
         graphData={graphData}
         sidebarProps={{
-          fluid: true, hideFeed: true, hideFooter: true, hideHeader: true,
+          fluid: true, hideFooter: true, hideHeader: true,
           oracleMode, onOracleChange: handleOracleChange,
-          params, setParams, logs, telemetry, meta, loading,
+          params, setParams, loading,
           onExtract: handleExtract, onStop: stopExtraction,
         }}
         logs={logs}
@@ -156,9 +158,6 @@ export default function App() {
         onOracleChange={handleOracleChange}
         params={params}
         setParams={setParams}
-        logs={logs}
-        telemetry={telemetry}
-        meta={meta}
         loading={loading}
         onExtract={handleExtract}
         onStop={stopExtraction}
@@ -196,6 +195,16 @@ export default function App() {
           setHoveredNode={setHoveredNode}
           setClickedNode={setClickedNode}
           heightPct={100 - ledgerHeightPct}
+          onToggleTelemetry={() => setTelemetryOpen(v => !v)}
+          telemetryOpen={telemetryOpen}
+        />
+
+        <TelemetryFloatingPanel
+          telemetry={telemetry}
+          logs={logs}
+          loading={loading}
+          open={telemetryOpen}
+          onClose={() => setTelemetryOpen(false)}
         />
 
         <div
