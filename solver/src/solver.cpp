@@ -959,7 +959,7 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
 
     auto cmp = [](const pair<double, int> &a, const pair<double, int> &b)
     {
-        if (abs(a.first - b.first) > 1e-6)
+        if (std::fabs(a.first - b.first) > 1e-6)
             return a.first > b.first;
         return a.second > b.second;
     };
@@ -1286,7 +1286,7 @@ pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map
         if (val <= tol || val >= 1.0 - tol)
             continue;
 
-        double diff = abs(val - 0.5);
+        double diff = std::fabs(val - 0.5);
         double internal_deg = 0.0;
 
         auto out_it = adj_out.find(v);
@@ -1322,7 +1322,7 @@ pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map
                 min_diff = diff;
                 branch_var = v;
             }
-            else if (abs(internal_deg - min_hanging_deg) <= 1e-3 && diff < min_diff)
+            else if (std::fabs(internal_deg - min_hanging_deg) <= 1e-3 && diff < min_diff)
             {
                 min_diff = diff;
                 branch_var = v;
@@ -1336,7 +1336,7 @@ pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map
                 max_core_deg = internal_deg;
                 branch_var = v;
             }
-            else if (abs(diff - min_diff) <= 1e-3 && internal_deg > max_core_deg)
+            else if (std::fabs(diff - min_diff) <= 1e-3 && internal_deg > max_core_deg)
             {
                 max_core_deg = internal_deg;
                 branch_var = v;
@@ -1401,7 +1401,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
 
         if (best_int_obj > tol && heuristic_global_ub > -1e8)
         {
-            double gap = (heuristic_global_ub - best_int_obj) / max(abs(best_int_obj), tol);
+            double gap = (heuristic_global_ub - best_int_obj) / max(std::fabs(best_int_obj), tol);
             if (gap <= bb_gap_tol)
                 break;
         }
