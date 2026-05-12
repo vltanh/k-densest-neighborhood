@@ -15,16 +15,18 @@ function Tab({ label, active, onClick, badge = null }) {
     <button
       type="button"
       onClick={onClick}
-      className={`relative pb-2 pt-1 eyebrow transition-colors flex items-center gap-2 ${
+      className={`relative pb-2 pt-1 eyebrow flex items-center gap-2 transition-colors duration-200 ease-out ${
         active ? 'text-[var(--on-night)]' : 'text-[var(--on-night-faint)] hover:text-[var(--on-night-dim)]'
       }`}
     >
       <span>{label}</span>
       {badge}
       <span
-        className={`absolute left-0 right-0 -bottom-px h-[2px] transition-colors ${
-          active ? 'bg-[var(--gold)]' : 'bg-transparent'
-        }`}
+        className="absolute left-0 right-0 -bottom-px h-[2px] transition-[background-color,transform] duration-200 ease-out origin-left"
+        style={{
+          backgroundColor: active ? 'var(--gold)' : 'transparent',
+          transform: active ? 'scaleX(1)' : 'scaleX(0.4)',
+        }}
       />
     </button>
   );
@@ -102,7 +104,7 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
       </header>
       )}
 
-      <div className="h-[3px] shrink-0 relative">
+      <div className="h-[4px] shrink-0 relative">
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-[var(--rule-night)]" />
         {loading && <div className="absolute inset-0 marquee-bar" />}
       </div>

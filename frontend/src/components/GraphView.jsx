@@ -12,7 +12,7 @@ const COL_GHOST    = '#AFC0D6';
 const COL_GHOST_LN = '#8297B2';
 const COL_CORE     = '#1B3A66';  // core fill — deep navy
 
-export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct }) {
+export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false }) {
   const isSim = oracleMode === ORACLE_SIM;
   const numClasses = meta?.numClasses ?? null;
   const coreFill = (d) => {
@@ -370,6 +370,11 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
           <div className="eyebrow text-[var(--danger)] mb-2">Erratum</div>
           <div className="text-[length:var(--text-base)] leading-snug">{error}</div>
         </div>
+      )}
+
+      {/* Skeleton shimmer — only on initial run while no nodes have streamed in. */}
+      {loading && graphData.nodes.length === 0 && !error && (
+        <div className="shimmer-band z-0" aria-hidden="true" />
       )}
 
       {graphData.nodes.length === 0 && !error && (

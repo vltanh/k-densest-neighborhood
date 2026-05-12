@@ -16,6 +16,7 @@ const SHARED_DEFAULTS = {
   kappa: 0,
   bfsDepth: 1,
   bfsUseK: true,
+  avgdegUseK: true,
   timeLimit: -1,
   nodeLimit: -1,
   maxInEdges: 0,
@@ -132,7 +133,7 @@ export default function App() {
         }}
         logs={logs}
         graphProps={{
-          graphData, queryNode: extractedSeed, oracleMode: extractedMode, meta, error,
+          graphData, queryNode: extractedSeed, oracleMode: extractedMode, meta, error, loading,
           hoveredNode, setHoveredNode, setClickedNode, heightPct: 100,
         }}
         ledgerProps={{
@@ -191,6 +192,7 @@ export default function App() {
           oracleMode={extractedMode}
           meta={meta}
           error={error}
+          loading={loading}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
           setClickedNode={setClickedNode}

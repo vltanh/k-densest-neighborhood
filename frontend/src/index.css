@@ -171,28 +171,28 @@ body { margin: 0; }
 }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */
-.custom-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(126, 185, 232, 0.45) transparent; }
+.custom-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(126, 185, 232, 0.55) transparent; }
 .custom-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(126, 185, 232, 0.35);
+  background-color: rgba(126, 185, 232, 0.48);
   border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(58, 124, 227, 0.55); }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(58, 124, 227, 0.65); }
 
 /* Paper-flavoured scrollbar for the ledger */
-.scrollbar-paper { scrollbar-width: thin; scrollbar-color: rgba(11, 26, 46, 0.3) transparent; }
+.scrollbar-paper { scrollbar-width: thin; scrollbar-color: rgba(11, 26, 46, 0.42) transparent; }
 .scrollbar-paper::-webkit-scrollbar { width: 12px; height: 12px; }
 .scrollbar-paper::-webkit-scrollbar-track { background: transparent; }
 .scrollbar-paper::-webkit-scrollbar-thumb {
-  background-color: rgba(11, 26, 46, 0.22);
+  background-color: rgba(11, 26, 46, 0.32);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
-.scrollbar-paper::-webkit-scrollbar-thumb:hover { background-color: rgba(58, 124, 227, 0.45); }
+.scrollbar-paper::-webkit-scrollbar-thumb:hover { background-color: rgba(58, 124, 227, 0.55); }
 
 /* ── Field elements ─────────────────────────────────────────────────────── */
 .field-input {
@@ -340,6 +340,74 @@ input[type="range"].slider-obs::-moz-range-thumb {
 }
 .fade-in { animation: fade-in 400ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 
+/* Modal entry — backdrop fades, content slides up + fades. The two
+   pieces animate on the same easing curve but with a short stagger so
+   the sheet lands on a settled backdrop, not mid-fade. */
+@keyframes modal-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes modal-content-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0)  scale(1); }
+}
+.modal-backdrop { animation: modal-backdrop-in 200ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.modal-content  { animation: modal-content-in  240ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+                  animation-delay: 40ms; }
+
+/* Empty-state skeleton — a single low-contrast band drifting across the
+   canvas so the screen doesn't sit dead during a long extract. */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+.shimmer-band {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.shimmer-band::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 0;
+  width: 35%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(58, 124, 227, 0.05) 35%,
+    rgba(58, 124, 227, 0.10) 50%,
+    rgba(58, 124, 227, 0.05) 65%,
+    transparent 100%);
+  animation: shimmer 2.8s linear infinite;
+}
+
+/* Tab underline — smooth slide between active states. */
+.tab-underline-track {
+  position: relative;
+}
+.tab-underline {
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 2px;
+  transition: background-color 220ms ease, transform 220ms ease;
+}
+
+/* Link/button hover wash — subtle tactile pad on ledger and modal links.
+   Sits behind text via padding, doesn't shift layout. */
+.link-tap {
+  border-radius: 2px;
+  padding-left: 4px;
+  padding-right: 4px;
+  margin-left: -4px;
+  margin-right: -4px;
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.link-tap:hover {
+  background-color: rgba(217, 119, 87, 0.08);
+}
+
 @keyframes scan {
   0% { transform: translateY(-100%); }
   100% { transform: translateY(100%); }
@@ -469,9 +537,12 @@ input[type="range"].slider-obs::-moz-range-thumb {
 .graph-node { transition: filter 180ms ease; }
 .graph-node:hover { filter: drop-shadow(0 0 6px rgba(217, 119, 87, 0.55)); }
 
-/* Container query: telemetry grid adapts to sidebar width */
+/* Container query: telemetry grid adapts to sidebar width — 2 → 3 → 4 cols. */
 .telemetry-container { container-type: inline-size; }
 .telemetry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; }
+@container (min-width: 280px) {
+  .telemetry-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @container (min-width: 380px) {
   .telemetry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }

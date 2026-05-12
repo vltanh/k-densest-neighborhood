@@ -6,12 +6,12 @@ export default function PaperModal({ content, onClose }) {
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center p-6"
+      className="absolute inset-0 z-50 flex items-center justify-center p-6 modal-backdrop"
       style={{ background: 'rgba(5, 11, 20, 0.72)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[0_12px_40px_-8px_rgba(11,26,46,0.35)] border border-[var(--ink)] fade-in"
+        className="texture-paper w-full max-w-3xl max-h-[86vh] flex flex-col overflow-hidden relative shadow-[0_12px_40px_-8px_rgba(11,26,46,0.35)] border border-[var(--ink)] modal-content"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header — single accent hairline on top marks modal identity without corner fleet */}
