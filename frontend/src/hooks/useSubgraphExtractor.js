@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { API_BASE_URL, ORACLE_SIM, ORACLE_OPENALEX, VARIANT_BP } from '../constants';
 import { parseLogLine, TELEMETRY_INITIAL } from '../utils/telemetryParser';
 
@@ -43,6 +43,9 @@ export function useSubgraphExtractor(sessionId) {
     setGraphData({ nodes: [], edges: [] });
     setMeta(null);
     setTelemetry({ ...TELEMETRY_INITIAL, status: 'running', startedAt: Date.now() });
+    // Cancel any in-flight extraction before starting a new one. Without this,
+    // back-to-back Extract clicks would leave the old fetch streaming into state.
+    if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
 
     const pi = (v, def) => { const n = parseInt(v);   return isNaN(n) ? def : n; };
@@ -59,7 +62,7 @@ export function useSubgraphExtractor(sessionId) {
       gap_tol:            pf(params.gapTol,          0.0001),
       dinkelbach_iter:    pi(params.dinkelbachIter,  50),
       cg_batch_frac:      pf(params.cgBatchFrac,     1.0),
-      cg_min_batch:       pi(params.cgMinBatch,      50),
+      cg_min_batch:       pi(params.cgMinBatch,      0),
       cg_max_batch:       pi(params.cgMaxBatch,      50),
       tol:                pf(params.tol,             0.000001),
     };
@@ -124,6 +127,14 @@ export function useSubgraphExtractor(sessionId) {
     if (abortControllerRef.current) abortControllerRef.current.abort();
     setLoading(false);
   };
+
+  // Abort any pending fetch when the component using this hook unmounts so
+  // the stream reader does not keep pushing into stale setState.
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+    };
+  }, []);
 
   return { graphData, logs, telemetry, meta, loading, error, extractSubgraph, stopExtraction };
 }

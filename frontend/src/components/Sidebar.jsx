@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Square, Play, ChevronDown } from 'lucide-react';
 import { DispatchView, LogView, StatusBadge } from './TelemetryPanel';
 import {
@@ -62,7 +62,10 @@ function OracleDropdown({ value, onChange, disabled }) {
 }
 
 export default function Sidebar({ width, fluid = false, hideFeed = false, hideFooter = false, hideHeader = false, oracleMode, onOracleChange, params, setParams, logs, telemetry, loading, onExtract, onStop }) {
-  const set = (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value }));
+  const set = useCallback(
+    (key) => (e) => setParams(prev => ({ ...prev, [key]: e.target.value })),
+    [setParams],
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [feedTab, setFeedTab] = useState('dispatch');
   const isSim = oracleMode === ORACLE_SIM;

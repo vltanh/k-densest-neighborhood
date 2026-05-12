@@ -263,6 +263,9 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
       .attr('fill', coreFill)
       .attr('stroke', d => d.type === 'core' ? (d.id === queryNode ? COL_EMBER : COL_ICE) : 'none')
       .attr('stroke-width', d => d.type === 'core' ? 1.5 : 0);
+    // coreFill is a closure rebuilt every render but it only reads isSim,
+    // meta.numClasses, and the per-datum d.label; listing it would re-fire
+    // this effect on every parent re-render even when no visual input changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryNode, isSim]);
 
@@ -315,10 +318,10 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
 
       {/* ═══ ZOOM / EXPORT CONTROLS ═══════════════════════════════════════ */}
       <div className="absolute bottom-5 right-6 flex gap-2 z-10">
-        <button onClick={() => handleZoom(1.3)} className="btn-chrome" title="Zoom In"><ZoomIn size={15}/></button>
-        <button onClick={() => handleZoom(0.7)} className="btn-chrome" title="Zoom Out"><ZoomOut size={15}/></button>
-        <button onClick={resetZoom}             className="btn-chrome" title="Reset"><Maximize size={15}/></button>
-        <button onClick={exportSVG}             className="btn-chrome" title="Export SVG"><Download size={15}/></button>
+        <button type="button" onClick={() => handleZoom(1.3)} className="btn-chrome" title="Zoom In"  aria-label="Zoom in"><ZoomIn size={15}/></button>
+        <button type="button" onClick={() => handleZoom(0.7)} className="btn-chrome" title="Zoom Out" aria-label="Zoom out"><ZoomOut size={15}/></button>
+        <button type="button" onClick={resetZoom}             className="btn-chrome" title="Reset"    aria-label="Reset zoom"><Maximize size={15}/></button>
+        <button type="button" onClick={exportSVG}             className="btn-chrome" title="Export SVG" aria-label="Export as SVG"><Download size={15}/></button>
       </div>
 
       {/* ═══ LEGEND DRAWER — collapsible, bottom-left ═════════════════════ */}
