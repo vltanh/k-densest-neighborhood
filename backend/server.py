@@ -1,6 +1,7 @@
 import os
 import csv
 import json
+import math
 import asyncio
 import tempfile
 import httpx
@@ -11,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, Tuple, List, Set
 
 from pymincut.pygraph import PyGraph
 
@@ -44,6 +45,7 @@ class SolverParams(BaseModel):
     cg_min_batch: Optional[int] = 0
     cg_max_batch: Optional[int] = 50
     tol: Optional[float] = 1e-6
+    no_materialize: Optional[bool] = False
 
 
 class SolverRequest(SolverParams):
@@ -89,6 +91,8 @@ def _variant_argv(req: "SolverParams") -> list:
                 + str(req.k),
             )
         args += ["--k", str(req.k), "--kappa", str(req.kappa)]
+        if req.no_materialize:
+            args.append("--no-materialize")
     if variant == "avgdeg":
         if req.k > 0:
             args += ["--k", str(req.k)]
@@ -282,10 +286,10 @@ class SimSolverRequest(SolverParams):
     ghost_max_per_node: Optional[int] = 5
 
 
-# Cache: dataset -> (nodes_df_dict, undirected adjacency, directed out-adjacency, num_classes)
+# Cache: dataset -> (nodes_df_dict, undirected adjacency, directed out-adjacency, num_classes, total undirected volume)
 _sim_cache: Dict[
     str,
-    Tuple[Dict[int, dict], Dict[int, List[int]], Dict[int, List[int]], int],
+    Tuple[Dict[int, dict], Dict[int, List[int]], Dict[int, List[int]], int, int],
 ] = {}
 
 
@@ -332,32 +336,112 @@ def _load_sim_dataset(dataset: str):
             adj.setdefault(t, []).append(s)
             adj_out.setdefault(s, []).append(t)
 
-    _sim_cache[dataset] = (nodes, adj, adj_out, max_label + 1)
+    vol_full = sum(len(neigh) for neigh in adj.values())
+    _sim_cache[dataset] = (nodes, adj, adj_out, max_label + 1, vol_full)
     return _sim_cache[dataset]
+
+
+def _internal_ncut(nodes, internal_pairs) -> float:
+    """Normalised cut of the induced undirected subgraph: cut * (vol_a + vol_b)
+    / (vol_a * vol_b), where (part_a, part_b) is the min-cut and vol_x is the
+    internal degree of part_x. Nodes are remapped to int indices so any
+    hashable node type works. Returns NaN on PyGraph failure."""
+    n = len(nodes)
+    if n < 2 or not internal_pairs:
+        return 0.0
+    try:
+        node_list = list(nodes)
+        idx = {v: i for i, v in enumerate(node_list)}
+        adj_internal: Dict[int, Set[int]] = {i: set() for i in range(n)}
+        cluster_edges: List[Tuple[int, int]] = []
+        for a, b in internal_pairs:
+            ai, bi = idx[a], idx[b]
+            cluster_edges.append((ai, bi))
+            cluster_edges.append((bi, ai))
+            adj_internal[ai].add(bi)
+            adj_internal[bi].add(ai)
+        part_a, part_b, cut_value = PyGraph(
+            list(range(n)), cluster_edges
+        ).mincut("noi", "bqueue", False)
+        vol_a = sum(len(adj_internal[u]) for u in part_a)
+        vol_b = sum(len(adj_internal[u]) for u in part_b)
+        if vol_a > 0 and vol_b > 0:
+            return cut_value * (vol_a + vol_b) / (vol_a * vol_b)
+        return 0.0
+    except Exception as e:
+        logger.warning(f"int_ncut failed (n={n}, m_int={len(internal_pairs)}): {e}")
+        return float("nan")
+
+
+def _compute_openalex_qualities(core_ids: List[str], core_metadata: List[dict]) -> dict:
+    """Directed avg degree, edge density, undirected NCut on the OpenAlex
+    core set. cited_by is ignored: u->v with both in S is already in u's
+    references list since every S node is queried."""
+    S = set(core_ids)
+    n = len(S)
+
+    out_refs = {
+        data["id"]: {r for r in data.get("references", []) if r != data["id"]}
+        for data in core_metadata
+    }
+
+    m_dir = 0
+    internal_pairs: Set[Tuple[str, str]] = set()
+    for u in S:
+        for v in out_refs.get(u, ()):
+            if v in S:
+                m_dir += 1
+                if v != u:
+                    internal_pairs.add((u, v) if u < v else (v, u))
+
+    return {
+        "avg_internal_degree": float(m_dir / n) if n > 0 else 0.0,
+        "edge_density": float(m_dir / (n * (n - 1))) if n > 1 else 0.0,
+        "int_ncut": float(_internal_ncut(core_ids, internal_pairs)),
+    }
+
+
+async def _spawn_solver_and_stream(session_id: str, cmd: List[str]):
+    """Spawn solver subprocess, register in active_processes, stream stdout
+    line by line as NDJSON {type:log} packets. Yields (None, line_ndjson) per
+    log line and finally (process, None) so the caller can await wait() and
+    inspect returncode."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    active_processes[session_id] = process
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        yield None, json.dumps(
+            {"type": "log", "content": line.decode("utf-8").rstrip()}
+        ) + "\n"
+    yield process, None
 
 
 def _compute_sim_qualities(
     core_ids: List[int],
     adj: Dict[int, List[int]],
     adj_out: Dict[int, List[int]],
+    vol_full: int,
 ) -> dict:
-    """Compute density / conductance / normalized-cut metrics on the induced
-    subgraph defined by ``core_ids`` against the cached simulation adjacency."""
+    """Directed density, undirected conductance, undirected NCut on the
+    induced subgraph defined by core_ids against cached sim adjacency.
+    vol_full is the precomputed sum of undirected degrees for the full graph."""
     S = set(core_ids)
     n = len(S)
 
-    # Directed internal edge count (m): (u, v) with u in S, v in adj_out[u], v in S, v != u.
     m = 0
     for u in S:
         for v in adj_out.get(u, []):
             if v in S and v != u:
                 m += 1
 
-    avg_internal_degree = m / n if n > 0 else 0.0
-    edge_density = m / (n * (n - 1)) if n > 1 else 0.0
-
-    # Undirected internal edge dedup via (min, max).
-    internal_pairs = set()
+    internal_pairs: Set[Tuple[int, int]] = set()
     boundary_undirected_edges = 0
     for u in S:
         for v in adj.get(u, []):
@@ -367,47 +451,18 @@ def _compute_sim_qualities(
                 internal_pairs.add((u, v) if u < v else (v, u))
             else:
                 boundary_undirected_edges += 1
-    internal_undirected_edges = len(internal_pairs)
 
-    vol_S = 2 * internal_undirected_edges + boundary_undirected_edges
-    vol_full = sum(len(adj[v]) for v in adj)
-    vol_outside = vol_full - vol_S
-    cond_denom = min(vol_S, vol_outside)
+    vol_S = 2 * len(internal_pairs) + boundary_undirected_edges
+    cond_denom = min(vol_S, vol_full - vol_S)
     ext_conductance = (
         boundary_undirected_edges / cond_denom if cond_denom > 0 else 0.0
     )
 
-    int_ncut: float
-    if internal_undirected_edges == 0 or n < 2:
-        int_ncut = 0.0
-    else:
-        try:
-            cluster_edges = set()
-            for a, b in internal_pairs:
-                cluster_edges.add((a, b))
-                cluster_edges.add((b, a))
-            part_a, part_b, cut_value = PyGraph(
-                list(S), list(cluster_edges)
-            ).mincut("noi", "bqueue", False)
-            vol_a = sum(
-                1 for u in part_a for v in adj.get(u, []) if v in S
-            )
-            vol_b = sum(
-                1 for u in part_b for v in adj.get(u, []) if v in S
-            )
-            if vol_a > 0 and vol_b > 0:
-                int_ncut = cut_value * (vol_a + vol_b) / (vol_a * vol_b)
-            else:
-                int_ncut = 0.0
-        except Exception as e:
-            logger.warning(f"int_ncut computation failed (n={n}, m_int={internal_undirected_edges}): {e}")
-            int_ncut = float("nan")
-
     return {
-        "avg_internal_degree": float(avg_internal_degree),
-        "edge_density": float(edge_density),
+        "avg_internal_degree": float(m / n) if n > 0 else 0.0,
+        "edge_density": float(m / (n * (n - 1))) if n > 1 else 0.0,
         "ext_conductance": float(ext_conductance),
-        "int_ncut": float(int_ncut),
+        "int_ncut": float(_internal_ncut(S, internal_pairs)),
     }
 
 
@@ -420,7 +475,7 @@ def list_datasets():
             os.path.join(base, "edge.csv")
         ):
             try:
-                nodes, _adj, _adj_out, nclass = _load_sim_dataset(d)
+                nodes, _adj, _adj_out, nclass, _vol = _load_sim_dataset(d)
                 out.append({"name": d, "numNodes": len(nodes), "numClasses": nclass})
             except Exception as e:
                 logger.warning(f"Failed loading {d}: {e}")
@@ -435,7 +490,7 @@ async def extract_sim(req: SimSolverRequest):
     if not os.path.exists(bin_path):
         raise HTTPException(status_code=500, detail="Solver missing.")
 
-    nodes_meta, adj, adj_out, num_classes = _load_sim_dataset(req.dataset)
+    nodes_meta, adj, adj_out, num_classes, vol_full = _load_sim_dataset(req.dataset)
     if req.query_node not in nodes_meta:
         raise HTTPException(
             status_code=400,
@@ -465,22 +520,12 @@ async def extract_sim(req: SimSolverRequest):
                 }
             ) + "\n"
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            active_processes[req.session_id] = process
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                yield json.dumps(
-                    {"type": "log", "content": line.decode("utf-8").rstrip()}
-                ) + "\n"
-
+            process = None
+            async for proc, log_line in _spawn_solver_and_stream(req.session_id, cmd):
+                if log_line is not None:
+                    yield log_line
+                else:
+                    process = proc
             await process.wait()
             rc = process.returncode
 
@@ -509,7 +554,7 @@ async def extract_sim(req: SimSolverRequest):
                 yield json.dumps({"type": "error", "content": "Empty subgraph."}) + "\n"
                 return
 
-            qualities = _compute_sim_qualities(core_ids, adj, adj_out)
+            qualities = _compute_sim_qualities(core_ids, adj, adj_out, vol_full)
             yield json.dumps({"type": "qualities", "content": qualities}) + "\n"
 
             core_set = set(core_ids)
@@ -630,21 +675,12 @@ async def extract_subgraph(req: SolverRequest):
                 {"type": "log", "content": f"Executing: {' '.join(cmd)}"}
             ) + "\n"
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            active_processes[req.session_id] = process
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                decoded_line = line.decode("utf-8").rstrip()
-                yield json.dumps({"type": "log", "content": decoded_line}) + "\n"
-
+            process = None
+            async for proc, log_line in _spawn_solver_and_stream(req.session_id, cmd):
+                if log_line is not None:
+                    yield log_line
+                else:
+                    process = proc
             await process.wait()
             rc = process.returncode
 
@@ -687,6 +723,14 @@ async def extract_subgraph(req: SolverRequest):
                         for nid in core_ids
                     ]
                 )
+
+            try:
+                qualities = _compute_openalex_qualities(core_ids, core_metadata)
+                yield json.dumps(
+                    {"type": "qualities", "content": qualities}
+                ) + "\n"
+            except Exception as e:
+                logger.warning(f"openalex qualities computation failed: {e}")
 
             nodes, edges = [], []
             core_id_set = set(core_ids)
