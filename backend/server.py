@@ -29,12 +29,10 @@ VARIANT_FLAGS = {
 class SolverParams(BaseModel):
     """Shared solver-side hyperparameters across both extraction endpoints."""
 
-    k: int = Field(default=5, ge=2, description="Target subgraph size (BP, AvgDeg, BFS-with-grow)")
+    k: int = Field(default=5, ge=0, description="Target subgraph size. BP requires k>=2. AvgDeg/BFS: k>0 grows the optimum to size k, k=0 returns the raw optimum.")
     variant: str = Field(default="bp", description="Solver variant: bp, avgdeg, bfs")
     kappa: int = Field(default=0, ge=0, description="Edge-connectivity threshold (BP only; 0 disables)")
     bfs_depth: int = Field(default=1, ge=0, description="BFS expansion depth (--bfs only)")
-    bfs_use_k: bool = Field(default=True, description="If true, BFS reduces its visited pool to size k via grow-to-k; if false, returns the full pool")
-    avgdeg_use_k: bool = Field(default=True, description="If true, AvgDeg grows its Goldberg optimum to size k when |S*| < k; if false, returns the unconstrained optimum")
 
     time_limit: Optional[float] = -1.0
     hard_time_limit: Optional[float] = -1.0
@@ -84,12 +82,19 @@ def _variant_argv(req: "SolverParams") -> list:
     ]
 
     if variant == "bp":
+        if req.k < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="BP requires k>=2 (densest k-subgraph); got k="
+                + str(req.k),
+            )
         args += ["--k", str(req.k), "--kappa", str(req.kappa)]
-    if variant == "avgdeg" and req.avgdeg_use_k:
-        args += ["--k", str(req.k)]
+    if variant == "avgdeg":
+        if req.k > 0:
+            args += ["--k", str(req.k)]
     if variant == "bfs":
         args += ["--bfs-depth", str(req.bfs_depth)]
-        if req.bfs_use_k:
+        if req.k > 0:
             args += ["--k", str(req.k)]
     args.append("--compute-qualities")
     return args
