@@ -59,6 +59,7 @@ export function useSubgraphExtractor(sessionId) {
       bfs_use_k:          params.bfsUseK !== false,
       avgdeg_use_k:       params.avgdegUseK !== false,
       time_limit:         pf(params.timeLimit,       60.0),
+      hard_time_limit:    pf(params.hardTimeLimit,   -1.0),
       node_limit:         pi(params.nodeLimit,       100000),
       max_in_edges:       pi(params.maxInEdges,      0),
       gap_tol:            pf(params.gapTol,          0.0001),

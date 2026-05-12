@@ -18,6 +18,7 @@ const SHARED_DEFAULTS = {
   bfsUseK: true,
   avgdegUseK: true,
   timeLimit: -1,
+  hardTimeLimit: -1,
   nodeLimit: -1,
   maxInEdges: 0,
   gapTol: -1,

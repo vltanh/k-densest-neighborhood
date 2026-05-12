@@ -312,23 +312,32 @@ export default function Sidebar({ width, fluid = false, hideFeed = false, hideFo
                 <>
                   <div className="pt-1 eyebrow text-[var(--on-night-faint)]">B&P Tuning</div>
                   {usesTimeBudget && (
-                    <div className="grid grid-cols-3 gap-x-5 gap-y-5">
-                      <div>
-                        <label className="field-label">Time Limit (s)</label>
-                        <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
-                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                    <>
+                      <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                        <div>
+                          <label className="field-label">Soft Time (s)</label>
+                          <input type="number" min="-1" step="10" value={params.timeLimit} onChange={set('timeLimit')} className="field-input" />
+                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">no-improvement cap · -1 disables</div>
+                        </div>
+                        <div>
+                          <label className="field-label">Hard Time (s)</label>
+                          <input type="number" min="-1" step="10" value={params.hardTimeLimit} onChange={set('hardTimeLimit')} className="field-input" />
+                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        </div>
                       </div>
-                      <div>
-                        <label className="field-label">Node Limit</label>
-                        <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
-                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                      <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                        <div>
+                          <label className="field-label">Node Limit</label>
+                          <input type="number" min="-1" step="1000" value={params.nodeLimit} onChange={set('nodeLimit')} className="field-input" />
+                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        </div>
+                        <div>
+                          <label className="field-label">Gap Tol</label>
+                          <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
+                          <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
+                        </div>
                       </div>
-                      <div>
-                        <label className="field-label">Gap Tol</label>
-                        <input type="number" min="-1" step="0.0001" value={params.gapTol} onChange={set('gapTol')} className="field-input" />
-                        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic">-1 disables</div>
-                      </div>
-                    </div>
+                    </>
                   )}
 
                   <div className="grid grid-cols-2 gap-x-5 gap-y-5">
