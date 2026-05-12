@@ -1,4 +1,5 @@
 #include "average_degree_solver.hpp"
+#include "bfs_expand.hpp"
 #include "grow_to_k.hpp"
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/push_relabel_max_flow.hpp>
@@ -20,56 +21,45 @@ constexpr int MAX_BISECT_ITERS = 100;
 constexpr double BISECT_TOL = 1e-9;
 }
 
-// Single-pass BFS that records every oracle response, then materialises directed
-// edges in one sweep over the cache. Avoids the previous re-query-every-node
-// second pass.
-AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(int start, int depth)
+// Layer-by-layer BFS to depth d. Records each layer's directed-out adjacency
+// via expand_bfs_layer so lg.edges captures every (u,v) directed edge where
+// both endpoints lie in lg.nodes. Undirected adj, queried, and error_nodes are
+// passed out for downstream consumers (grow_to_k_with_oracle).
+AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(
+    int start, int depth,
+    std::unordered_set<int> &queried,
+    std::unordered_set<int> &error_nodes,
+    std::unordered_map<int, std::unordered_set<int>> &undirected_adj)
 {
     LocalGraph lg;
-    std::queue<std::pair<int, int>> q;
     std::unordered_set<int> visited;
-    std::unordered_set<int> error_nodes;
-    std::vector<std::pair<int, std::vector<int>>> succ_cache;
-
-    q.push({start, 0});
     visited.insert(start);
+    undirected_adj[start];
 
-    while (!q.empty())
+    std::vector<int> frontier{start};
+    std::vector<std::pair<int, std::vector<int>>> all_directed;
+
+    int strict_depth = (depth < 0) ? std::numeric_limits<int>::max() : depth;
+    for (int layer = 0; layer <= strict_depth && !frontier.empty(); ++layer)
     {
-        auto [u, d] = q.front();
-        q.pop();
-
-        std::pair<std::vector<int>, std::vector<int>> edges;
-        try
+        std::vector<std::pair<int, std::vector<int>>> layer_directed;
+        auto next_frontier = expand_bfs_layer(frontier, oracle_, start,
+                                              visited, queried, error_nodes, undirected_adj,
+                                              &layer_directed);
+        for (auto &p : layer_directed)
         {
-            edges = oracle_->query(u);
-        }
-        catch (const std::exception &e)
-        {
-            if (error_nodes.insert(u).second)
+            int u = p.first;
+            if (lg.id_map.find(u) == lg.id_map.end())
             {
-                std::cerr << "[" << get_timestamp() << "] Blacklisting node "
-                          << oracle_->mapper.get_str(u) << " due to API error: " << e.what() << std::endl;
+                lg.id_map[u] = (int)lg.nodes.size();
+                lg.nodes.push_back(u);
             }
-            continue;
+            all_directed.push_back(std::move(p));
         }
-
-        lg.id_map[u] = (int)lg.nodes.size();
-        lg.nodes.push_back(u);
-        succ_cache.push_back({u, std::move(edges.second)});
-
-        if (depth < 0 || d < depth)
-        {
-            for (int v : succ_cache.back().second)
-                if (visited.insert(v).second)
-                    q.push({v, d + 1});
-            for (int v : edges.first)
-                if (visited.insert(v).second)
-                    q.push({v, d + 1});
-        }
+        frontier = next_frontier;
     }
 
-    for (const auto &[u, succs] : succ_cache)
+    for (const auto &[u, succs] : all_directed)
     {
         auto it_u = lg.id_map.find(u);
         if (it_u == lg.id_map.end())
@@ -87,7 +77,11 @@ AverageDegreeSolver::LocalGraph AverageDegreeSolver::explore_neighborhood(int st
 
 std::vector<int> AverageDegreeSolver::solve(int query_node, int depth, int k)
 {
-    LocalGraph lg = explore_neighborhood(query_node, depth);
+    std::unordered_set<int> queried;
+    std::unordered_set<int> error_nodes;
+    std::unordered_map<int, std::unordered_set<int>> undirected_adj;
+    LocalGraph lg = explore_neighborhood(query_node, depth,
+                                         queried, error_nodes, undirected_adj);
 
     if (lg.id_map.find(query_node) == lg.id_map.end())
     {
@@ -241,18 +235,9 @@ std::vector<int> AverageDegreeSolver::solve(int query_node, int depth, int k)
 
     if (k > 0 && (int)best_nodes.size() < k)
     {
-        std::unordered_map<int, std::unordered_set<int>> adj;
-        for (int u : lg.nodes)
-            adj[u];
-        for (const auto &[ui, vi] : directed_edges)
-        {
-            int u = lg.nodes[ui];
-            int v = lg.nodes[vi];
-            adj[u].insert(v);
-            adj[v].insert(u);
-        }
         std::unordered_set<int> S(best_nodes.begin(), best_nodes.end());
-        grow_to_k(S, lg.nodes, adj, k);
+        grow_to_k_with_oracle(S, oracle_, undirected_adj,
+                              queried, error_nodes, k, query_node);
         best_nodes.assign(S.begin(), S.end());
     }
 

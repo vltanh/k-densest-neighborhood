@@ -67,6 +67,7 @@ add_executable(solver
     src/subgraph_quality.cpp
     src/average_degree_solver.cpp
     src/bfs_solver.cpp
+    src/bfs_expand.cpp
     src/grow_to_k.cpp
 )
 
