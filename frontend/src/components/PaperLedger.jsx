@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ArrowUp, ArrowDown } from 'lucide-react';
 import { ORACLE_SIM, classColor } from '../constants';
+import { fmtInt } from '../utils/format';
 
 export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loading, error, hoveredNode, setHoveredNode, clickedNode, onDetails, onBib, heightPct }) {
   const isSim = oracleMode === ORACLE_SIM;
@@ -227,7 +228,7 @@ export default function PaperLedger({ nodes, queryNode, oracleMode, meta, loadin
                     </td>
                     <td className="px-5 py-5 align-top">
                       <span className="font-mono tnum text-[length:var(--text-sm)] text-[var(--ink)]">
-                        {node.citations ? node.citations.toLocaleString() : '—'}
+                        {node.citations ? fmtInt(node.citations) : '—'}
                       </span>
                     </td>
                     <td className="px-5 py-5 align-top">

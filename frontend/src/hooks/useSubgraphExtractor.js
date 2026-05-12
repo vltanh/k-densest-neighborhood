@@ -66,6 +66,7 @@ export function useSubgraphExtractor(sessionId) {
       cg_min_batch:       pi(params.cgMinBatch,      0),
       cg_max_batch:       pi(params.cgMaxBatch,      50),
       tol:                pf(params.tol,             0.000001),
+      no_materialize:     !!params.noMaterialize,
     };
 
     let endpoint, body;

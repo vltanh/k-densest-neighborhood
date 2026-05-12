@@ -345,6 +345,37 @@ export default function Sidebar({ width, fluid = false, hideFooter = false, hide
                             <input type="number" min="1" step="1" value={params.cgMaxBatch} onChange={set('cgMaxBatch')} className="field-input" />
                           </div>
                         </div>
+                        <div className="pt-4 mt-1 border-t border-[var(--rule-night)]">
+                          <div className="flex items-center justify-between gap-4 flex-wrap">
+                            <span className="eyebrow text-[var(--on-night-dim)]">Frontier · Materialise</span>
+                            <div role="group" aria-label="Frontier materialisation strategy" className="inline-flex">
+                              {[
+                                { label: 'Fetch', value: false },
+                                { label: 'Skip', value: true },
+                              ].map(({ label, value }, i) => {
+                                const active = !!params.noMaterialize === value;
+                                return (
+                                  <button
+                                    key={label}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() => setParams(prev => ({ ...prev, noMaterialize: value }))}
+                                    className={`relative min-w-[4.5rem] px-3.5 py-1.5 font-mono text-[length:var(--text-xs)] uppercase tracking-[0.16em] border transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--gold)] focus-visible:z-20 ${i > 0 ? '-ml-px' : ''} ${
+                                      active
+                                        ? 'border-[var(--gold)] text-[var(--gold)] bg-[var(--night-3)] z-10'
+                                        : 'border-[var(--rule-night)] text-[var(--on-night-faint)] hover:text-[var(--on-night-dim)] hover:border-[var(--rule-night-2)]'
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="mt-2 text-[length:var(--text-xs)] text-[var(--on-night-faint)] italic leading-snug">
+                            no per-CG-iter fetch of unqueried frontier · faster on OpenAlex · may weaken pricing on frontier-internal cliques
+                          </div>
+                        </div>
                       </div>
                     </>
                   ) : (

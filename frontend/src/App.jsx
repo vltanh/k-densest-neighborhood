@@ -26,11 +26,16 @@ const SHARED_DEFAULTS = {
   cgMinBatch: 0,
   cgMaxBatch: 50,
   tol: 0.000001,
+  noMaterialize: false,
 };
 
 const DEFAULT_OPENALEX_PARAMS = {
   ...SHARED_DEFAULTS,
   queryNode: 'W2741809807',
+  hardTimeLimit: 120,
+  nodeLimit: 300,
+  cgMaxBatch: 25,
+  noMaterialize: true,
 };
 
 const DEFAULT_SIM_PARAMS = {
@@ -134,7 +139,7 @@ export default function App() {
         }}
         logs={logs}
         graphProps={{
-          graphData, queryNode: extractedSeed, oracleMode: extractedMode, meta, error, loading,
+          graphData, queryNode: extractedSeed, oracleMode: extractedMode, meta, qualities: telemetry.qualities, error, loading,
           hoveredNode, setHoveredNode, setClickedNode, heightPct: 100,
         }}
         ledgerProps={{
@@ -189,6 +194,7 @@ export default function App() {
           queryNode={extractedSeed}
           oracleMode={extractedMode}
           meta={meta}
+          qualities={telemetry.qualities}
           error={error}
           loading={loading}
           hoveredNode={hoveredNode}

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { classifyLine } from '../utils/telemetryParser';
+import { fmtFloat, fmtInt } from '../utils/format';
 
 // ── Line styling ──────────────────────────────────────────────────────────────
 const LINE_STYLES = {
@@ -20,16 +21,7 @@ const LogLine = memo(function LogLine({ text }) {
   return <div className={`${cls} whitespace-pre-wrap`}>{text}</div>;
 });
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
-const fmtInt = (x) => (x == null ? null : Number(x).toLocaleString());
-
-const fmtFloat = (x, digits = 6) => {
-  if (x == null || Number.isNaN(x)) return null;
-  const abs = Math.abs(x);
-  if (abs !== 0 && (abs < 1e-3 || abs >= 1e6)) return x.toExponential(3);
-  return x.toFixed(digits);
-};
-
+// ── Elapsed time ──────────────────────────────────────────────────────────────
 const fmtElapsed = (startedAt, finishedAt) => {
   if (!startedAt) return null;
   const end = finishedAt ?? Date.now();

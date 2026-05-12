@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useMemo, useState } from 'react';
 import * as d3 from 'd3';
 import { ZoomIn, ZoomOut, Maximize, Download, Layers, Activity, X } from 'lucide-react';
 import { ORACLE_SIM, classColor } from '../constants';
+import { fmtFloat } from '../utils/format';
 
 // Palette — azure chrome + ember hot accent for seed.
 const COL_INK      = '#0B1A2E';
@@ -12,7 +13,7 @@ const COL_GHOST    = '#AFC0D6';
 const COL_GHOST_LN = '#8297B2';
 const COL_CORE     = '#1B3A66';  // core fill — deep navy
 
-export default function GraphView({ graphData, queryNode, oracleMode, meta, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false, onToggleTelemetry, telemetryOpen = false }) {
+export default function GraphView({ graphData, queryNode, oracleMode, meta, qualities, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false, onToggleTelemetry, telemetryOpen = false }) {
   const isSim = oracleMode === ORACLE_SIM;
   const numClasses = meta?.numClasses ?? null;
   const coreFill = (d) => {
@@ -27,7 +28,7 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
   const stats = useMemo(() => {
     const v = graphData.nodes.filter(n => n.type === 'core').length;
     const e = graphData.edges.filter(l => l.type === 'core').length;
-    const density = v > 1 ? (e / (v * (v - 1))).toFixed(4) : '0.0000';
+    const density = v > 1 ? fmtFloat(e / (v * (v - 1)), 4) : '0.0000';
     return { v, e, density, ghosts: graphData.nodes.length - v };
   }, [graphData]);
 
@@ -311,7 +312,15 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, erro
             <Divider />
             <StatCell label="Frontier" value={stats.ghosts} muted />
             <Divider />
-            <StatCell label="Density" value={stats.density} accent mono />
+            <StatCell label="Edge Density" value={fmtFloat(qualities?.edge_density, 4) ?? stats.density} accent mono />
+            {qualities && (
+              <>
+                <Divider />
+                <StatCell label="Average Degree" value={fmtFloat(qualities.avg_internal_degree, 4)} accent mono />
+                <Divider />
+                <StatCell label="NCut" value={fmtFloat(qualities.int_ncut, 4)} mono />
+              </>
+            )}
           </div>
         )}
       </div>
