@@ -435,6 +435,10 @@ def _graph_dir(root: Path, n: int, p: float, seed: int) -> Path:
 
 
 def _generate_one(n: int, p: float, seed: int, root: Path):
+    # Symmetric directed graph: draw each unordered pair {u, v} with probability
+    # p, then write both directed arcs (u, v) and (v, u). The directed solver
+    # input therefore has reciprocal arcs everywhere; p is the undirected-pair
+    # rate, not the per-arc rate.
     rng = np.random.default_rng(seed)
     edges_und = []
     for u in range(n):
