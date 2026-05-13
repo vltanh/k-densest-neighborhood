@@ -10,6 +10,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from _solver_runner import invoke_solver, parse_solver_json
 
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SOLVER_BIN = os.path.join(_REPO_ROOT, "solver", "bin", "solver")
+_SYNTHETIC_TRAP_EDGE_CSV = os.path.join(
+    _REPO_ROOT, "data", "synthetic", "bf", "n20", "p050", "s4", "edge.csv"
+)
+_GUROBI_LICENSE = "/home/vltanh/gurobi.lic"
+
 _PAYLOAD = {
     "schema_version": "1.0",
     "method": "bp",
@@ -109,6 +116,34 @@ class InvokeSolverTests(unittest.TestCase):
         stdout = "header\nlog line\nJSON_RESULT:" + json.dumps({"size": 7}) + "\ntrailer"
         parsed = parse_solver_json(stdout)
         self.assertEqual(parsed["size"], 7)
+
+
+@unittest.skipUnless(
+    os.path.exists(_SOLVER_BIN)
+    and os.path.exists(_SYNTHETIC_TRAP_EDGE_CSV)
+    and os.path.exists(_GUROBI_LICENSE),
+    "solver binary, synthetic fixture, or Gurobi license unavailable",
+)
+class BpRootQueryRegressionTests(unittest.TestCase):
+    def test_bp_root_fix_keeps_query_in_solution_on_synthetic_clique_trap(self):
+        old_license = os.environ.get("GRB_LICENSE_FILE")
+        os.environ["GRB_LICENSE_FILE"] = _GUROBI_LICENSE
+        try:
+            result = invoke_solver(
+                bin_path=_SOLVER_BIN,
+                edge_csv=_SYNTHETIC_TRAP_EDGE_CSV,
+                query="6",
+                extra_args=["--bp", "--k", "3", "--kappa", "0", "--gurobi-seed", "42"],
+                as_int_nodes=True,
+            )
+        finally:
+            if old_license is None:
+                os.environ.pop("GRB_LICENSE_FILE", None)
+            else:
+                os.environ["GRB_LICENSE_FILE"] = old_license
+
+        self.assertEqual(result["returncode"], 0, msg=result["stderr"][-1000:])
+        self.assertIn(6, result["pred_nodes"])
 
 
 if __name__ == "__main__":
