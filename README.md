@@ -268,7 +268,7 @@ All scripts below live in `scripts/classification/` and should be run from the p
 
 ### 1. Prepare Data
 
-Downloads a CitationFull dataset and exports edge and node split files to `data/<dataset>/`. The split is **temporal/inductive**: nodes that have been cited ("foundational" papers) form the training set, while purely-citing ("new") papers are evenly divided into validation and test sets.
+Downloads a CitationFull dataset and exports edge and node split files to `data/<dataset>/`. The split is **inductive on pure sources**: nodes that have been cited ("foundational" papers) form the training pool, and the purely-citing ("new") papers with out-degree ≥ 2 are shuffled under a fixed random seed (default 42) and split evenly into validation and test sets.
 
 ```bash
 python scripts/classification/prepare_data.py --dataset <dataset_name>

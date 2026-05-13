@@ -265,8 +265,8 @@ evaluate on test and on the BFS-hard test subset.
 Best per method by val F1. BFS depth 1 at k=4 is family-best
 and overall-best with F1 0.825. AvgDeg at k=4 is family-best
 at F1 0.563. BP at k=4, kappa=2 is family-best at F1 0.811,
-competitive but below BFS depth 1. The temporal split favours
-BFS: pure-source test papers cite same-class training papers,
+competitive but below BFS depth 1. The pure-source query pool
+favours BFS: test papers cite same-class training papers,
 so direct citations are a near-perfect signal.
 
 
@@ -329,7 +329,7 @@ downstream readout of the retrieved geometry.
 -- Slide: Limitations --
 
 Numbers reported only for Cora-ML; more datasets in progress.
-The temporal split makes one-hop BFS match the homophily structure: test
+The pure-source query pool makes one-hop BFS match the homophily structure: test
 nodes are pure sources whose direct citations sit in the
 train set. The hard subset is a conditional diagnostic on
 queries where depth-1 BFS already fails, so BFS scores zero
