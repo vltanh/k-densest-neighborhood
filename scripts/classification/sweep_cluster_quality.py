@@ -141,13 +141,13 @@ def main():
     parser.add_argument(
         "--seeds",
         type=str,
-        default="42,43,44,45,46",
+        default="42",
         help="Comma-separated Gurobi seeds for BP cells; deterministic methods ignore them and run once.",
     )
     parser.add_argument(
         "--solver-time-limit",
         type=float,
-        default=None,
+        default=60.0,
         help=(
             "Per-call no-improvement budget (seconds) appended to BP solver "
             "argv via --time-limit. Soft cap: the solver returns its current "
@@ -159,7 +159,7 @@ def main():
     parser.add_argument(
         "--hard-time-limit",
         type=float,
-        default=None,
+        default=300.0,
         help=(
             "Per-call wall-time hard cap (seconds), passed to the C++ solver "
             "via --hard-time-limit. The solver breaks out of Dinkelbach / "
@@ -183,7 +183,7 @@ def main():
     parser.add_argument("--bp-kappa", type=str, default="0,1,2")
     parser.add_argument("--bp-time-limit", type=str, default="-1")
     parser.add_argument("--bp-dinkelbach-iter", type=str, default="-1")
-    parser.add_argument("--bfs-depth", type=str, default="1,2")
+    parser.add_argument("--bfs-depth", type=str, default="1")
     args = parser.parse_args()
 
     df_nodes = pd.read_csv(os.path.join(args.data_dir, args.dataset, "nodes.csv"))
