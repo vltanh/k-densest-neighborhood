@@ -70,8 +70,11 @@ void FullBranchAndPriceSolver::_ingest_neighbors(int v, const vector<int> &preds
     }
 }
 
-// BFS from q to seed V_active with ≥ k nodes. A second pass queries nodes that
-// were added as neighbours but never expanded, completing their adjacency lists.
+// BFS from q to seed V_active with ≥ k nodes. Every node popped from the queue
+// is queried before insertion into V_active, so each active member has a
+// materialised adjacency by the time the function returns. The post-loop sweep
+// over V_active is a no-op safety net: it would re-query any active member
+// missing from bfs_queried, which the current code path never produces.
 // Throws std::runtime_error if the query node itself cannot be fetched.
 void FullBranchAndPriceSolver::_initialize_active_set()
 {
@@ -114,8 +117,11 @@ void FullBranchAndPriceSolver::_initialize_active_set()
         }
     }
 
-    // Second pass: query active nodes that were added as neighbours during BFS
-    // but never expanded themselves, so their own adjacency lists are complete.
+    // Safety net: query any V_active member that is not in bfs_queried. The
+    // current first-pass logic inserts into V_active only after a successful
+    // query, so this loop body is unreachable in the present code; it is kept
+    // as defense against future paths that might promote a node before
+    // querying it.
     vector<int> active_copy(V_active.begin(), V_active.end());
     for (int v : active_copy)
     {
@@ -1112,11 +1118,6 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     if (eligible < k)
         return {std::move(local_x_bar), -1e9};
 
-    auto t0 = chrono::high_resolution_clock::now();
-    _apply_node_bounds(v1, v0);
-    auto t1 = chrono::high_resolution_clock::now();
-    stats.t_sync += chrono::duration<double>(t1 - t0).count();
-
     while (true)
     {
         auto t_now = chrono::high_resolution_clock::now();
@@ -1136,9 +1137,13 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
             return {std::move(local_x_bar), local_lp_obj};
         }
 
-        t0 = chrono::high_resolution_clock::now();
+        auto t0 = chrono::high_resolution_clock::now();
         _sync_rmp_structure(lambda_val);
-        t1 = chrono::high_resolution_clock::now();
+        // Bounds must be applied after synchronizing the RMP. At the root, q is
+        // fixed before x_q exists; applying bounds before variable registration
+        // silently leaves x_q free.
+        _apply_node_bounds(v1, v0);
+        auto t1 = chrono::high_resolution_clock::now();
         stats.t_sync += chrono::duration<double>(t1 - t0).count();
 
         double lp_time_budget = -1.0;
