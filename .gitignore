@@ -229,15 +229,18 @@ AGENTS.md
 CLAUDE.md
 exps/
 
+# Claude Code local state
+.claude/
+
 # LaTeX build artifacts
-docs/*.aux
-docs/*.fdb_latexmk
-docs/*.fls
-docs/*.out
-docs/*.synctex.gz
-docs/*.nav
-docs/*.snm
-docs/*.toc
-docs/*.log
-docs/*.bbl
-docs/*.blg
+docs/**/*.aux
+docs/**/*.fdb_latexmk
+docs/**/*.fls
+docs/**/*.out
+docs/**/*.synctex.gz
+docs/**/*.nav
+docs/**/*.snm
+docs/**/*.toc
+docs/**/*.log
+docs/**/*.bbl
+docs/**/*.blg
