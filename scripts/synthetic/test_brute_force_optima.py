@@ -49,8 +49,8 @@ class BruteForceOptimaTests(unittest.TestCase):
     def test_k4_optima(self):
         adj = _build(4, [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)])
         opt = brute_force_optima(adj, 4, q=0, k_set=[2, 3, 4], kappa_set=[0, 1, 2, 3])
-        # Every clique inside K4 has density 1.0; kappa=0 (connected only)
-        # equals the unconstrained optimum.
+        # Every clique inside K4 has density 1.0; kappa=0 applies no
+        # connectivity filter.
         self.assertAlmostEqual(opt["bp_kappa"][4][0]["score"], 1.0)
         # avg_degree of K4 = 12 / 4 = 3.0.
         self.assertAlmostEqual(opt["avgdeg"]["score"], 3.0)
@@ -96,6 +96,15 @@ class BruteForceOptimaTests(unittest.TestCase):
         # Disconnected {0, 2}: no path -> 0.
         adj = _build(3, [(0, 1)])
         self.assertEqual(_edge_connectivity_in_subset(adj, 0b101, 0), 0)
+
+    def test_bp_kappa_zero_allows_disconnected_subset(self):
+        # q=0 is isolated from the only edge. For k=3, the unconstrained
+        # query-containing pair-density optimum is the disconnected full set.
+        adj = _build(3, [(1, 2)])
+        opt = brute_force_optima(adj, 3, q=0, k_set=[3], kappa_set=[0, 1])
+        self.assertAlmostEqual(opt["bp_kappa"][3][0]["score"], 2.0 / 6.0)
+        self.assertEqual(opt["bp_kappa"][3][0]["size"], 3)
+        self.assertEqual(opt["bp_kappa"][3][1]["score"], -1.0)
 
 
 if __name__ == "__main__":

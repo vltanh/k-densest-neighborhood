@@ -299,12 +299,10 @@ def brute_force_optima(
     """Enumerate every subset that contains q and is at least 2 in size.
     Returns argmax records for the avg-degree and edge-density objectives.
 
-    For every result, both an unconstrained variant and a connected-only
-    variant (undirected projection) are returned for avg-degree. The
-    unconstrained edge-density cell is omitted: extending a connected
-    densest subgraph of size >= k with a disconnected node strictly dilutes
-    density on m/(n*(n-1)) so the unconstrained optimum at |S| >= k always
-    equals the connected-only optimum (best_bp_kappa[k][0]).
+    For avg-degree, both an unconstrained variant and a connected-only
+    variant (undirected projection) are returned. For BP, kappa=0 applies no
+    connectivity filter; kappa>=1 requires rooted edge-connectivity at least
+    kappa in the undirected support.
     """
     bit_q = 1 << q
     k_list = sorted(set(int(k) for k in k_set))
@@ -316,9 +314,9 @@ def brute_force_optima(
 
     best_avg = (-1.0, -1, -1, 0, None)  # (score, size, m, mask, actual_kappa)
     best_avg_conn = (-1.0, -1, -1, 0, None)
-    # best_bp_kappa[k][kappa] = (score, size, m, mask, actual_kappa). kappa=0
-    # means "connected, no edge-connectivity threshold". kappa>=1 means
-    # lambda(S) >= kappa.
+    # best_bp_kappa[k][kappa] = (score, size, m, mask, actual_kappa).
+    # kappa=0 means no edge-connectivity threshold; kappa>=1 means
+    # lambda_q(S) >= kappa in the undirected support.
     best_bp_kappa = {k: {kp: (-1.0, -1, -1, 0, None) for kp in kappa_list} for k in k_list}
 
     full = 1 << n
@@ -352,18 +350,17 @@ def brute_force_optima(
                     break
         if not (could_improve_avg_conn or could_improve_bp_any_kappa):
             continue
-        if not _connected_in_subset(adj_und, s, q):
-            continue
         kappa_S: Optional[int] = None
-        if could_improve_avg_conn:
-            best_avg_conn = (avg, sz, m, s, None)
         for k in k_list:
             if sz >= k:
                 ed = m / (sz * (sz - 1))
                 if ed > best_bp_kappa[k][0][0]:
-                    if kappa_S is None:
-                        kappa_S = _edge_connectivity_in_subset(adj_und, s, q)
-                    best_bp_kappa[k][0] = (ed, sz, m, s, kappa_S)
+                    best_bp_kappa[k][0] = (ed, sz, m, s, None)
+        connected = _connected_in_subset(adj_und, s, q)
+        if not connected:
+            continue
+        if could_improve_avg_conn:
+            best_avg_conn = (avg, sz, m, s, None)
         need_kappa_check = False
         for k in k_list:
             if sz < k:
@@ -598,9 +595,8 @@ def _opt_value_from_optima(opt_rows: List[dict], method: str, k: Optional[int], 
 
     Primary follows the solver's actual feasibility region:
       - avgdeg: unconstrained avg-degree optimum (|S| >= 2, contains q, possibly disconnected).
-      - bp + any kappa: edge_density_kappa[k][kappa]. kappa = 0 means "connected
-        and contains q with |S| >= k"; on m / (n*(n-1)) this equals the
-        unconstrained optimum at |S| >= k.
+      - bp + any kappa: edge_density_kappa[k][kappa]. kappa = 0 means contains
+        q with |S| >= k and no connectivity filter.
     Secondary is the connected-only counterpart kept for cross-check on avgdeg
     only; for BP the primary and the only meaningful baseline coincide.
     """
