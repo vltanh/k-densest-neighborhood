@@ -49,6 +49,20 @@ private:
     std::unordered_map<int, GRBVar> x_vars;
     std::unordered_map<std::pair<int, int>, GRBVar, pair_hash> y_vars;
     std::unordered_map<std::pair<int, int>, GRBVar, pair_hash> w_vars;
+    // Undirected support variables used only for rooted connectivity cuts.
+    // z_{uv}=1 is allowed when at least one materialized directed edge between
+    // u and v is selected. This keeps kappa cuts consistent with the
+    // undirected support graph used by the max-flow verifier.
+    std::unordered_map<std::pair<int, int>, GRBVar, pair_hash> z_vars;
+    std::unordered_map<std::pair<int, int>, GRBConstr, pair_hash> z_link_constrs;
+
+    struct ConnectivityCut
+    {
+        std::unordered_set<int> source_side;
+        int target;
+        GRBConstr constr;
+    };
+    std::vector<ConnectivityCut> connectivity_cuts;
 
     std::unordered_set<int> synced_nodes;
     std::vector<GRBVar> y_obj_terms;
@@ -74,6 +88,7 @@ private:
     bool _register_pending_edges();
     bool _register_pair_vars(const std::vector<int> &new_nodes, double lambda_val);
     void _update_objective(double lambda_val);
+    bool _ensure_active_feasibility(const std::unordered_set<int> &v0_set);
 
     void _sync_rmp_structure(double lambda_val);
     void _apply_node_bounds(const std::vector<int> &v1, const std::vector<int> &v0);

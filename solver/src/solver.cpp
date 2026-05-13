@@ -590,6 +590,9 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
 {
     bool changed = false;
     vector<pair<int, int>> remaining;
+    vector<pair<pair<int, int>, GRBVar>> new_support_vars;
+    vector<pair<pair<int, int>, GRBVar>> support_link_updates;
+
     for (auto const &uv : pending_edges)
     {
         if (x_vars.count(uv.first) && x_vars.count(uv.second))
@@ -602,6 +605,26 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
                 y_vars[uv] = yvar;
                 y_obj_terms.push_back(yvar);
                 changed = true;
+
+                if (kappa > 0)
+                {
+                    pair<int, int> support_uv = (uv.first < uv.second) ? uv : make_pair(uv.second, uv.first);
+                    auto z_it = z_vars.find(support_uv);
+                    if (z_it == z_vars.end())
+                    {
+                        GRBVar zvar = rmp->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS, "");
+                        rmp->addConstr(zvar <= x_vars[support_uv.first]);
+                        rmp->addConstr(zvar <= x_vars[support_uv.second]);
+                        GRBConstr link = rmp->addConstr(zvar - yvar <= 0.0);
+                        z_vars[support_uv] = zvar;
+                        z_link_constrs[support_uv] = link;
+                        new_support_vars.push_back({support_uv, zvar});
+                    }
+                    else
+                    {
+                        support_link_updates.push_back({support_uv, yvar});
+                    }
+                }
             }
         }
         else
@@ -610,6 +633,30 @@ bool FullBranchAndPriceSolver::_register_pending_edges()
         }
     }
     pending_edges = std::move(remaining);
+
+    if ((!new_support_vars.empty() || !support_link_updates.empty()) && kappa > 0)
+    {
+        rmp->update();
+
+        for (const auto &[support_uv, yvar] : support_link_updates)
+        {
+            auto link_it = z_link_constrs.find(support_uv);
+            if (link_it != z_link_constrs.end())
+                rmp->chgCoeff(link_it->second, yvar, -1.0);
+        }
+
+        for (const auto &[support_uv, zvar] : new_support_vars)
+        {
+            for (const ConnectivityCut &cut : connectivity_cuts)
+            {
+                bool u_in_R = cut.source_side.count(support_uv.first);
+                bool v_in_R = cut.source_side.count(support_uv.second);
+                if (u_in_R != v_in_R)
+                    rmp->chgCoeff(cut.constr, zvar, 1.0);
+            }
+        }
+    }
+
     return changed;
 }
 
@@ -692,6 +739,74 @@ void FullBranchAndPriceSolver::_update_objective(double lambda_val)
             wvar.set(GRB_DoubleAttr_Obj, new_coeff);
     }
     last_lambda = lambda_val;
+}
+
+// A zero-branch can leave fewer than k currently-active variables eligible
+// even though discovered frontier nodes could repair feasibility. Promote just
+// enough non-forbidden frontier nodes before solving the LP so branch nodes are
+// not pruned before column generation has a chance to add replacement columns.
+bool FullBranchAndPriceSolver::_ensure_active_feasibility(const unordered_set<int> &v0_set)
+{
+    auto eligible_active_count = [&]() -> int
+    {
+        int eligible = 0;
+        for (int v : V_active)
+            if (!v0_set.count(v) && !error_nodes.count(v))
+                ++eligible;
+        return eligible;
+    };
+
+    auto known_incident_score = [&](int f) -> int
+    {
+        int score = 0;
+        auto out_it = adj_out.find(f);
+        if (out_it != adj_out.end())
+            for (int v : out_it->second)
+                if (V_active.count(v) && !v0_set.count(v))
+                    ++score;
+
+        auto in_it = adj_in.find(f);
+        if (in_it != adj_in.end())
+            for (int u : in_it->second)
+                if (V_active.count(u) && !v0_set.count(u))
+                    ++score;
+        return score;
+    };
+
+    int eligible = eligible_active_count();
+    while (eligible < k)
+    {
+        int best_f = -1;
+        int best_score = -1;
+        for (int f : F)
+        {
+            if (v0_set.count(f) || error_nodes.count(f))
+                continue;
+            int score = known_incident_score(f);
+            if (score > best_score || (score == best_score && (best_f < 0 || f < best_f)))
+            {
+                best_f = f;
+                best_score = score;
+            }
+        }
+
+        if (best_f < 0)
+            return false;
+
+        bool was_active = V_active.count(best_f);
+        _expand_node(best_f);
+        if (!was_active && V_active.count(best_f) && !v0_set.count(best_f))
+        {
+            ++eligible;
+            ++stats.total_columns_added;
+        }
+        else
+        {
+            eligible = eligible_active_count();
+        }
+    }
+
+    return true;
 }
 
 // Syncs RMP structure with the current active set. Newly created y/w vars
@@ -958,8 +1073,16 @@ vector<int> FullBranchAndPriceSolver::_price_frontier(const unordered_map<int, d
             candidates.push_back({rc, f});
     }
 
-    int dynamic_limit = V_active.size() * cg_batch_fraction;
-    size_t batch_size = max((size_t)cg_min_batch, min((size_t)dynamic_limit, (size_t)cg_max_batch));
+    int max_batch = std::max(0, cg_max_batch);
+    int min_batch = std::max(0, std::min(cg_min_batch, max_batch));
+    if (max_batch == 0)
+        return {};
+
+    size_t dynamic_limit = 0;
+    if (cg_batch_fraction > 0.0)
+        dynamic_limit = std::max<size_t>(1, (size_t)std::ceil((double)V_active.size() * cg_batch_fraction));
+
+    size_t batch_size = std::max((size_t)min_batch, std::min(dynamic_limit, (size_t)max_batch));
     batch_size = min(batch_size, candidates.size());
 
     auto cmp = [](const pair<double, int> &a, const pair<double, int> &b)
@@ -1106,16 +1229,8 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
     int consecutive_stalls = 0;
     bool joint_pricing_tried = false;
 
-    // Feasibility pre-check: enough active nodes remain after excluding v0
-    if (V_active.size() < (size_t)(k + v0.size()))
-        return {std::move(local_x_bar), -1e9};
-
     unordered_set<int> v0_set(v0.begin(), v0.end());
-    int eligible = 0;
-    for (int v : V_active)
-        if (v0_set.find(v) == v0_set.end())
-            eligible++;
-    if (eligible < k)
+    if (!_ensure_active_feasibility(v0_set))
         return {std::move(local_x_bar), -1e9};
 
     while (true)
@@ -1151,15 +1266,21 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         // an incumbent (consistent with the gated soft cap above).
         if (bb_time_limit >= 0.0 && current_incumbent > tol)
             lp_time_budget = max(1e-3, bb_time_limit - effective_time);
+        bool hard_limited_lp = false;
         if (bb_hard_time_limit >= 0.0)
         {
             double hard_remaining = max(
                 1e-3, bb_hard_time_limit - solve_elapsed_cg);
             if (lp_time_budget < 0.0 || hard_remaining < lp_time_budget)
+            {
                 lp_time_budget = hard_remaining;
+                hard_limited_lp = true;
+            }
         }
         if (lp_time_budget >= 0.0)
             rmp->set(GRB_DoubleParam_TimeLimit, lp_time_budget);
+        else
+            rmp->set(GRB_DoubleParam_TimeLimit, GRB_INFINITY);
 
         rmp->optimize();
         stats.total_lp_solves++;
@@ -1167,14 +1288,27 @@ pair<unordered_map<int, double>, double> FullBranchAndPriceSolver::_column_gener
         stats.t_lp_solve += chrono::duration<double>(t2 - t1).count();
 
         int status = rmp->get(GRB_IntAttr_Status);
+        if (status == GRB_TIME_LIMIT && hard_limited_lp)
+        {
+            double solve_elapsed_after_lp = chrono::duration<double>(
+                chrono::high_resolution_clock::now() - t_start_solve).count();
+            if (solve_elapsed_after_lp >= bb_hard_time_limit - 1e-3)
+                last_hard_cap_hit = true;
+        }
         if (status != GRB_OPTIMAL && status != GRB_SUBOPTIMAL && status != GRB_TIME_LIMIT)
+            return {std::move(local_x_bar), -1e9};
+        if (status != GRB_OPTIMAL && rmp->get(GRB_IntAttr_SolCount) == 0)
             return {std::move(local_x_bar), -1e9};
 
         local_x_bar.clear();
         for (const auto &[v, var] : x_vars)
             local_x_bar[v] = var.get(GRB_DoubleAttr_X);
-        double pi = size_constr.get(GRB_DoubleAttr_Pi);
         local_lp_obj = rmp->get(GRB_DoubleAttr_ObjVal);
+
+        if (status != GRB_OPTIMAL)
+            return {std::move(local_x_bar), local_lp_obj};
+
+        double pi = size_constr.get(GRB_DoubleAttr_Pi);
 
         auto t3 = chrono::high_resolution_clock::now();
         vector<int> top_f = _price_frontier(local_x_bar, pi, v0_set, lambda_val);
@@ -1403,6 +1537,8 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         stats.total_bb_nodes++;
 
         auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start_bb, net_start_bb);
+        if (last_hard_cap_hit)
+            break;
 
         if (x_bar.empty() || lp_obj <= best_int_obj + tol)
             continue;
@@ -1556,22 +1692,25 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                             reachable_gurobi.insert(b_to_g[b_id]);
                         }
 
-                        // 4. Inject Cut-Set Inequality
+                        // 4. Inject Cut-Set Inequality. The verifier uses the
+                        // undirected support graph, so the cut uses z_vars and
+                        // counts a reciprocal citation pair only once.
                         GRBLinExpr cut_expr = 0;
-                        for (const auto &[edge, y_var] : y_vars)
+                        for (const auto &[support_uv, z_var] : z_vars)
                         {
-                            bool u_in_R = reachable_gurobi.count(edge.first);
-                            bool v_in_R = reachable_gurobi.count(edge.second);
+                            bool u_in_R = reachable_gurobi.count(support_uv.first);
+                            bool v_in_R = reachable_gurobi.count(support_uv.second);
 
                             // Edge crosses the Min-Cut
                             if (u_in_R != v_in_R)
                             {
-                                cut_expr += y_var;
+                                cut_expr += z_var;
                             }
                         }
 
                         // Force the LP to select enough edges crossing this cut
-                        rmp->addConstr(cut_expr >= this->kappa * x_vars[target_node], "k_connectivity_cut");
+                        GRBConstr cut = rmp->addConstr(cut_expr >= this->kappa * x_vars[target_node], "k_connectivity_cut");
+                        connectivity_cuts.push_back({std::move(reachable_gurobi), target_node, cut});
                         stats.total_cuts_added++;
                         break;
                     }
@@ -1596,7 +1735,6 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                 bool prune_ok = _verify_kappa_connectivity(sol_nodes);
                 if (!prune_ok)
                 {
-                    this->last_kappa_verify_failed = true;
                     cout << "[" << get_timestamp() << "]     [!] Post-prune kappa verification failed; reverting to pre-prune set." << endl;
                     sol_nodes = std::move(pre_prune_sol);
                 }
@@ -1657,12 +1795,20 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 
     // Prune the BFS seed to a near-optimal starting point before the first
     // Dinkelbach iteration, giving a tighter initial λ
-    _prune_discrete_solution(best_sol, 0.0, true, false);
+    unordered_set<int> pre_prune_seed = best_sol;
+    _prune_discrete_solution(best_sol, 0.0, true, kappa > 0);
+    if (kappa > 0 && !_verify_kappa_connectivity(best_sol))
+        best_sol = std::move(pre_prune_seed);
 
-    double lambda_val = _density(best_sol);
+    bool best_sol_feasible = (kappa <= 0) || _verify_kappa_connectivity(best_sol);
+    double lambda_val = best_sol_feasible ? _density(best_sol) : 0.0;
 
     cout << fixed << setprecision(6);
     cout << "[" << get_timestamp() << "] Init Active Set | Size: " << best_sol.size() << " | Density: " << lambda_val << endl;
+    if (kappa > 0 && !best_sol_feasible)
+    {
+        cout << "[" << get_timestamp() << "]   Initial seed is not kappa-feasible; starting Dinkelbach at lambda=0." << endl;
+    }
     cout << "--------------------------------------------------" << endl;
 
     for (int t = 1; dinkelbach_max_iter < 0 || t <= dinkelbach_max_iter; t++)
@@ -1689,6 +1835,12 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         if (sol.empty() || param_obj <= tol)
         {
             cout << "[" << get_timestamp() << "]   Status            : Converged (No improvement found)" << endl;
+            if (!best_sol_feasible && kappa > 0)
+            {
+                cout << "[" << get_timestamp() << "]   Status            : No kappa-feasible incumbent found." << endl;
+                best_sol.clear();
+                lambda_val = 0.0;
+            }
             break;
         }
 
@@ -1698,11 +1850,18 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         if (new_density <= lambda_val + tol)
         {
             cout << "[" << get_timestamp() << "]   Status            : Converged (Density bound reached)" << endl;
+            if (!best_sol_feasible && kappa > 0)
+            {
+                best_sol = sol;
+                lambda_val = new_density;
+                best_sol_feasible = true;
+            }
             break;
         }
 
         lambda_val = new_density;
         best_sol = sol;
+        best_sol_feasible = true;
 
         if (bb_hard_time_limit >= 0.0)
         {
@@ -1720,6 +1879,13 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 
     auto t_end_global = chrono::high_resolution_clock::now();
     stats.t_total = chrono::duration<double>(t_end_global - t_start_global).count();
+
+    if (kappa > 0)
+    {
+        bool final_ok = !best_sol.empty() && _verify_kappa_connectivity(best_sol);
+        last_kappa_verified = final_ok;
+        last_kappa_verify_failed = !final_ok;
+    }
 
     return {best_sol, lambda_val};
 }
