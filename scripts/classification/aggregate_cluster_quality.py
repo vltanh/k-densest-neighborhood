@@ -16,6 +16,7 @@ Headline metrics:
     undir_internal_ncut
     mixing_param                       (boundary mixing; preferred over conductance)
     algebraic_connectivity_lambda2     (scipy eigsh, no node-count cap)
+    edge_connectivity
 
 undir_external_conductance is intentionally not part of the headline list: on
 small induced subgraphs it collapses to mixing_param numerically. The

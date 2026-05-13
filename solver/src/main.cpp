@@ -10,11 +10,17 @@
 #include <filesystem>
 #include <string>
 #include <stdexcept>
+#include <cmath>
 #include "gurobi_c++.h"
 #include <nlohmann/json.hpp>
 
 using namespace std;
 using json = nlohmann::json;
+
+static json finite_json(double value)
+{
+    return std::isfinite(value) ? json(value) : json(nullptr);
+}
 
 void print_usage(const char *prog_name)
 {
@@ -370,7 +376,10 @@ int main(int argc, char *argv[])
                                 {"lambda", it.lambda},
                                 {"iter_time_s", it.iter_time_s},
                                 {"bb_nodes", it.bb_nodes},
-                                {"lp_solves", it.lp_solves}});
+                                {"lp_solves", it.lp_solves},
+                                {"bb_incumbent_obj", finite_json(it.bb_incumbent_obj)},
+                                {"bb_best_bound", finite_json(it.bb_best_bound)},
+                                {"optimality_gap", finite_json(it.optimality_gap)}});
             }
             bp_block["lambda_trajectory"] = traj;
             bp_block["stats"] = {
@@ -382,7 +391,12 @@ int main(int argc, char *argv[])
                 {"t_lp_solve", solver.stats.t_lp_solve},
                 {"t_pricing", solver.stats.t_pricing},
                 {"t_separation", solver.stats.t_separation},
-                {"t_total", solver.stats.t_total}};
+                {"t_total", solver.stats.t_total},
+                {"bb_incumbent_obj", finite_json(solver.stats.final_bb_incumbent_obj)},
+                {"bb_best_bound", finite_json(solver.stats.final_bb_best_bound)},
+                {"optimality_gap", finite_json(solver.stats.final_optimality_gap)},
+                {"open_bb_nodes", solver.stats.final_open_nodes},
+                {"gap_status", solver.stats.final_gap_status}};
             if (kappa > 0)
             {
                 bp_block["kappa_verified"] = solver.last_kappa_verified;
@@ -594,6 +608,11 @@ int main(int argc, char *argv[])
                 j["kappa_verify_failed"] = bp_block.value("kappa_verify_failed", json(nullptr));
                 j["hard_cap_hit"] = bp_block.value("hard_cap_hit", false);
                 j["stats"] = bp_block.value("stats", json::object());
+                const json &stats_json = j["stats"];
+                j["optimality_gap"] = stats_json.value("optimality_gap", json(nullptr));
+                j["bb_incumbent_obj"] = stats_json.value("bb_incumbent_obj", json(nullptr));
+                j["bb_best_bound"] = stats_json.value("bb_best_bound", json(nullptr));
+                j["gap_status"] = stats_json.value("gap_status", json(nullptr));
             }
             else
             {
@@ -603,6 +622,10 @@ int main(int argc, char *argv[])
                 j["kappa_verify_failed"] = nullptr;
                 j["hard_cap_hit"] = false;
                 j["stats"] = nullptr;
+                j["optimality_gap"] = nullptr;
+                j["bb_incumbent_obj"] = nullptr;
+                j["bb_best_bound"] = nullptr;
+                j["gap_status"] = nullptr;
             }
             j["qualities"] = qualities_json;
             j["oracle"] = {

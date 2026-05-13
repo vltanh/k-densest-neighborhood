@@ -13,7 +13,9 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
 EXPECTED_SCHEMA_VERSION = "2.0"
-EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2"
+EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2_out_reachable_geq_5"
+EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE = 5
+EXPECTED_SPLIT_STRATEGY = "label_stratified_50_50"
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,8 @@ class SplitMeta:
     library_versions: dict
     created_at: str
     pool_criterion: Optional[str] = None
+    pool_min_out_reachable_size: Optional[int] = None
+    split_strategy: Optional[str] = None
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -67,6 +71,8 @@ def load_split_meta(dataset: str, data_dir: str = "data") -> SplitMeta:
         library_versions=payload.get("library_versions", {}),
         created_at=payload["created_at"],
         pool_criterion=payload.get("pool_criterion"),
+        pool_min_out_reachable_size=payload.get("pool_min_out_reachable_size"),
+        split_strategy=payload.get("split_strategy"),
     )
 
 
@@ -89,7 +95,9 @@ def write_split_meta(
         "seed": seed,
         "num_nodes": num_nodes,
         "num_edges": num_edges,
-        "pool_criterion": "pure_source_with_outdegree_geq_2",
+        "pool_criterion": EXPECTED_POOL_CRITERION,
+        "pool_min_out_reachable_size": EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE,
+        "split_strategy": EXPECTED_SPLIT_STRATEGY,
         "splits": {
             "train": {"size": len(train_ids), "hash": sha256_node_set(train_ids)},
             "val": {"size": len(val_ids), "hash": sha256_node_set(val_ids)},
@@ -183,6 +191,16 @@ def assert_split_meta_matches(
         raise ValueError(
             f"{dataset}: split_meta.json pool_criterion {meta.pool_criterion!r} "
             f"does not match expected {EXPECTED_POOL_CRITERION!r}. Regenerate via prepare_data.py."
+        )
+    if meta.pool_min_out_reachable_size != EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE:
+        raise ValueError(
+            f"{dataset}: split_meta.json pool_min_out_reachable_size {meta.pool_min_out_reachable_size!r} "
+            f"does not match expected {EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE!r}. Regenerate via prepare_data.py."
+        )
+    if meta.split_strategy != EXPECTED_SPLIT_STRATEGY:
+        raise ValueError(
+            f"{dataset}: split_meta.json split_strategy {meta.split_strategy!r} "
+            f"does not match expected {EXPECTED_SPLIT_STRATEGY!r}. Regenerate via prepare_data.py."
         )
 
     train_ids = df_nodes[df_nodes["train"]]["node_id"].astype(int).tolist()

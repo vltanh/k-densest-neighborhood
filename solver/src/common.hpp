@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <vector>
 #include <unordered_map>
+#include <limits>
 
 inline std::string get_timestamp()
 {
@@ -42,6 +43,9 @@ struct DinkelbachIter
     double iter_time_s;
     int bb_nodes;
     int lp_solves;
+    double bb_incumbent_obj;
+    double bb_best_bound;
+    double optimality_gap;
 };
 
 struct SolverStats
@@ -51,6 +55,11 @@ struct SolverStats
     int total_columns_added = 0;
     int total_cuts_added = 0;
     double t_sync = 0.0, t_lp_solve = 0.0, t_pricing = 0.0, t_separation = 0.0, t_total = 0.0;
+    double final_bb_incumbent_obj = 0.0;
+    double final_bb_best_bound = 0.0;
+    double final_optimality_gap = 0.0;
+    int final_open_nodes = 0;
+    std::string final_gap_status = "not_run";
     std::vector<DinkelbachIter> lambda_trajectory;
 };
 
@@ -78,4 +87,5 @@ struct BBNode
 {
     std::vector<int> v1;
     std::vector<int> v0;
+    double bound = std::numeric_limits<double>::infinity();
 };

@@ -75,8 +75,8 @@ def invoke_solver(
 
     The binary always receives --emit-json (and --json-output if json_output_path
     is set). Result keys: returncode, stdout, stderr, pred_nodes, oracle_queries,
-    lambda_trajectory, kappa_verified, kappa_verify_failed, stats, qualities,
-    solver_json, wall_time (if capture_wall_time). When the JSON_RESULT: line is
+    lambda_trajectory, kappa_verified, kappa_verify_failed, optimality_gap,
+    stats, qualities, solver_json, wall_time (if capture_wall_time). When the JSON_RESULT: line is
     absent, the function emits a warning and falls back to the legacy regex.
     """
     cmd = base_sim_argv(bin_path, edge_csv, query)
@@ -131,6 +131,10 @@ def invoke_solver(
             "kappa_verified": payload.get("kappa_verified"),
             "kappa_verify_failed": payload.get("kappa_verify_failed"),
             "hard_cap_hit": payload.get("hard_cap_hit"),
+            "optimality_gap": payload.get("optimality_gap"),
+            "bb_incumbent_obj": payload.get("bb_incumbent_obj"),
+            "bb_best_bound": payload.get("bb_best_bound"),
+            "gap_status": payload.get("gap_status"),
             "stats": payload.get("stats"),
             "qualities": payload.get("qualities"),
             "solver_json": payload,
@@ -146,6 +150,10 @@ def invoke_solver(
             "kappa_verified": None,
             "kappa_verify_failed": None,
             "hard_cap_hit": None,
+            "optimality_gap": None,
+            "bb_incumbent_obj": None,
+            "bb_best_bound": None,
+            "gap_status": None,
             "stats": None,
             "qualities": None,
             "solver_json": None,

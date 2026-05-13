@@ -16,6 +16,7 @@ Reported metrics, all aggregated per cell:
     t_lp_solve
     t_pricing
     size_solver
+    optimality_gap
 
 Each metric column emits median, q1, q3, n_finite, plus a top-line mean for
 quick comparison across methods. AvgDeg and BFS rows usually carry empty BB
@@ -49,6 +50,10 @@ COST_NUMERIC_FIELDS = [
     "t_separation",
     "t_sync",
     "t_total",
+    "optimality_gap",
+    "bb_incumbent_obj",
+    "bb_best_bound",
+    "open_bb_nodes",
 ]
 
 
@@ -74,6 +79,11 @@ def _row_for(record):
         "t_separation": stats.get("t_separation"),
         "t_sync": stats.get("t_sync"),
         "t_total": stats.get("t_total"),
+        "optimality_gap": record.get("optimality_gap", stats.get("optimality_gap")),
+        "bb_incumbent_obj": record.get("bb_incumbent_obj", stats.get("bb_incumbent_obj")),
+        "bb_best_bound": record.get("bb_best_bound", stats.get("bb_best_bound")),
+        "open_bb_nodes": stats.get("open_bb_nodes"),
+        "gap_status": record.get("gap_status", stats.get("gap_status")),
         "solver_build_id": record.get("solver_build_id"),
         "hard_cap_hit": record.get("hard_cap_hit"),
     }

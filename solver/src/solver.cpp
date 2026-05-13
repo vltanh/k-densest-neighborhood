@@ -11,6 +11,18 @@
 
 using namespace std;
 
+namespace
+{
+double relative_gap(double best_bound, double incumbent, double tol)
+{
+    if (!std::isfinite(best_bound))
+        return std::numeric_limits<double>::infinity();
+    if (incumbent > tol)
+        return std::max(0.0, (best_bound - incumbent) / std::max(std::fabs(incumbent), tol));
+    return (best_bound <= tol) ? 0.0 : std::numeric_limits<double>::infinity();
+}
+}
+
 FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, int k, GRBEnv &env,
                                                    double tol, int bb_node_limit, double bb_time_limit,
                                                    double bb_gap_tol, int dinkelbach_max_iter,
@@ -1480,19 +1492,48 @@ pair<int, bool> FullBranchAndPriceSolver::_select_branch_var(const unordered_map
 // "time without improvement" budget: the clock resets on each new incumbent.
 pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(double lambda_val)
 {
-    vector<BBNode> stack = {{{q}, {}}};
+    vector<BBNode> stack;
+    BBNode root;
+    root.v1.push_back(q);
+    stack.push_back(std::move(root));
     double best_int_obj = 0.0;
     unordered_set<int> best_int_sol;
-    double heuristic_global_ub = -1e9;
+    string gap_status = "exhausted";
+    double interrupted_node_bound = -std::numeric_limits<double>::infinity();
 
     auto t_start_bb = chrono::high_resolution_clock::now();
     double net_start_bb = oracle.cumulative_network_time;
+
+    auto max_stack_bound = [&]() -> double
+    {
+        double best = -std::numeric_limits<double>::infinity();
+        for (const BBNode &open_node : stack)
+            if (open_node.bound > best)
+                best = open_node.bound;
+        return best;
+    };
+
+    auto publish_gap = [&]()
+    {
+        double open_bound = max_stack_bound();
+        double best_bound = best_int_obj;
+        if (std::isfinite(open_bound))
+            best_bound = std::max(best_bound, open_bound);
+        if (std::isfinite(interrupted_node_bound))
+            best_bound = std::max(best_bound, interrupted_node_bound);
+        stats.final_bb_incumbent_obj = best_int_obj;
+        stats.final_bb_best_bound = best_bound;
+        stats.final_optimality_gap = relative_gap(best_bound, best_int_obj, tol);
+        stats.final_open_nodes = (int)stack.size() + (std::isfinite(interrupted_node_bound) ? 1 : 0);
+        stats.final_gap_status = gap_status;
+    };
 
     while (!stack.empty())
     {
         if (bb_node_limit >= 0 && stats.total_bb_nodes >= bb_node_limit)
         {
             cout << "[" << get_timestamp() << "]     [!] B&B node limit reached." << endl;
+            gap_status = "node_limit";
             break;
         }
 
@@ -1510,6 +1551,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         {
             cout << "[" << get_timestamp() << "]     [!] Iteration algorithmic time limit reached ("
                  << bb_time_limit << "s without improvement on an existing incumbent)." << endl;
+            gap_status = "time_limit";
             break;
         }
 
@@ -1521,29 +1563,38 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                 last_hard_cap_hit = true;
                 cout << "[" << get_timestamp() << "]     [!] Hard wall-time cap reached ("
                      << bb_hard_time_limit << "s); returning current incumbent." << endl;
+                gap_status = "hard_time_limit";
                 break;
             }
         }
 
-        if (best_int_obj > tol && heuristic_global_ub > -1e8)
+        double open_bound = max_stack_bound();
+        if (bb_gap_tol >= 0.0 && best_int_obj > tol && std::isfinite(open_bound))
         {
-            double gap = (heuristic_global_ub - best_int_obj) / max(std::fabs(best_int_obj), tol);
+            double gap = relative_gap(std::max(open_bound, best_int_obj), best_int_obj, tol);
             if (gap <= bb_gap_tol)
+            {
+                gap_status = "gap_tolerance";
                 break;
+            }
         }
 
         BBNode node = std::move(stack.back());
         stack.pop_back();
+        if (std::isfinite(node.bound) && node.bound <= best_int_obj + tol)
+            continue;
         stats.total_bb_nodes++;
 
         auto [x_bar, lp_obj] = _column_generation(node.v1, node.v0, lambda_val, best_int_obj, t_start_bb, net_start_bb);
         if (last_hard_cap_hit)
+        {
+            gap_status = "hard_time_limit";
+            interrupted_node_bound = (std::isfinite(lp_obj) && lp_obj > -1e8) ? lp_obj : node.bound;
             break;
+        }
 
         if (x_bar.empty() || lp_obj <= best_int_obj + tol)
             continue;
-        if (lp_obj > heuristic_global_ub)
-            heuristic_global_ub = lp_obj;
 
         auto [branch_var, branch_zero_first] = _select_branch_var(x_bar, lambda_val);
 
@@ -1720,6 +1771,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
             if (!is_k_connected)
             {
                 stats.total_bb_nodes--;
+                node.bound = lp_obj;
                 stack.push_back(std::move(node));
                 continue;
             }
@@ -1766,6 +1818,8 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         BBNode child_1 = std::move(node);
         child_0.v0.push_back(branch_var);
         child_1.v1.push_back(branch_var);
+        child_0.bound = lp_obj;
+        child_1.bound = lp_obj;
 
         if (branch_zero_first)
         {
@@ -1779,6 +1833,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
         }
     }
 
+    publish_gap();
     return {best_int_sol, best_int_obj};
 }
 
@@ -1830,7 +1885,16 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         cout << "[" << get_timestamp() << "]   -> Nodes Explored : " << iter_bb_nodes << " (Total: " << stats.total_bb_nodes << ")" << endl;
         cout << "[" << get_timestamp() << "]   -> LP Solves      : " << iter_lp_solves << " (Total: " << stats.total_lp_solves << ")" << endl;
 
-        stats.lambda_trajectory.push_back({t, lambda_val, iter_time, iter_bb_nodes, iter_lp_solves});
+        stats.lambda_trajectory.push_back({
+            t,
+            lambda_val,
+            iter_time,
+            iter_bb_nodes,
+            iter_lp_solves,
+            stats.final_bb_incumbent_obj,
+            stats.final_bb_best_bound,
+            stats.final_optimality_gap,
+        });
 
         if (sol.empty() || param_obj <= tol)
         {

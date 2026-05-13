@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from split_utils import (  # noqa: E402
     build_out_adjacency,
     compute_hard_subset,
+    EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE,
     sha256_edge_list,
     write_split_meta,
 )
@@ -18,6 +19,43 @@ try:
 except ImportError:
     print("Error: PyTorch Geometric not found.")
     exit(1)
+
+
+def _out_reachable_size(start, out_adj, limit=None):
+    seen = {start}
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for nb in out_adj.get(node, ()):
+            if nb in seen:
+                continue
+            seen.add(nb)
+            if limit is not None and len(seen) >= limit:
+                return len(seen)
+            stack.append(nb)
+    return len(seen)
+
+
+def _stratified_half_split(pool, labels, rng):
+    by_label = {}
+    for q in pool:
+        by_label.setdefault(int(labels[q]), []).append(int(q))
+
+    val_nodes = []
+    test_nodes = []
+    singleton_labels = []
+    for label in sorted(by_label):
+        bucket = by_label[label]
+        rng.shuffle(bucket)
+        n_val = len(bucket) // 2
+        if len(bucket) % 2:
+            if len(val_nodes) < len(test_nodes):
+                n_val += 1
+        if len(bucket) == 1:
+            singleton_labels.append(label)
+        val_nodes.extend(bucket[:n_val])
+        test_nodes.extend(bucket[n_val:])
+    return sorted(val_nodes), sorted(test_nodes), singleton_labels
 
 
 def _library_versions(bin_path: str = "./solver/bin/solver") -> dict:
@@ -85,21 +123,30 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     pure_sources = sorted(all_citing_nodes - cited_nodes)
 
     out_adj = build_out_adjacency(df_edges)
-    pool = sorted(q for q in pure_sources if len(out_adj.get(q, ())) >= 2)
+    pool = sorted(
+        q
+        for q in pure_sources
+        if len(out_adj.get(q, ())) >= 2
+        and _out_reachable_size(q, out_adj, limit=EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE)
+        >= EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE
+    )
 
     print(f"Total Nodes: {data.num_nodes}")
     print(f"Pure-source candidates: {len(pure_sources)}")
-    print(f"Pool after out-degree >= 2 filter: {len(pool)}")
+    print(
+        f"Pool after out-degree >= 2 and out-reachable >= {EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE} filter: {len(pool)}"
+    )
 
+    labels_np = data.y.numpy().astype(int)
     rng = np.random.default_rng(seed)
-    pool = list(pool)
-    rng.shuffle(pool)
-    split_idx = int(len(pool) * 0.5)
-    val_nodes = sorted(pool[:split_idx])
-    test_nodes = sorted(pool[split_idx:])
+    val_nodes, test_nodes, singleton_labels = _stratified_half_split(pool, labels_np, rng)
+    print(
+        f"Label-stratified split: val={len(val_nodes)}, test={len(test_nodes)}, "
+        f"singleton label buckets={len(singleton_labels)}"
+    )
 
     df_nodes = pd.DataFrame(
-        {"node_id": range(data.num_nodes), "label": data.y.numpy().astype(int)}
+        {"node_id": range(data.num_nodes), "label": labels_np}
     )
     df_nodes["val"] = df_nodes["node_id"].isin(val_nodes)
     df_nodes["test"] = df_nodes["node_id"].isin(test_nodes)

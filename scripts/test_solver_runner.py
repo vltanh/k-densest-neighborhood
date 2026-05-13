@@ -32,6 +32,10 @@ _PAYLOAD = {
     ],
     "kappa_verified": True,
     "kappa_verify_failed": False,
+    "optimality_gap": 0.0,
+    "bb_incumbent_obj": 1.0,
+    "bb_best_bound": 1.0,
+    "gap_status": "exhausted",
     "stats": {"total_bb_nodes": 5, "total_lp_solves": 7},
     "qualities": {"num_nodes": 3, "edge_density": 0.5},
     "oracle": {"queries_made": 9, "unique_nodes_mapped": 4,
@@ -87,6 +91,8 @@ class InvokeSolverTests(unittest.TestCase):
         self.assertEqual(result["oracle_queries"], 9)
         self.assertTrue(result["kappa_verified"])
         self.assertFalse(result["kappa_verify_failed"])
+        self.assertEqual(result["optimality_gap"], 0.0)
+        self.assertEqual(result["gap_status"], "exhausted")
         self.assertEqual(result["stats"]["total_bb_nodes"], 5)
         self.assertEqual(result["qualities"]["num_nodes"], 3)
         self.assertEqual(result["solver_json"]["schema_version"], "1.0")
@@ -108,6 +114,7 @@ class InvokeSolverTests(unittest.TestCase):
         self.assertEqual(result["oracle_queries"], 4)
         self.assertEqual(result["pred_nodes"], [])
         self.assertIsNone(result["kappa_verified"])
+        self.assertIsNone(result["optimality_gap"])
         self.assertIsNone(result["stats"])
         self.assertIsNone(result["solver_json"])
         self.assertTrue(any("JSON_RESULT" in str(item.message) for item in w))

@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+import json
 from collections import Counter
 from unittest.mock import patch
 
@@ -64,7 +65,6 @@ class SolverQualityTests(unittest.TestCase):
         # Path 0-1-2-3, min cut isolates a leaf: cut=1, vol_a=1, vol_b=5.
         # NCut = 1 * (1+5) / (1*5) = 1.2.
         self.assertTrue(math.isclose(qualities["undir_internal_ncut"], 1.2))
-
 
 @unittest.skipIf(
     run_solver is None,
@@ -202,6 +202,62 @@ class LeakageGuardTests(unittest.TestCase):
         # With the forbidden set, BFS cannot use node 1 as a stepping stone, no
         # train labels are reachable, and the global majority (7) is returned.
         self.assertEqual(y_pred_fb[0], 7)
+
+
+@unittest.skipIf(
+    evaluate_nodes is None,
+    f"solver utility dependencies unavailable: {SOLVER_UTILS_IMPORT_ERROR}",
+)
+class EvaluateNodesRecordsTests(unittest.TestCase):
+    def test_records_include_retrieved_nodes(self):
+        with tempfile.TemporaryDirectory() as td:
+            edge_csv = os.path.join(td, "edge.csv")
+            pd.DataFrame([(0, 2)], columns=["source", "target"]).to_csv(
+                edge_csv, index=False
+            )
+            df_nodes = pd.DataFrame(
+                {
+                    "node_id": [0, 1, 2],
+                    "label": [1, 1, 1],
+                    "train": [False, True, True],
+                    "val": [True, False, False],
+                    "test": [False, False, False],
+                }
+            )
+            records_dir = os.path.join(td, "records")
+
+            def fake_run_one_query(*args, **kwargs):
+                return {
+                    "returncode": 0,
+                    "pred_nodes": [0, 2],
+                    "oracle_queries": 3,
+                    "wall_time": 0.01,
+                    "solver_json": {"solver_build_id": "test"},
+                }
+
+            with patch("solver_utils.run_one_query", side_effect=fake_run_one_query):
+                evaluate_nodes(
+                    [0],
+                    k=2,
+                    edge_csv=edge_csv,
+                    df_nodes=df_nodes,
+                    bin_path="solver",
+                    tmp_dir=td,
+                    max_workers=1,
+                    show_progress=False,
+                    records_path=records_dir,
+                    dataset_name="D",
+                    method="bfs",
+                    params={"k": 2},
+                    split_hash="split",
+                    query_split="val",
+                )
+
+            records = []
+            with open(os.path.join(records_dir, "records.ndjson")) as f:
+                records = [json.loads(line) for line in f if line.strip()]
+            self.assertEqual(records[0]["retrieved_nodes"], [0, 2])
+            self.assertNotIn("neighborhood", records[0])
 
 
 @unittest.skipIf(

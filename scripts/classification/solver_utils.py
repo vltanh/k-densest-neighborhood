@@ -170,6 +170,15 @@ def load_ndjson_records(path: str) -> List[dict]:
 _records_from_ndjson = load_ndjson_records
 
 
+def _record_nodes(record: dict) -> Optional[List[int]]:
+    nodes = record.get("neighborhood")
+    if nodes is None:
+        nodes = record.get("retrieved_nodes")
+    if nodes is None:
+        return None
+    return [int(n) for n in nodes]
+
+
 def argmax_label(counter: Counter):
     """Deterministic argmax over label counts. Ties broken by ascending label."""
     if not counter:
@@ -612,11 +621,11 @@ def evaluate_nodes(
 ):
     """Runs k-densest classification and returns aligned y_true / y_pred arrays.
 
-    When records_path is set, per-query lean records are appended to
-    records.ndjson under that directory; heavy solver dumps are written under
-    solver_dumps/ when keep_solver_dumps is True. Existing matching records on
-    disk short-circuit re-solving for deterministic methods (and for BP when
-    the seed matches).
+    When records_path is set, per-query records are appended to records.ndjson
+    under that directory, including the retrieved node set as retrieved_nodes.
+    Heavy solver dumps are written under solver_dumps/ when keep_solver_dumps
+    is True. Existing matching records on disk short-circuit re-solving for
+    deterministic methods (and for BP when the seed matches).
     """
     train_mask = df_nodes["train"].values
     labels = df_nodes["label"].values
@@ -685,6 +694,7 @@ def evaluate_nodes(
         oracle_queries = result["oracle_queries"]
         wall_time = result.get("wall_time")
         solver_payload = result.get("solver_json") or {}
+        retrieved_nodes = [int(n) for n in neighborhood]
         qualities_local = None
         if compute_qualities:
             qualities_local = compute_subgraph_quality(
@@ -711,7 +721,8 @@ def evaluate_nodes(
             "query_split": query_split,
             "query_label": int(labels[q_node]) if q_node < len(labels) else None,
             "size": len(neighborhood),
-            "neighborhood": [int(n) for n in neighborhood],
+            "neighborhood": retrieved_nodes,
+            "retrieved_nodes": retrieved_nodes,
             "oracle_queries": (
                 None if isinstance(oracle_queries, float) and math.isnan(oracle_queries)
                 else int(oracle_queries)
@@ -728,6 +739,10 @@ def evaluate_nodes(
             "kappa_verified": result.get("kappa_verified"),
             "kappa_verify_failed": result.get("kappa_verify_failed"),
             "hard_cap_hit": result.get("hard_cap_hit"),
+            "optimality_gap": result.get("optimality_gap"),
+            "bb_incumbent_obj": result.get("bb_incumbent_obj"),
+            "bb_best_bound": result.get("bb_best_bound"),
+            "gap_status": result.get("gap_status"),
             "soft_time_limit_s": (solver_payload.get("config") or {}).get("time_limit"),
             "hard_time_limit_s": (solver_payload.get("config") or {}).get("hard_time_limit"),
             "solver_wall_time_s": solver_payload.get("wall_time_s"),
@@ -762,7 +777,7 @@ def evaluate_nodes(
         ):
             record, from_cache = future.result()
             q_node = record["query_node"]
-            neighborhood = record.get("neighborhood")
+            neighborhood = _record_nodes(record)
             pred_sizes.append(record.get("size") or (len(neighborhood) if neighborhood else 0))
             oracle_query_counts.append(record.get("oracle_queries"))
 
@@ -813,6 +828,8 @@ def evaluate_nodes(
 
             if records_file_path is not None and not from_cache:
                 lean = {k_: v for k_, v in record.items() if k_ != "neighborhood"}
+                if "retrieved_nodes" not in lean:
+                    lean["retrieved_nodes"] = neighborhood or []
                 with record_lock:
                     with open(records_file_path, "a") as f:
                         f.write(json.dumps(lean) + "\n")
