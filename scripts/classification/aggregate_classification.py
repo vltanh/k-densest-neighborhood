@@ -31,21 +31,50 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score
-from sklearn.utils import resample
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from solver_utils import load_ndjson_records  # noqa: E402
+from record_io import load_ndjson_records  # noqa: E402
 
 
 SEEDS = [42, 43, 44, 45, 46]
 DETERMINISTIC = {"avgdeg", "bfs"}
 
 
-def _macro_scores(y_true, y_pred):
+def _ordered_seed_keys(fam: str, by_seed: Dict[Optional[int], List[dict]]) -> List[Optional[int]]:
+    """Return the actual seed keys present for a method in stable order.
+
+    Deterministic methods store records under seed=None and should contribute a
+    single row, not one synthetic row per BP seed slot.
+    """
+    if fam in DETERMINISTIC:
+        if None in by_seed:
+            return [None]
+        return sorted(by_seed, key=lambda s: (-1 if s is None else int(s)))[:1]
+
+    preferred = [s for s in SEEDS if s in by_seed]
+    extras = sorted(s for s in by_seed if s is not None and s not in SEEDS)
+    return preferred + extras
+
+
+def _primary_seed_key(fam: str, by_seed: Dict[Optional[int], List[dict]]) -> Optional[int]:
+    keys = _ordered_seed_keys(fam, by_seed)
+    if not keys:
+        return None
+    return keys[0]
+
+
+def _metric_labels(y_true, y_pred):
+    return sorted(set(y_true) | set(y_pred))
+
+
+def _macro_scores(y_true, y_pred, labels=None):
+    kwargs = {"average": "macro", "zero_division": 0}
+    if labels is not None:
+        kwargs["labels"] = labels
     return {
-        "precision": precision_score(y_true, y_pred, average="macro", zero_division=0),
-        "recall": recall_score(y_true, y_pred, average="macro", zero_division=0),
-        "f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
+        "precision": precision_score(y_true, y_pred, **kwargs),
+        "recall": recall_score(y_true, y_pred, **kwargs),
+        "f1": f1_score(y_true, y_pred, **kwargs),
     }
 
 
@@ -87,7 +116,7 @@ def _stratified_indices(per_seed_n: int, n_seeds: int, B: int, rng_seed: int):
     return out
 
 
-def _bootstrap_ci(y_true, y_pred, indices_per_replicate):
+def _bootstrap_ci(y_true, y_pred, indices_per_replicate, labels=None):
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     n = len(y_true)
@@ -97,9 +126,9 @@ def _bootstrap_ci(y_true, y_pred, indices_per_replicate):
     for idx in indices_per_replicate:
         yt = y_true[idx]
         yp = y_pred[idx]
-        precisions.append(precision_score(yt, yp, average="macro", zero_division=0))
-        recalls.append(recall_score(yt, yp, average="macro", zero_division=0))
-        f1s.append(f1_score(yt, yp, average="macro", zero_division=0))
+        precisions.append(precision_score(yt, yp, average="macro", zero_division=0, labels=labels))
+        recalls.append(recall_score(yt, yp, average="macro", zero_division=0, labels=labels))
+        f1s.append(f1_score(yt, yp, average="macro", zero_division=0, labels=labels))
     return _ci_from_samples(precisions, recalls, f1s, n)
 
 
@@ -130,15 +159,21 @@ def _pick_best_params_by_val_f1(records) -> Dict[str, str]:
         best_hash = None
         best_f1 = -1.0
         for ph, by_seed in by_hash.items():
-            seed_key = None if fam in DETERMINISTIC else SEEDS[0]
-            recs = by_seed.get(seed_key) or next(iter(by_seed.values()))
+            seed_key = _primary_seed_key(fam, by_seed)
+            recs = by_seed.get(seed_key) if seed_key in by_seed else None
             if not recs:
                 continue
             y_true = [int(r.get("query_label")) for r in recs if r.get("query_label") is not None]
             y_pred = [int(r.get("predicted_label")) if r.get("predicted_label") is not None else -1 for r in recs if r.get("query_label") is not None]
             if not y_true:
                 continue
-            f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            f1 = f1_score(
+                y_true,
+                y_pred,
+                average="macro",
+                zero_division=0,
+                labels=_metric_labels(y_true, y_pred),
+            )
             if f1 > best_f1:
                 best_f1 = f1
                 best_hash = ph
@@ -195,11 +230,125 @@ def _filter_test_records_to_subset(records, hard_ids):
     return [r for r in records if r.get("query_split") != "test" or int(r.get("query_node")) in hard_set]
 
 
+def _expected_split_info(dataset: Optional[str], data_dir: str, subset: str, records) -> Dict[str, dict]:
+    if dataset is None:
+        return {}
+    meta_path = os.path.join(data_dir, dataset, "split_meta.json")
+    if not os.path.exists(meta_path):
+        return {}
+    with open(meta_path) as f:
+        meta = json.load(f)
+    splits = meta.get("splits") or {}
+    out = {}
+    if "val" in splits:
+        out["val"] = {
+            "size": int(splits["val"]["size"]),
+            "hash": splits["val"].get("hash"),
+        }
+    if subset == "bfs_depth1_wrong":
+        out["test"] = {
+            "size": len(_hard_subset(records, dataset=dataset, data_dir=data_dir)),
+            "hash": splits.get("test", {}).get("hash"),
+        }
+    elif "test" in splits:
+        out["test"] = {
+            "size": int(splits["test"]["size"]),
+            "hash": splits["test"].get("hash"),
+        }
+    return out
+
+
+def _validate_complete(
+    records,
+    dataset: Optional[str],
+    data_dir: str,
+    subset: str,
+    allow_partial: bool,
+    allow_split_hash_mismatch: bool,
+):
+    expected = _expected_split_info(dataset, data_dir, subset, records)
+    if expected and not allow_split_hash_mismatch:
+        mismatches = []
+        for r in records:
+            qsplit = r.get("query_split")
+            expected_hash = (expected.get(qsplit) or {}).get("hash")
+            if not expected_hash:
+                continue
+            seen_hash = r.get("split_hash")
+            if seen_hash != expected_hash:
+                mismatches.append(
+                    (
+                        r.get("method"),
+                        str(r.get("params_hash"))[-12:],
+                        r.get("seed"),
+                        qsplit,
+                        r.get("query_node"),
+                        seen_hash,
+                        expected_hash,
+                    )
+                )
+        if mismatches:
+            details = "; ".join(
+                f"{method}/{ph}/seed={seed}/{qsplit}/q={query}: "
+                f"{seen} != {want}"
+                for method, ph, seed, qsplit, query, seen, want in mismatches[:5]
+            )
+            if len(mismatches) > 5:
+                details += f"; ... {len(mismatches) - 5} more"
+            raise RuntimeError(
+                "split_hash mismatch detected. "
+                f"{details}. Re-run records for the current split_meta.json "
+                "or pass --allow-split-hash-mismatch for legacy artifacts."
+            )
+
+    if allow_partial:
+        return
+    if not expected:
+        return
+    groups: Dict[tuple, set] = {}
+    base_keys = set()
+    for r in records:
+        qsplit = r.get("query_split")
+        method_key = (r.get("method"), r.get("params_hash"), r.get("seed"))
+        if qsplit in expected:
+            base_keys.add(method_key)
+        if qsplit not in expected:
+            continue
+        key = (*method_key, qsplit)
+        groups.setdefault(key, set()).add(int(r["query_node"]))
+    short = [
+        (
+            method,
+            str(params_hash)[-12:],
+            seed,
+            qsplit,
+            len(groups.get((method, params_hash, seed, qsplit), set())),
+            want,
+        )
+        for (method, params_hash, seed) in base_keys
+        for qsplit, info in expected.items()
+        for want in [info["size"]]
+        if len(groups.get((method, params_hash, seed, qsplit), set())) != want
+    ]
+    if short:
+        details = "; ".join(
+            f"{method}/{ph}/seed={seed}/{qsplit}: {count}/{want}"
+            for method, ph, seed, qsplit, count, want in short[:10]
+        )
+        if len(short) > 10:
+            details += f"; ... {len(short) - 10} more"
+        raise RuntimeError(
+            "partial classification records detected. "
+            f"{details}. Re-run missing cells or pass --allow-partial."
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--dataset", type=str, default=None)
+    parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument(
         "--subset",
         type=str,
@@ -207,6 +356,16 @@ def main():
         choices=["test", "bfs_depth1_wrong"],
     )
     parser.add_argument("--bootstrap", type=int, default=500)
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Allow incomplete cells and aggregate only their query intersection.",
+    )
+    parser.add_argument(
+        "--allow-split-hash-mismatch",
+        action="store_true",
+        help="Allow legacy records whose split_hash differs from current split_meta.json.",
+    )
     args = parser.parse_args()
 
     records_path = args.records
@@ -227,11 +386,20 @@ def main():
         return
 
     if args.subset == "bfs_depth1_wrong":
-        hard_ids = _hard_subset(records, dataset=args.dataset)
+        hard_ids = _hard_subset(records, dataset=args.dataset, data_dir=args.data_dir)
         if not hard_ids:
             print("No hard subset queries identified (no BFS depth-1 records with wrong label).")
             return
         records = _filter_test_records_to_subset(records, hard_ids)
+
+    _validate_complete(
+        records,
+        args.dataset,
+        args.data_dir,
+        args.subset,
+        args.allow_partial,
+        args.allow_split_hash_mismatch,
+    )
 
     best = _pick_best_params_by_val_f1(records)
     if not best:
@@ -239,19 +407,24 @@ def main():
         return
 
     test_grouped = _records_by_method_seed(records, "test")
-    # Establish a common query order across methods from the first available
-    # test record list so paired bootstrap indices map to the same queries.
+    # Establish the intersection of test queries across validation-best methods
+    # so paired bootstrap indices map to the same query for every method.
     common_test_qn = None
     for fam in best:
         ph = best[fam]
-        any_seed = next(iter(test_grouped.get(fam, {}).get(ph, {}).values()), None)
-        if any_seed is None:
+        by_seed = test_grouped.get(fam, {}).get(ph, {})
+        seed_key = _primary_seed_key(fam, by_seed)
+        recs = by_seed.get(seed_key) if seed_key in by_seed else None
+        if recs is None:
             continue
-        if common_test_qn is None or len(any_seed) != len(common_test_qn):
-            common_test_qn = [int(r["query_node"]) for r in any_seed]
-        break
+        qns = {int(r["query_node"]) for r in recs}
+        common_test_qn = qns if common_test_qn is None else (common_test_qn & qns)
     if common_test_qn is None:
         print("No test records found for any best params hash.")
+        return
+    common_test_qn = sorted(common_test_qn)
+    if not common_test_qn:
+        print("No common test queries found across validation-best methods.")
         return
     paired_idx = _paired_indices(len(common_test_qn), args.bootstrap, rng_seed=0)
 
@@ -262,22 +435,22 @@ def main():
         if not by_seed:
             print(f"[{fam}] best params_hash {ph[-12:]} has no test records.")
             continue
-        method_preds: Dict[int, List[int]] = {}
+        method_preds: Dict[Optional[int], List[int]] = {}
         method_truth = None
-        for seed in SEEDS:
+        seed_keys = _ordered_seed_keys(fam, by_seed)
+        for seed in seed_keys:
             recs = by_seed.get(seed)
-            if recs is None and fam in DETERMINISTIC:
-                recs = by_seed.get(None)
             if recs is None:
                 continue
             recs_by_qn = {int(r["query_node"]): r for r in recs}
             ordered = [recs_by_qn[qn] for qn in common_test_qn if qn in recs_by_qn]
             y_true = [int(r["query_label"]) for r in ordered]
             y_pred = [int(r["predicted_label"]) if r["predicted_label"] is not None else -1 for r in ordered]
+            labels_for_seed = _metric_labels(y_true, y_pred)
             method_truth = y_true
             method_preds[seed] = y_pred
-            scores = _macro_scores(y_true, y_pred)
-            ci = _bootstrap_ci(y_true, y_pred, paired_idx)
+            scores = _macro_scores(y_true, y_pred, labels=labels_for_seed)
+            ci = _bootstrap_ci(y_true, y_pred, paired_idx, labels=labels_for_seed)
             per_seed_rows.append(
                 {
                     "dataset": ordered[0].get("dataset") if ordered else args.dataset,
@@ -301,26 +474,36 @@ def main():
         if method_truth is None:
             continue
         precisions, recalls, f1s = [], [], []
-        for seed in SEEDS:
+        for seed in seed_keys:
             yp = method_preds.get(seed)
             if yp is None:
                 continue
-            s = _macro_scores(method_truth, yp)
+            s = _macro_scores(method_truth, yp, labels=_metric_labels(method_truth, yp))
             precisions.append(s["precision"])
             recalls.append(s["recall"])
             f1s.append(s["f1"])
-        present_seeds = [s for s in SEEDS if s in method_preds]
+        present_seeds = [s for s in seed_keys if s in method_preds]
         if fam in DETERMINISTIC or len(present_seeds) <= 1:
             ci_kind = "single_seed_paired"
-            single_yp = method_preds.get(SEEDS[0]) or next(iter(method_preds.values()))
-            pooled_ci = _bootstrap_ci(method_truth, single_yp, paired_idx)
+            single_yp = method_preds.get(present_seeds[0]) if present_seeds else next(iter(method_preds.values()))
+            pooled_ci = _bootstrap_ci(
+                method_truth,
+                single_yp,
+                paired_idx,
+                labels=_metric_labels(method_truth, single_yp),
+            )
         else:
             ci_kind = "stratified_seed_pooled"
             n_per_seed = len(method_truth)
             strat_idx = _stratified_indices(n_per_seed, len(present_seeds), args.bootstrap, rng_seed=0)
             yt_stack = np.concatenate([np.asarray(method_truth) for _ in present_seeds])
             yp_stack = np.concatenate([np.asarray(method_preds[s]) for s in present_seeds])
-            pooled_ci = _bootstrap_ci(yt_stack, yp_stack, strat_idx)
+            pooled_ci = _bootstrap_ci(
+                yt_stack,
+                yp_stack,
+                strat_idx,
+                labels=_metric_labels(yt_stack.tolist(), yp_stack.tolist()),
+            )
         aggregate_rows.append(
             {
                 "dataset": args.dataset,

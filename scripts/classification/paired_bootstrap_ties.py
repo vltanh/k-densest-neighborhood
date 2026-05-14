@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from solver_utils import load_ndjson_records  # noqa: E402
+from record_io import load_ndjson_records  # noqa: E402
 
 
 def _cell_key(record: dict) -> Optional[Tuple]:
@@ -167,6 +167,62 @@ def _resolve_hard_subset(dataset: str, data_dir: str) -> Optional[set]:
     return set(int(q) for q in hard)
 
 
+def _expected_query_count(dataset: str, data_dir: str, split: str,
+                          hard_ids: Optional[set]) -> Optional[int]:
+    if hard_ids is not None:
+        return len(hard_ids)
+    meta_path = os.path.join(data_dir, dataset, "split_meta.json")
+    if not os.path.exists(meta_path):
+        return None
+    with open(meta_path) as f:
+        meta = json.load(f)
+    split_info = (meta.get("splits") or {}).get(split)
+    if not split_info:
+        return None
+    return int(split_info["size"])
+
+
+def _validate_split_hashes(records: Iterable[dict], dataset: str, data_dir: str,
+                           split: str, allow_mismatch: bool):
+    if allow_mismatch:
+        return
+    meta_path = os.path.join(data_dir, dataset, "split_meta.json")
+    if not os.path.exists(meta_path):
+        return
+    with open(meta_path) as f:
+        splits = (json.load(f).get("splits") or {})
+    expected_hash = (splits.get(split) or {}).get("hash")
+    if not expected_hash:
+        return
+    mismatches = []
+    for record in records:
+        if record.get("query_split") != split:
+            continue
+        if record.get("split_hash") != expected_hash:
+            mismatches.append(
+                (
+                    record.get("method"),
+                    str(record.get("params_hash"))[-12:],
+                    record.get("seed"),
+                    record.get("query_node"),
+                    record.get("split_hash"),
+                    expected_hash,
+                )
+            )
+    if mismatches:
+        details = "; ".join(
+            f"{method}/{ph}/seed={seed}/q={query}: {seen} != {want}"
+            for method, ph, seed, query, seen, want in mismatches[:5]
+        )
+        if len(mismatches) > 5:
+            details += f"; ... {len(mismatches) - 5} more"
+        raise RuntimeError(
+            "split_hash mismatch detected. "
+            f"{details}. Re-run records for the current split_meta.json "
+            "or pass --allow-split-hash-mismatch for legacy artifacts."
+        )
+
+
 def _load_records(records_path: str, dataset: Optional[str]) -> List[dict]:
     if os.path.isdir(records_path):
         records: List[dict] = []
@@ -184,7 +240,8 @@ def _load_records(records_path: str, dataset: Optional[str]) -> List[dict]:
 
 
 def compute_table(records: List[dict], split: str, dataset: str, data_dir: str,
-                  hard: bool, bootstrap: int, rng_seed: int = 42) -> pd.DataFrame:
+                  hard: bool, bootstrap: int, rng_seed: int = 42,
+                  allow_partial: bool = False) -> pd.DataFrame:
     hard_ids: Optional[set] = None
     if hard:
         hard_ids = _resolve_hard_subset(dataset, data_dir)
@@ -195,6 +252,24 @@ def compute_table(records: List[dict], split: str, dataset: str, data_dir: str,
     if not common:
         return pd.DataFrame()
     n_queries = len(common)
+    expected_n = _expected_query_count(dataset, data_dir, split, hard_ids)
+    if expected_n is not None and not allow_partial:
+        short_cells = {
+            f"{_cell_label(cell)} k={_cell_k(cell)}": len(rows)
+            for cell, rows in cells.items()
+            if len(rows) != expected_n
+        }
+        if n_queries != expected_n or short_cells:
+            details = ", ".join(
+                f"{label}={count}/{expected_n}" for label, count in sorted(short_cells.items())
+            )
+            if not details:
+                details = f"intersection={n_queries}/{expected_n}"
+            raise RuntimeError(
+                "partial classification table input: "
+                f"split={split} subset={'hard' if hard else split}; {details}. "
+                "Re-run the missing cells or pass --allow-partial."
+            )
 
     aligned: Dict[Tuple, Tuple[np.ndarray, np.ndarray]] = {}
     yt_ref: Optional[np.ndarray] = None
@@ -233,11 +308,11 @@ def compute_table(records: List[dict], split: str, dataset: str, data_dir: str,
             "bfs_depth": cell[1] if cell[0] == "bfs" else None,
             "n_queries": n_queries,
             "precision": observed[cell]["precision"],
-            "precision_std": float(samples[cell]["precision"].std()),
+            "precision_std": float(samples[cell]["precision"].std(ddof=1)) if bootstrap > 1 else 0.0,
             "recall": observed[cell]["recall"],
-            "recall_std": float(samples[cell]["recall"].std()),
+            "recall_std": float(samples[cell]["recall"].std(ddof=1)) if bootstrap > 1 else 0.0,
             "f1": observed[cell]["f1"],
-            "f1_std": float(samples[cell]["f1"].std()),
+            "f1_std": float(samples[cell]["f1"].std(ddof=1)) if bootstrap > 1 else 0.0,
         })
     df = pd.DataFrame(rows)
 
@@ -318,6 +393,16 @@ def main():
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--rng-seed", type=int, default=42)
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Allow incomplete cells and aggregate only their query intersection.",
+    )
+    parser.add_argument(
+        "--allow-split-hash-mismatch",
+        action="store_true",
+        help="Allow legacy records whose split_hash differs from current split_meta.json.",
+    )
     args = parser.parse_args()
 
     if args.hard and args.split != "test":
@@ -326,10 +411,18 @@ def main():
     records = _load_records(args.records, args.dataset)
     if not records:
         raise SystemExit("no records matched")
+    _validate_split_hashes(
+        records,
+        args.dataset,
+        args.data_dir,
+        args.split,
+        args.allow_split_hash_mismatch,
+    )
 
     df = compute_table(records, split=args.split, dataset=args.dataset,
                        data_dir=args.data_dir, hard=args.hard,
-                       bootstrap=args.bootstrap, rng_seed=args.rng_seed)
+                       bootstrap=args.bootstrap, rng_seed=args.rng_seed,
+                       allow_partial=args.allow_partial)
     if df.empty:
         raise SystemExit("no cells produced")
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
