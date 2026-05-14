@@ -10,7 +10,6 @@ import os
 import re
 import subprocess
 import time
-import warnings
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -30,6 +29,15 @@ def base_sim_argv(bin_path: str, edge_csv: str, query: str, output_csv: Optional
 
 _QUERIES_PATTERN = re.compile(r"API Queries Made\s*:\s*(\d+)")
 _JSON_RESULT_PATTERN = re.compile(r"^JSON_RESULT:(.*)$", re.MULTILINE)
+
+
+class SolverInvocationError(RuntimeError):
+    """Raised when the solver process does not produce a usable JSON payload."""
+
+
+def _tail(text: str, limit: int = 2000) -> str:
+    text = text or ""
+    return text[-limit:]
 
 
 def parse_oracle_queries(output: str) -> float:
@@ -76,8 +84,10 @@ def invoke_solver(
     The binary always receives --emit-json (and --json-output if json_output_path
     is set). Result keys: returncode, stdout, stderr, pred_nodes, oracle_queries,
     lambda_trajectory, kappa_verified, kappa_verify_failed, optimality_gap,
-    stats, qualities, solver_json, wall_time (if capture_wall_time). When the JSON_RESULT: line is
-    absent, the function emits a warning and falls back to the legacy regex.
+    incumbent_trajectory, stats, qualities, solver_json, wall_time (if
+    capture_wall_time). Missing JSON or a nonzero process exit is a hard
+    failure because callers cache records and must not silently convert
+    solver/runtime errors into empty communities.
     """
     cmd = base_sim_argv(bin_path, edge_csv, query)
     if extra_args:
@@ -85,6 +95,13 @@ def invoke_solver(
     cmd.append("--emit-json")
     if json_output_path is not None:
         cmd += ["--json-output", str(json_output_path)]
+        try:
+            if os.path.exists(json_output_path):
+                os.remove(json_output_path)
+        except OSError as exc:
+            raise SolverInvocationError(
+                f"Could not clear stale solver JSON output at {json_output_path}: {exc}"
+            ) from exc
 
     started = time.perf_counter() if capture_wall_time else None
     try:
@@ -109,55 +126,42 @@ def invoke_solver(
     else:
         payload = parse_solver_json(stdout)
 
-    if payload is None and rc == 0:
-        warnings.warn(
-            "Solver returned no JSON_RESULT line; falling back to regex parse. "
-            "The solver binary may be stale; rebuild via solver/build.sh.",
-            RuntimeWarning,
-            stacklevel=2,
+    if rc != 0:
+        raise SolverInvocationError(
+            "Solver exited nonzero under --emit-json "
+            f"(returncode={rc}, cmd={' '.join(str(c) for c in cmd)}).\n"
+            f"stderr tail:\n{_tail(stderr)}\nstdout tail:\n{_tail(stdout)}"
         )
 
-    if payload is not None:
-        nodes = payload.get("nodes", []) or []
-        pred = [int(n) for n in nodes] if as_int_nodes else [str(n) for n in nodes]
-        oracle_queries = (payload.get("oracle") or {}).get("queries_made", math.nan)
-        result = {
-            "returncode": rc,
-            "stdout": stdout,
-            "stderr": stderr,
-            "pred_nodes": pred,
-            "oracle_queries": oracle_queries,
-            "lambda_trajectory": payload.get("lambda_trajectory") or [],
-            "kappa_verified": payload.get("kappa_verified"),
-            "kappa_verify_failed": payload.get("kappa_verify_failed"),
-            "hard_cap_hit": payload.get("hard_cap_hit"),
-            "optimality_gap": payload.get("optimality_gap"),
-            "bb_incumbent_obj": payload.get("bb_incumbent_obj"),
-            "bb_best_bound": payload.get("bb_best_bound"),
-            "gap_status": payload.get("gap_status"),
-            "stats": payload.get("stats"),
-            "qualities": payload.get("qualities"),
-            "solver_json": payload,
-        }
-    else:
-        result = {
-            "returncode": rc,
-            "stdout": stdout,
-            "stderr": stderr,
-            "pred_nodes": [],
-            "oracle_queries": parse_oracle_queries(stdout),
-            "lambda_trajectory": [],
-            "kappa_verified": None,
-            "kappa_verify_failed": None,
-            "hard_cap_hit": None,
-            "optimality_gap": None,
-            "bb_incumbent_obj": None,
-            "bb_best_bound": None,
-            "gap_status": None,
-            "stats": None,
-            "qualities": None,
-            "solver_json": None,
-        }
+    if payload is None:
+        raise SolverInvocationError(
+            "Solver produced no JSON_RESULT payload under --emit-json "
+            f"(cmd={' '.join(str(c) for c in cmd)}).\n"
+            f"stderr tail:\n{_tail(stderr)}\nstdout tail:\n{_tail(stdout)}"
+        )
+
+    nodes = payload.get("nodes", []) or []
+    pred = [int(n) for n in nodes] if as_int_nodes else [str(n) for n in nodes]
+    oracle_queries = (payload.get("oracle") or {}).get("queries_made", math.nan)
+    result = {
+        "returncode": rc,
+        "stdout": stdout,
+        "stderr": stderr,
+        "pred_nodes": pred,
+        "oracle_queries": oracle_queries,
+        "lambda_trajectory": payload.get("lambda_trajectory") or [],
+        "incumbent_trajectory": payload.get("incumbent_trajectory") or [],
+        "kappa_verified": payload.get("kappa_verified"),
+        "kappa_verify_failed": payload.get("kappa_verify_failed"),
+        "hard_cap_hit": payload.get("hard_cap_hit"),
+        "optimality_gap": payload.get("optimality_gap"),
+        "bb_incumbent_obj": payload.get("bb_incumbent_obj"),
+        "bb_best_bound": payload.get("bb_best_bound"),
+        "gap_status": payload.get("gap_status"),
+        "stats": payload.get("stats"),
+        "qualities": payload.get("qualities"),
+        "solver_json": payload,
+    }
     if wall is not None:
         result["wall_time"] = wall
     return result

@@ -1,13 +1,13 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
-import warnings
 from unittest.mock import patch
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from _solver_runner import invoke_solver, parse_solver_json
+from _solver_runner import SolverInvocationError, invoke_solver, parse_solver_json
 
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,6 +29,9 @@ _PAYLOAD = {
     "lambda_final": 0.5,
     "lambda_trajectory": [
         {"iter": 1, "lambda": 0.0, "iter_time_s": 0.01, "bb_nodes": 5, "lp_solves": 7}
+    ],
+    "incumbent_trajectory": [
+        {"bb_node": 3, "lambda": 0.0, "param_obj": 2.0, "density": 0.5, "size": 3, "nodes": ["7", "11", "13"]}
     ],
     "kappa_verified": True,
     "kappa_verify_failed": False,
@@ -97,32 +100,63 @@ class InvokeSolverTests(unittest.TestCase):
         self.assertEqual(result["qualities"]["num_nodes"], 3)
         self.assertEqual(result["solver_json"]["schema_version"], "1.0")
         self.assertEqual(len(result["lambda_trajectory"]), 1)
+        self.assertEqual(len(result["incumbent_trajectory"]), 1)
 
-    def test_invoke_solver_falls_back_on_missing_json(self):
+    def test_invoke_solver_rejects_missing_json(self):
         class Result:
             returncode = 0
             stdout = "API Queries Made : 4\nNodes:\n1 2 3\n"
             stderr = ""
 
         with patch("_solver_runner.subprocess.run", return_value=Result()):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                result = invoke_solver(
+            with self.assertRaises(SolverInvocationError):
+                invoke_solver(
                     bin_path="solver", edge_csv="edges.csv", query="0"
                 )
 
-        self.assertEqual(result["oracle_queries"], 4)
-        self.assertEqual(result["pred_nodes"], [])
-        self.assertIsNone(result["kappa_verified"])
-        self.assertIsNone(result["optimality_gap"])
-        self.assertIsNone(result["stats"])
-        self.assertIsNone(result["solver_json"])
-        self.assertTrue(any("JSON_RESULT" in str(item.message) for item in w))
+    def test_invoke_solver_rejects_nonzero_exit(self):
+        class Result:
+            returncode = 2
+            stdout = ""
+            stderr = "license error"
+
+        with patch("_solver_runner.subprocess.run", return_value=Result()):
+            with self.assertRaises(SolverInvocationError):
+                invoke_solver(
+                    bin_path="solver", edge_csv="edges.csv", query="0"
+                )
 
     def test_parse_solver_json_handles_prefix_lines(self):
         stdout = "header\nlog line\nJSON_RESULT:" + json.dumps({"size": 7}) + "\ntrailer"
         parsed = parse_solver_json(stdout)
         self.assertEqual(parsed["size"], 7)
+
+    def test_json_output_path_does_not_reuse_stale_payload(self):
+        stale_payload = dict(_PAYLOAD)
+        stale_payload["nodes"] = ["999"]
+        fresh_payload = dict(_PAYLOAD)
+        fresh_payload["nodes"] = ["7"]
+
+        class Result:
+            returncode = 0
+            stdout = _stdout_with_payload(fresh_payload)
+            stderr = ""
+
+        with tempfile.TemporaryDirectory() as td:
+            dump_path = os.path.join(td, "solver.json")
+            with open(dump_path, "w") as f:
+                json.dump(stale_payload, f)
+
+            with patch("_solver_runner.subprocess.run", return_value=Result()):
+                result = invoke_solver(
+                    bin_path="solver",
+                    edge_csv="edges.csv",
+                    query="0",
+                    as_int_nodes=True,
+                    json_output_path=dump_path,
+                )
+
+        self.assertEqual(result["pred_nodes"], [7])
 
 
 @unittest.skipUnless(

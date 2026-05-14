@@ -19,6 +19,9 @@ from _solver_runner import (  # noqa: E402
     count_internal_directed_edges,
     invoke_solver,
 )
+from record_io import load_ndjson_records  # noqa: E402
+
+QUALITY_SCHEMA_VERSION = "2"
 
 
 @dataclass
@@ -63,6 +66,14 @@ def _sha256_forbidden(forbidden_nodes: Optional[Iterable[int]]) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
 def effective_params(
     params: Optional[dict],
     *,
@@ -70,6 +81,8 @@ def effective_params(
     max_fallback_hops: int,
     forbidden_nodes: Optional[Iterable[int]] = None,
     code_hash: Optional[str] = None,
+    solver_config: Optional[dict] = None,
+    quality_schema_version: str = QUALITY_SCHEMA_VERSION,
 ) -> Tuple[dict, str]:
     """Bake the bits that change the classifier's output into the params dict
     before hashing, so cached records emitted under one configuration are not
@@ -80,15 +93,20 @@ def effective_params(
       - max_fallback_hops
       - forbidden_hash: sha256 of the sorted forbidden node id list
       - code_hash (optional): caller-stamped solver build id or git sha
+      - solver_config (optional): actual solver caps/options outside method params
+      - quality_schema_version: invalidates cached quality records when metrics change
     """
     base = dict(params or {})
     eval_block = {
         "weighting": weighting,
         "max_fallback_hops": int(max_fallback_hops),
         "forbidden_hash": _sha256_forbidden(forbidden_nodes),
+        "quality_schema_version": str(quality_schema_version),
     }
     if code_hash is not None:
         eval_block["code_hash"] = str(code_hash)
+    if solver_config is not None:
+        eval_block["solver_config"] = dict(solver_config)
     base["_eval"] = eval_block
     return base, params_hash(base)
 
@@ -111,6 +129,8 @@ def method_extra_args(method: str, params: Optional[dict] = None, gurobi_seed: O
             args += ["--kappa", str(params["kappa"])]
         if params.get("time_limit") is not None:
             args += ["--time-limit", str(params["time_limit"])]
+        if params.get("hard_time_limit") is not None:
+            args += ["--hard-time-limit", str(params["hard_time_limit"])]
         if params.get("dinkelbach_iter") is not None:
             args += ["--dinkelbach-iter", str(params["dinkelbach_iter"])]
         if params.get("node_limit") is not None:
@@ -142,28 +162,6 @@ def _record_key(record: dict) -> Tuple:
     if method == "bp":
         keys.append(record.get("seed"))
     return tuple(keys)
-
-
-def load_ndjson_records(path: str) -> List[dict]:
-    """Read an NDJSON file of records; skip malformed lines and report count
-    to stderr so partial corruption is visible to operators."""
-    if not os.path.exists(path):
-        return []
-    out: List[dict] = []
-    skipped = 0
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                skipped += 1
-    if skipped > 0:
-        print(f"[load_ndjson_records] {path}: {skipped} malformed line(s) skipped",
-              file=sys.stderr)
-    return out
 
 
 # Backwards-compatible alias for any local caller still using the private name.
@@ -580,14 +578,15 @@ def _classify_query(
 
     if weighting == "distance":
         class_scores: Counter = Counter()
+        distances = _bfs_with_forbidden(
+            G, q_node, max_fallback_hops, forbidden_set
+        )
         for n in train_neighbors:
-            try:
-                d = nx.shortest_path_length(G, source=q_node, target=n)
-                w = 1.0 / d
-            except nx.NetworkXNoPath:
-                w = 0.0
-            class_scores[labels[n]] += w
-        return argmax_label(class_scores), False
+            d = distances.get(n)
+            if d is not None and d > 0:
+                class_scores[labels[n]] += 1.0 / d
+        if class_scores:
+            return argmax_label(class_scores), False
 
     return argmax_label(Counter(labels[n] for n in train_neighbors)), False
 
@@ -600,7 +599,7 @@ def evaluate_nodes(
     bin_path,
     tmp_dir,
     max_workers=8,
-    weighting="uniform",
+    weighting="distance",
     max_fallback_hops=10,
     extra_args=None,
     collect_stats=False,
@@ -653,6 +652,8 @@ def evaluate_nodes(
             solver_dumps_dir = os.path.join(records_path, "solver_dumps")
             os.makedirs(solver_dumps_dir, exist_ok=True)
         for rec in _records_from_ndjson(records_file_path):
+            if rec.get("returncode", 0) != 0:
+                continue
             cached_records[_record_key(rec)] = rec
 
     record_lock = Lock()
@@ -690,6 +691,11 @@ def evaluate_nodes(
             max_in_edges=max_in_edges,
             json_output_path=solver_dump_path,
         )
+        if result["returncode"] != 0:
+            raise RuntimeError(
+                f"solver failed for query={q_node} method={method_name} "
+                f"params_hash={p_hash[-12:]} returncode={result['returncode']}"
+            )
         neighborhood = result["pred_nodes"] if result["returncode"] == 0 else []
         oracle_queries = result["oracle_queries"]
         wall_time = result.get("wall_time")
@@ -729,6 +735,7 @@ def evaluate_nodes(
             ),
             "wall_time_s": wall_time,
             "qualities": qualities_local,
+            "quality_schema_version": QUALITY_SCHEMA_VERSION if compute_qualities else None,
             "solver_dump_path": (
                 os.path.relpath(solver_dump_path, records_path)
                 if solver_dump_path is not None
@@ -746,6 +753,7 @@ def evaluate_nodes(
             "soft_time_limit_s": (solver_payload.get("config") or {}).get("time_limit"),
             "hard_time_limit_s": (solver_payload.get("config") or {}).get("hard_time_limit"),
             "solver_wall_time_s": solver_payload.get("wall_time_s"),
+            "incumbent_trajectory": result.get("incumbent_trajectory") or [],
             "stats": result.get("stats"),
         }
         return record, False

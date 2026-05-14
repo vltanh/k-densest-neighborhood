@@ -34,6 +34,7 @@ from solver_utils import (  # noqa: E402
     effective_params,
     evaluate_nodes,
     method_extra_args,
+    sha256_file,
 )
 from split_utils import assert_split_meta_matches  # noqa: E402
 
@@ -54,10 +55,10 @@ def _bfs_grid(depths, k_values):
     return [{"bfs_depth": d, "k": k, "bfs_use_k": True} for d in depths for k in k_values]
 
 
-def _bp_grid(k_values, kappa_values, time_limits, dinkelbach_iters):
+def _bp_grid(k_values, kappa_values, time_limits, hard_time_limit, dinkelbach_iters):
     grid = []
-    for k in k_values:
-        for kappa in kappa_values:
+    for kappa in kappa_values:
+        for k in k_values:
             for tl in time_limits:
                 for di in dinkelbach_iters:
                     grid.append(
@@ -65,6 +66,7 @@ def _bp_grid(k_values, kappa_values, time_limits, dinkelbach_iters):
                             "k": k,
                             "kappa": kappa,
                             "time_limit": tl,
+                            "hard_time_limit": hard_time_limit,
                             "dinkelbach_iter": di,
                         }
                     )
@@ -147,13 +149,11 @@ def main():
     parser.add_argument(
         "--solver-time-limit",
         type=float,
-        default=60.0,
+        default=None,
         help=(
-            "Per-call no-improvement budget (seconds) appended to BP solver "
-            "argv via --time-limit. Soft cap: the solver returns its current "
-            "incumbent when the clock since the last improvement exceeds the "
-            "budget. Kept outside the params dict so it does not change "
-            "params_hash and the existing record cache stays valid across runs."
+            "Per-call no-improvement budget (seconds) for BP, passed via "
+            "--time-limit and included in params_hash. Default: 60.0 unless "
+            "--bp-time-limit is supplied as a legacy grid/alias."
         ),
     )
     parser.add_argument(
@@ -170,7 +170,7 @@ def main():
             "incumbent updates."
         ),
     )
-    parser.add_argument("--weighting", type=str, default="uniform")
+    parser.add_argument("--weighting", type=str, default="distance", choices=["distance", "uniform"])
     parser.add_argument("--max-fallback-hops", type=int, default=10)
     parser.add_argument("--keep-solver-dumps", action="store_true")
     parser.add_argument(
@@ -181,10 +181,27 @@ def main():
     )
     parser.add_argument("--bp-k", type=str, default="3,4,5")
     parser.add_argument("--bp-kappa", type=str, default="0,1,2")
-    parser.add_argument("--bp-time-limit", type=str, default="-1")
+    parser.add_argument(
+        "--bp-time-limit",
+        type=str,
+        default=None,
+        help=(
+            "Legacy comma-separated BP soft-limit grid. Used only when "
+            "--solver-time-limit is omitted; values are included in params_hash."
+        ),
+    )
     parser.add_argument("--bp-dinkelbach-iter", type=str, default="-1")
     parser.add_argument("--bfs-depth", type=str, default="1")
     args = parser.parse_args()
+
+    if args.solver_time_limit is None:
+        soft_time_limits = (
+            _parse_float_list(args.bp_time_limit)
+            if args.bp_time_limit is not None
+            else [60.0]
+        )
+    else:
+        soft_time_limits = [float(args.solver_time_limit)]
 
     df_nodes = pd.read_csv(os.path.join(args.data_dir, args.dataset, "nodes.csv"))
     df_edges = pd.read_csv(os.path.join(args.data_dir, args.dataset, "edge.csv"))
@@ -201,6 +218,7 @@ def main():
     ctx = build_graph_context(
         os.path.join(args.data_dir, args.dataset, "edge.csv"), max_in_edges=0
     )
+    solver_bin_hash = sha256_file(args.bin_path)
 
     out_root = os.path.join(args.exps_dir, "classification", args.dataset, "cluster_quality")
     os.makedirs(out_root, exist_ok=True)
@@ -218,7 +236,8 @@ def main():
             "bp": lambda: _bp_grid(
                 _parse_int_list(args.bp_k),
                 _parse_int_list(args.bp_kappa),
-                _parse_float_list(args.bp_time_limit),
+                soft_time_limits,
+                args.hard_time_limit,
                 _parse_int_list(args.bp_dinkelbach_iter),
             ),
         }[fam]
@@ -229,6 +248,8 @@ def main():
                 weighting=args.weighting,
                 max_fallback_hops=args.max_fallback_hops,
                 forbidden_nodes=forbidden,
+                code_hash=solver_bin_hash,
+                solver_config={"max_in_edges": 0},
             )
             k = _k_for(fam, params)
             records_dir = os.path.join(out_root, fam, p_hash[-12:])
@@ -239,10 +260,6 @@ def main():
             seeds_for_this_fam = bp_seeds if fam == "bp" else [None]
             for seed in seeds_for_this_fam:
                 extra = method_extra_args(fam, params, gurobi_seed=seed if fam == "bp" else None)
-                if fam == "bp" and args.solver_time_limit is not None:
-                    extra = list(extra) + ["--time-limit", str(args.solver_time_limit)]
-                if fam == "bp" and args.hard_time_limit is not None:
-                    extra = list(extra) + ["--hard-time-limit", str(args.hard_time_limit)]
                 _run_on_split(
                     query_nodes=val_ids,
                     split_label="val",
