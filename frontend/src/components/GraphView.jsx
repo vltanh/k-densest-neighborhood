@@ -13,6 +13,16 @@ const COL_GHOST    = '#AFC0D6';
 const COL_GHOST_LN = '#8297B2';
 const COL_CORE     = '#1B3A66';  // core fill — deep navy
 
+const stableJitter = (id) => {
+  const s = String(id);
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) / 0xffffffff) - 0.5;
+};
+
 export default function GraphView({ graphData, queryNode, oracleMode, meta, qualities, error, hoveredNode, setHoveredNode, setClickedNode, heightPct, loading = false, onToggleTelemetry, telemetryOpen = false }) {
   const isSim = oracleMode === ORACLE_SIM;
   const numClasses = meta?.numClasses ?? null;
@@ -23,6 +33,7 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, qual
   };
   const svgRef = useRef();
   const zoomBehaviorRef = useRef(null);
+  const positionCacheRef = useRef(new Map());
   const [legendOpen, setLegendOpen] = useState(true);
 
   const stats = useMemo(() => {
@@ -81,7 +92,10 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, qual
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
-    if (!graphData.nodes.length) return;
+    if (!graphData.nodes.length) {
+      positionCacheRef.current.clear();
+      return;
+    }
     const { w: width, h: height } = size;
     if (width === 0 || height === 0) return;
 
@@ -107,8 +121,14 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, qual
     const startX = (width - totalWidth) / 2;
     const yBand = Math.min(height * 0.32, 280);
 
+    const activeIds = new Set(graphData.nodes.map(n => n.id));
+    for (const id of positionCacheRef.current.keys()) {
+      if (!activeIds.has(id)) positionCacheRef.current.delete(id);
+    }
+
     const nodes = graphData.nodes.map(d => {
       const copy = Object.create(d);
+      const cached = positionCacheRef.current.get(copy.id);
       if (copy.type === 'core') {
         const rank = rankMap.get(copy.id);
         copy.targetX = startX + rank * xSpacing;
@@ -116,13 +136,14 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, qual
         // ranks never share a row and a single row never holds all nodes.
         const row = rank % 3;
         const band = row === 0 ? -1 : row === 1 ? 0 : 1;
-        copy.targetY = height / 2 + band * yBand + (Math.random() - 0.5) * 60;
-        copy.x = copy.targetX;
-        copy.y = copy.targetY;
+        copy.targetY = height / 2 + band * yBand + stableJitter(copy.id) * 60;
+        copy.x = cached?.x ?? copy.targetX;
+        copy.y = cached?.y ?? copy.targetY;
       } else {
         copy.targetY = height / 2;
-        copy.y = height / 2;
         copy.targetX = width / 2;
+        copy.x = cached?.x ?? copy.targetX;
+        copy.y = cached?.y ?? copy.targetY;
       }
       return copy;
     });
@@ -227,6 +248,7 @@ export default function GraphView({ graphData, queryNode, oracleMode, meta, qual
       node.attr('cx', d => d.x).attr('cy', d => d.y);
       labels.attr('x', d => d.x).attr('y', d => d.y);
       seedHalo.attr('transform', d => `translate(${d.x}, ${d.y})`);
+      nodes.forEach(d => positionCacheRef.current.set(d.id, { x: d.x, y: d.y }));
     });
 
     // Animate the pulse ring — pause when tab hidden to save battery.

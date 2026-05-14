@@ -3,6 +3,28 @@ import { API_BASE_URL, ORACLE_SIM, ORACLE_OPENALEX, VARIANT_BP } from '../consta
 import { parseLogLine, TELEMETRY_INITIAL } from '../utils/telemetryParser';
 
 const MAX_LOG_LINES = 2000;
+const INCUMBENT_GRAPH_DEBOUNCE_MS = 350;
+
+const pi = (v, def) => {
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? def : n;
+};
+
+const pf = (v, def) => {
+  const n = parseFloat(v);
+  return Number.isNaN(n) ? def : n;
+};
+
+const nodeSignature = (nodes) =>
+  Array.isArray(nodes) ? nodes.map(n => String(n)).join('|') : '';
+
+const graphSignature = (graph) => {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes.map(n => n.id).join('|') : '';
+  const edges = Array.isArray(graph?.edges)
+    ? graph.edges.map(e => `${e.source}->${e.target}:${e.type || ''}`).join('|')
+    : '';
+  return `${nodes}::${edges}`;
+};
 
 export function useSubgraphExtractor(sessionId) {
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
@@ -12,6 +34,99 @@ export function useSubgraphExtractor(sessionId) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const abortControllerRef = useRef(null);
+  const incumbentGraphAbortRef = useRef(null);
+  const incumbentTimerRef = useRef(null);
+  const graphRequestSeqRef = useRef(0);
+  const latestGraphSignatureRef = useRef('');
+  const runContextRef = useRef(null);
+
+  const clearIncumbentGraphWork = useCallback((abortRequest = true) => {
+    if (incumbentTimerRef.current) {
+      clearTimeout(incumbentTimerRef.current);
+      incumbentTimerRef.current = null;
+    }
+    if (abortRequest && incumbentGraphAbortRef.current) {
+      incumbentGraphAbortRef.current.abort();
+      incumbentGraphAbortRef.current = null;
+    }
+  }, []);
+
+  const applyGraphData = useCallback((graph) => {
+    const sig = graphSignature(graph);
+    if (sig && sig === latestGraphSignatureRef.current) return;
+    latestGraphSignatureRef.current = sig;
+    setGraphData(graph);
+  }, []);
+
+  const fetchGraphForNodes = useCallback(async (nodes, signature, runId) => {
+    const ctx = runContextRef.current;
+    if (!ctx || ctx.runId !== runId || ctx.finalGraphReceived) return;
+
+    const endpoint = ctx.mode === ORACLE_SIM ? '/api/graph-sim' : '/api/graph-openalex';
+    const body = ctx.mode === ORACLE_SIM
+      ? {
+          dataset: ctx.params.dataset,
+          query_node: pi(ctx.params.queryNode, 0),
+          nodes: nodes.map(n => pi(n, NaN)).filter(Number.isFinite),
+        }
+      : {
+          query_node: ctx.params.queryNode,
+          max_in_edges: pi(ctx.params.maxInEdges, 0),
+          nodes: nodes.map(n => String(n)),
+        };
+    if (!body.nodes.length) return;
+
+    const seq = ++graphRequestSeqRef.current;
+    if (incumbentGraphAbortRef.current) incumbentGraphAbortRef.current.abort();
+    const controller = new AbortController();
+    incumbentGraphAbortRef.current = controller;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const current = runContextRef.current;
+      if (
+        controller.signal.aborted ||
+        seq !== graphRequestSeqRef.current ||
+        !current ||
+        current.runId !== runId ||
+        current.finalGraphReceived ||
+        current.lastIncumbentSignature !== signature
+      ) return;
+      if (data?.meta) setMeta(data.meta);
+      if (data?.graph) applyGraphData(data.graph);
+    } catch (err) {
+      if (err.name !== 'AbortError') console.warn('Failed to build incumbent graph', err);
+    } finally {
+      if (incumbentGraphAbortRef.current === controller) {
+        incumbentGraphAbortRef.current = null;
+      }
+    }
+  }, [applyGraphData]);
+
+  const scheduleIncumbentGraph = useCallback((inc) => {
+    const ctx = runContextRef.current;
+    if (!ctx || ctx.finalGraphReceived) return;
+    const nodes = Array.isArray(inc?.nodes) ? inc.nodes : [];
+    if (!nodes.length) return;
+    const signature = nodeSignature(nodes);
+    if (!signature || signature === ctx.lastIncumbentSignature) return;
+    ctx.lastIncumbentSignature = signature;
+
+    if (incumbentTimerRef.current) clearTimeout(incumbentTimerRef.current);
+    const runId = ctx.runId;
+    const nodeList = nodes.map(n => String(n));
+    incumbentTimerRef.current = setTimeout(() => {
+      incumbentTimerRef.current = null;
+      fetchGraphForNodes(nodeList, signature, runId);
+    }, INCUMBENT_GRAPH_DEBOUNCE_MS);
+  }, [fetchGraphForNodes]);
 
   const processPacket = useCallback((line) => {
     if (!line.trim()) return;
@@ -24,13 +139,17 @@ export function useSubgraphExtractor(sessionId) {
         });
         setTelemetry(prev => parseLogLine(prev, packet.content));
       } else if (packet.type === 'result') {
-        setGraphData(packet.content);
+        const ctx = runContextRef.current;
+        if (ctx) ctx.finalGraphReceived = true;
+        clearIncumbentGraphWork(false);
+        applyGraphData(packet.content);
       } else if (packet.type === 'meta') {
         setMeta(packet.content);
       } else if (packet.type === 'qualities') {
         setTelemetry(prev => ({ ...prev, qualities: packet.content }));
       } else if (packet.type === 'incumbent') {
         const inc = packet.content || {};
+        scheduleIncumbentGraph(inc);
         setTelemetry(prev => ({
           ...prev,
           lambda: typeof inc.lambda === 'number' ? inc.lambda : prev.lambda,
@@ -50,9 +169,21 @@ export function useSubgraphExtractor(sessionId) {
         setTelemetry(prev => ({ ...prev, status: 'error', finishedAt: Date.now() }));
       }
     } catch (e) { console.error('Parse error:', e); }
-  }, []);
+  }, [applyGraphData, clearIncumbentGraphWork, scheduleIncumbentGraph]);
 
   const extractSubgraph = async (mode, params) => {
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    clearIncumbentGraphWork(true);
+    graphRequestSeqRef.current += 1;
+    latestGraphSignatureRef.current = '';
+    runContextRef.current = {
+      runId,
+      mode,
+      params: { ...params },
+      finalGraphReceived: false,
+      lastIncumbentSignature: '',
+    };
+
     setLoading(true);
     setError(null);
     setLogs([]);
@@ -63,9 +194,6 @@ export function useSubgraphExtractor(sessionId) {
     // back-to-back Extract clicks would leave the old fetch streaming into state.
     if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
-
-    const pi = (v, def) => { const n = parseInt(v);   return isNaN(n) ? def : n; };
-    const pf = (v, def) => { const n = parseFloat(v); return isNaN(n) ? def : n; };
 
     const sharedSolver = {
       variant:            params.variant || VARIANT_BP,
@@ -144,6 +272,7 @@ export function useSubgraphExtractor(sessionId) {
     try { await fetch(`${API_BASE_URL}/api/stop?session_id=${sessionId}`, { method: 'POST' }); }
     catch (e) { console.error('Failed to send stop signal', e); }
     if (abortControllerRef.current) abortControllerRef.current.abort();
+    clearIncumbentGraphWork(true);
     setLoading(false);
   };
 
@@ -152,8 +281,9 @@ export function useSubgraphExtractor(sessionId) {
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) abortControllerRef.current.abort();
+      clearIncumbentGraphWork(true);
     };
-  }, []);
+  }, [clearIncumbentGraphWork]);
 
   return { graphData, logs, telemetry, meta, loading, error, extractSubgraph, stopExtraction };
 }

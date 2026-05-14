@@ -6,13 +6,15 @@ import asyncio
 import tempfile
 import httpx
 import random
+import hashlib
 import logging
 import urllib.parse
+from collections import OrderedDict
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Tuple, List, Set
+from typing import Optional, Dict, Tuple, List, Set, Any
 
 from pymincut.pygraph import PyGraph
 
@@ -289,11 +291,81 @@ class SimSolverRequest(SolverParams):
     ghost_max_per_node: Optional[int] = 5
 
 
+class SimGraphRequest(BaseModel):
+    dataset: str = Field(..., pattern=_DATASET_NAME_PATTERN)
+    nodes: List[int] = Field(default_factory=list)
+    query_node: Optional[int] = Field(default=None, ge=0)
+    ghost_sample_frac: Optional[float] = 0.1
+    ghost_max_per_node: Optional[int] = 5
+
+
+class OpenAlexGraphRequest(BaseModel):
+    nodes: List[str] = Field(default_factory=list)
+    query_node: Optional[str] = Field(default=None, pattern=r"^[a-zA-Z0-9]+$")
+    max_in_edges: Optional[int] = 0
+
+
 # Cache: dataset -> (nodes_df_dict, undirected adjacency, directed out-adjacency, num_classes, total undirected volume)
 _sim_cache: Dict[
     str,
     Tuple[Dict[int, dict], Dict[int, List[int]], Dict[int, List[int]], int, int],
 ] = {}
+
+_OPENALEX_METADATA_CACHE_LIMIT = 4096
+_GRAPH_CACHE_LIMIT = 512
+
+_openalex_metadata_cache: "OrderedDict[Tuple[str, int], dict]" = OrderedDict()
+_openalex_metadata_inflight: Dict[Tuple[str, int], asyncio.Task] = {}
+_openalex_metadata_lock = asyncio.Lock()
+_graph_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _cache_get(cache: OrderedDict, key):
+    value = cache.get(key)
+    if value is not None:
+        cache.move_to_end(key)
+    return value
+
+
+def _cache_put(cache: OrderedDict, key, value, limit: int):
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > limit:
+        cache.popitem(last=False)
+
+
+def _ordered_unique(items, convert):
+    out = []
+    seen = set()
+    for item in items or []:
+        try:
+            value = convert(item)
+        except (TypeError, ValueError):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _graph_cache_key(kind: str, core_ids: List[Any], **params) -> str:
+    return json.dumps(
+        {"kind": kind, "nodes": [str(v) for v in core_ids], "params": params},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _stable_sample(items, sample_size: int, *parts):
+    ordered = sorted(items, key=lambda v: str(v))
+    if sample_size <= 0:
+        return []
+    if sample_size >= len(ordered):
+        return ordered
+    seed_src = "|".join(str(p) for p in parts)
+    seed = int(hashlib.sha256(seed_src.encode("utf-8")).hexdigest()[:16], 16)
+    return random.Random(seed).sample(ordered, sample_size)
 
 
 def _load_sim_dataset(dataset: str):
@@ -476,6 +548,280 @@ def _compute_sim_qualities(
     }
 
 
+def _build_sim_graph_payload(
+    dataset: str,
+    core_ids: List[int],
+    query_node: Optional[int],
+    ghost_sample_frac: Optional[float],
+    ghost_max_per_node: Optional[int],
+) -> dict:
+    if dataset not in SIM_DATASETS:
+        raise HTTPException(status_code=400, detail=f"Unknown dataset: {dataset}")
+
+    core_ids = _ordered_unique(core_ids, int)
+    if not core_ids:
+        raise HTTPException(status_code=400, detail="No nodes supplied.")
+
+    frac = max(0.0, min(1.0, ghost_sample_frac or 0.0))
+    cap = max(0, ghost_max_per_node or 0)
+    cache_key = _graph_cache_key(
+        "sim",
+        core_ids,
+        dataset=dataset,
+        ghost_sample_frac=round(frac, 6),
+        ghost_max_per_node=cap,
+        query_node=query_node,
+    )
+    cached = _cache_get(_graph_cache, cache_key)
+    if cached is not None:
+        return cached
+
+    nodes_meta, adj, adj_out, num_classes, vol_full = _load_sim_dataset(dataset)
+    missing = [nid for nid in core_ids if nid not in nodes_meta]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Node {missing[0]} not in dataset {dataset}",
+        )
+
+    qualities = _compute_sim_qualities(core_ids, adj, adj_out, vol_full)
+    core_set = set(core_ids)
+    nodes_out = []
+    for idx, nid in enumerate(core_ids):
+        meta = nodes_meta.get(nid, {"label": -1, "split": "unlabeled"})
+        deg = len(adj.get(nid, []))
+        nodes_out.append(
+            {
+                "id": str(nid),
+                "rawId": nid,
+                "displayNum": idx + 1,
+                "label": meta["label"],
+                "split": meta["split"],
+                "degree": deg,
+                "type": "core",
+                "group": 1,
+            }
+        )
+
+    edges_out = []
+    seen_edges = set()
+    for nid in core_ids:
+        for nb in adj_out.get(nid, []):
+            if nb in core_set and nb != nid:
+                key = (str(nid), str(nb), "core")
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                edges_out.append({"source": str(nid), "target": str(nb), "type": "core"})
+
+    ghost_set = set()
+    for nid in core_ids:
+        neighbors_outside = [n for n in adj.get(nid, []) if n not in core_set]
+        if not neighbors_outside or frac <= 0 or cap <= 0:
+            continue
+        sample_size = min(cap, max(1, int(len(neighbors_outside) * frac)))
+        sample = _stable_sample(neighbors_outside, sample_size, "sim", dataset, nid)
+        out_set_nid = set(adj_out.get(nid, []))
+        for nb in sample:
+            g_id = f"ghost_{nb}"
+            if g_id not in ghost_set:
+                gm = nodes_meta.get(nb, {"label": -1, "split": "unlabeled"})
+                nodes_out.append(
+                    {
+                        "id": g_id,
+                        "rawId": nb,
+                        "label": gm["label"],
+                        "split": gm["split"],
+                        "type": "ghost",
+                        "group": 2,
+                    }
+                )
+                ghost_set.add(g_id)
+
+            edge = (
+                (str(nid), g_id, "ghost")
+                if nb in out_set_nid
+                else (g_id, str(nid), "ghost")
+            )
+            if edge in seen_edges:
+                continue
+            seen_edges.add(edge)
+            edges_out.append({"source": edge[0], "target": edge[1], "type": "ghost"})
+
+    query_meta = nodes_meta.get(query_node) if query_node is not None else None
+    payload = {
+        "graph": {"nodes": nodes_out, "edges": edges_out},
+        "qualities": qualities,
+        "meta": {
+            "dataset": dataset,
+            "numClasses": num_classes,
+            "queryNode": query_node,
+            "queryLabel": query_meta["label"] if query_meta else None,
+            "querySplit": query_meta["split"] if query_meta else None,
+        },
+    }
+    _cache_put(_graph_cache, cache_key, payload, _GRAPH_CACHE_LIMIT)
+    return payload
+
+
+def _clean_openalex_id(node_id: str) -> str:
+    return str(node_id or "").strip().split("/")[-1]
+
+
+async def fetch_paper_metadata_cached(
+    client: httpx.AsyncClient,
+    node_id: str,
+    semaphore: asyncio.Semaphore,
+    max_in_edges: int,
+) -> dict:
+    clean_id = _clean_openalex_id(node_id)
+    cache_key = (clean_id, max(0, int(max_in_edges or 0)))
+
+    async with _openalex_metadata_lock:
+        cached = _cache_get(_openalex_metadata_cache, cache_key)
+        if cached is not None:
+            return cached
+        task = _openalex_metadata_inflight.get(cache_key)
+        if task is not None and task.done():
+            if not task.cancelled() and task.exception() is None:
+                data = task.result()
+                _cache_put(
+                    _openalex_metadata_cache,
+                    cache_key,
+                    data,
+                    _OPENALEX_METADATA_CACHE_LIMIT,
+                )
+                _openalex_metadata_inflight.pop(cache_key, None)
+                return data
+            _openalex_metadata_inflight.pop(cache_key, None)
+            task = None
+        if task is None:
+            task = asyncio.create_task(
+                fetch_paper_metadata(client, clean_id, semaphore, cache_key[1])
+            )
+            _openalex_metadata_inflight[cache_key] = task
+
+    try:
+        data = await task
+    except asyncio.CancelledError:
+        async with _openalex_metadata_lock:
+            if _openalex_metadata_inflight.get(cache_key) is task:
+                _openalex_metadata_inflight.pop(cache_key, None)
+        raise
+    except Exception:
+        async with _openalex_metadata_lock:
+            if _openalex_metadata_inflight.get(cache_key) is task:
+                _openalex_metadata_inflight.pop(cache_key, None)
+        raise
+
+    async with _openalex_metadata_lock:
+        if _openalex_metadata_inflight.get(cache_key) is task:
+            _openalex_metadata_inflight.pop(cache_key, None)
+        cached = _cache_get(_openalex_metadata_cache, cache_key)
+        if cached is not None:
+            return cached
+        _cache_put(_openalex_metadata_cache, cache_key, data, _OPENALEX_METADATA_CACHE_LIMIT)
+    return data
+
+
+async def _build_openalex_graph_payload(
+    core_ids: List[str],
+    max_in_edges: Optional[int],
+) -> dict:
+    core_ids = _ordered_unique(core_ids, _clean_openalex_id)
+    core_ids = [nid for nid in core_ids if nid]
+    if not core_ids:
+        raise HTTPException(status_code=400, detail="No nodes supplied.")
+
+    max_in = max(0, int(max_in_edges or 0))
+    cache_key = _graph_cache_key("openalex", core_ids, max_in_edges=max_in)
+    cached = _cache_get(_graph_cache, cache_key)
+    if cached is not None:
+        return cached
+
+    semaphore = asyncio.Semaphore(15)
+    async with httpx.AsyncClient(headers={"User-Agent": "KDensestGUI"}) as client:
+        core_metadata = await asyncio.gather(
+            *[
+                fetch_paper_metadata_cached(client, nid, semaphore, max_in)
+                for nid in core_ids
+            ]
+        )
+
+    qualities = _compute_openalex_qualities(core_ids, core_metadata)
+
+    nodes, edges = [], []
+    core_id_set = set(core_ids)
+    ghost_set = set()
+    seen_edges = set()
+
+    for idx, data in enumerate(core_metadata):
+        node_id = data["id"]
+        nodes.append(
+            {
+                "id": node_id,
+                "displayNum": idx + 1,
+                "doi": data["doi"],
+                "citations": data["citations"],
+                "abstract": data["abstract"],
+                "title": data["title"],
+                "author": data["author"],
+                "year": data["year"],
+                "journal": data["journal"],
+                "type": "core",
+                "group": 1,
+            }
+        )
+
+        out_refs = [
+            r
+            for r in data["references"]
+            if r not in core_id_set and r != node_id
+        ]
+        out_sample_size = max(1, int(len(out_refs) * 0.10)) if out_refs else 0
+        out_sample = _stable_sample(out_refs, out_sample_size, "openalex", node_id, "out")
+        for ref_id in out_sample:
+            g_id = f"ghost_{ref_id}"
+            if g_id not in ghost_set:
+                nodes.append({"id": g_id, "type": "ghost", "group": 2})
+                ghost_set.add(g_id)
+            edge = (node_id, g_id, "ghost")
+            if edge not in seen_edges:
+                seen_edges.add(edge)
+                edges.append({"source": edge[0], "target": edge[1], "type": "ghost"})
+
+        in_refs = [
+            r
+            for r in data["cited_by"]
+            if r not in core_id_set and r != node_id
+        ]
+        in_sample_size = max(1, int(len(in_refs) * 0.10)) if in_refs else 0
+        in_sample = _stable_sample(in_refs, in_sample_size, "openalex", node_id, "in")
+        for ref_id in in_sample:
+            g_id = f"ghost_{ref_id}"
+            if g_id not in ghost_set:
+                nodes.append({"id": g_id, "type": "ghost", "group": 2})
+                ghost_set.add(g_id)
+            edge = (g_id, node_id, "ghost")
+            if edge not in seen_edges:
+                seen_edges.add(edge)
+                edges.append({"source": edge[0], "target": edge[1], "type": "ghost"})
+
+        for ref_id in data["references"]:
+            if ref_id in core_id_set and ref_id != node_id:
+                edge = (node_id, ref_id, "core")
+                if edge not in seen_edges:
+                    seen_edges.add(edge)
+                    edges.append({"source": edge[0], "target": edge[1], "type": "core"})
+
+    payload = {
+        "graph": {"nodes": nodes, "edges": edges},
+        "qualities": qualities,
+    }
+    _cache_put(_graph_cache, cache_key, payload, _GRAPH_CACHE_LIMIT)
+    return payload
+
+
 @app.get("/api/datasets")
 def list_datasets():
     out = []
@@ -490,6 +836,22 @@ def list_datasets():
             except Exception as e:
                 logger.warning(f"Failed loading {d}: {e}")
     return {"datasets": out}
+
+
+@app.post("/api/graph-sim")
+def build_sim_graph(req: SimGraphRequest):
+    return _build_sim_graph_payload(
+        req.dataset,
+        req.nodes,
+        req.query_node,
+        req.ghost_sample_frac,
+        req.ghost_max_per_node,
+    )
+
+
+@app.post("/api/graph-openalex")
+async def build_openalex_graph(req: OpenAlexGraphRequest):
+    return await _build_openalex_graph_payload(req.nodes, req.max_in_edges)
 
 
 @app.post("/api/extract-sim")
@@ -564,94 +926,16 @@ async def extract_sim(req: SimSolverRequest):
                 yield json.dumps({"type": "error", "content": "Empty subgraph."}) + "\n"
                 return
 
-            qualities = _compute_sim_qualities(core_ids, adj, adj_out, vol_full)
-            yield json.dumps({"type": "qualities", "content": qualities}) + "\n"
-
-            core_set = set(core_ids)
-            nodes_out = []
-            for idx, nid in enumerate(core_ids):
-                meta = nodes_meta.get(nid, {"label": -1, "split": "unlabeled"})
-                deg = len(adj.get(nid, []))
-                nodes_out.append(
-                    {
-                        "id": str(nid),
-                        "rawId": nid,
-                        "displayNum": idx + 1,
-                        "label": meta["label"],
-                        "split": meta["split"],
-                        "degree": deg,
-                        "type": "core",
-                        "group": 1,
-                    }
-                )
-
-            edges_out = []
-            seen_directed = set()
-            for nid in core_ids:
-                for nb in adj_out.get(nid, []):
-                    if nb in core_set and nb != nid:
-                        key = (nid, nb)
-                        if key in seen_directed:
-                            continue
-                        seen_directed.add(key)
-                        edges_out.append(
-                            {"source": str(nid), "target": str(nb), "type": "core"}
-                        )
-
-            # Ghost frontier sampling. Direction preserved from the original
-            # directed graph: if nid -> nb, ghost is target; if nb -> nid,
-            # ghost is source.
-            ghost_set = set()
-            frac = max(0.0, min(1.0, req.ghost_sample_frac or 0.0))
-            cap = max(0, req.ghost_max_per_node or 0)
-            for nid in core_ids:
-                neighbors_outside = [n for n in adj.get(nid, []) if n not in core_set]
-                if not neighbors_outside or frac <= 0 or cap <= 0:
-                    continue
-                sample_size = min(cap, max(1, int(len(neighbors_outside) * frac)))
-                sample = random.sample(
-                    neighbors_outside, min(sample_size, len(neighbors_outside))
-                )
-                out_set_nid = set(adj_out.get(nid, []))
-                for nb in sample:
-                    g_id = f"ghost_{nb}"
-                    if g_id not in ghost_set:
-                        gm = nodes_meta.get(nb, {"label": -1, "split": "unlabeled"})
-                        nodes_out.append(
-                            {
-                                "id": g_id,
-                                "rawId": nb,
-                                "label": gm["label"],
-                                "split": gm["split"],
-                                "type": "ghost",
-                                "group": 2,
-                            }
-                        )
-                        ghost_set.add(g_id)
-                    if nb in out_set_nid:
-                        edges_out.append(
-                            {"source": str(nid), "target": g_id, "type": "ghost"}
-                        )
-                    else:
-                        edges_out.append(
-                            {"source": g_id, "target": str(nid), "type": "ghost"}
-                        )
-
-            yield json.dumps(
-                {
-                    "type": "meta",
-                    "content": {
-                        "dataset": req.dataset,
-                        "numClasses": num_classes,
-                        "queryNode": req.query_node,
-                        "queryLabel": nodes_meta[req.query_node]["label"],
-                        "querySplit": nodes_meta[req.query_node]["split"],
-                    },
-                }
-            ) + "\n"
-            yield json.dumps(
-                {"type": "result", "content": {"nodes": nodes_out, "edges": edges_out}}
-            ) + "\n"
+            built = _build_sim_graph_payload(
+                req.dataset,
+                core_ids,
+                req.query_node,
+                req.ghost_sample_frac,
+                req.ghost_max_per_node,
+            )
+            yield json.dumps({"type": "qualities", "content": built["qualities"]}) + "\n"
+            yield json.dumps({"type": "meta", "content": built["meta"]}) + "\n"
+            yield json.dumps({"type": "result", "content": built["graph"]}) + "\n"
             yield json.dumps({"type": "log", "content": "Graph built!"}) + "\n"
 
         finally:
@@ -723,89 +1007,18 @@ async def extract_subgraph(req: SolverRequest):
                 yield json.dumps({"type": "error", "content": "Empty subgraph."}) + "\n"
                 return
 
-            semaphore = asyncio.Semaphore(15)
-            async with httpx.AsyncClient(
-                headers={"User-Agent": "KDensestGUI"}
-            ) as client:
-                core_metadata = await asyncio.gather(
-                    *[
-                        fetch_paper_metadata(client, nid, semaphore, req.max_in_edges)
-                        for nid in core_ids
-                    ]
-                )
-
             try:
-                qualities = _compute_openalex_qualities(core_ids, core_metadata)
+                built = await _build_openalex_graph_payload(core_ids, req.max_in_edges)
                 yield json.dumps(
-                    {"type": "qualities", "content": qualities}
+                    {"type": "qualities", "content": built["qualities"]}
                 ) + "\n"
             except Exception as e:
-                logger.warning(f"openalex qualities computation failed: {e}")
-
-            nodes, edges = [], []
-            core_id_set = set(core_ids)
-            ghost_set = set()
-
-            for idx, data in enumerate(core_metadata):
-                nodes.append(
-                    {
-                        "id": data["id"],
-                        "displayNum": idx + 1,
-                        "doi": data["doi"],
-                        "citations": data["citations"],
-                        "abstract": data["abstract"],
-                        "title": data["title"],
-                        "author": data["author"],
-                        "year": data["year"],
-                        "journal": data["journal"],
-                        "type": "core",
-                        "group": 1,
-                    }
-                )
-
-                # OUTGOING frontier
-                out_refs = [
-                    r
-                    for r in data["references"]
-                    if r not in core_id_set and r != data["id"]
-                ]
-                out_sample_size = max(1, int(len(out_refs) * 0.10)) if out_refs else 0
-                out_sample = random.sample(out_refs, out_sample_size)
-                for ref_id in out_sample:
-                    g_id = f"ghost_{ref_id}"
-                    if g_id not in ghost_set:
-                        nodes.append({"id": g_id, "type": "ghost", "group": 2})
-                        ghost_set.add(g_id)
-                    edges.append(
-                        {"source": data["id"], "target": g_id, "type": "ghost"}
-                    )
-
-                # INCOMING frontier
-                in_refs = [
-                    r
-                    for r in data["cited_by"]
-                    if r not in core_id_set and r != data["id"]
-                ]
-                in_sample_size = max(1, int(len(in_refs) * 0.10)) if in_refs else 0
-                in_sample = in_refs[:in_sample_size]
-                for ref_id in in_sample:
-                    g_id = f"ghost_{ref_id}"
-                    if g_id not in ghost_set:
-                        nodes.append({"id": g_id, "type": "ghost", "group": 2})
-                        ghost_set.add(g_id)
-                    edges.append(
-                        {"source": g_id, "target": data["id"], "type": "ghost"}
-                    )
-
-                # CORE edges
-                for ref_id in data["references"]:
-                    if ref_id in core_id_set and ref_id != data["id"]:
-                        edges.append(
-                            {"source": data["id"], "target": ref_id, "type": "core"}
-                        )
+                logger.warning(f"openalex graph construction failed: {e}")
+                yield json.dumps({"type": "error", "content": str(e)}) + "\n"
+                return
 
             yield json.dumps(
-                {"type": "result", "content": {"nodes": nodes, "edges": edges}}
+                {"type": "result", "content": built["graph"]}
             ) + "\n"
             yield json.dumps({"type": "log", "content": "Graph built!"}) + "\n"
 
