@@ -48,6 +48,16 @@ struct DinkelbachIter
     double optimality_gap;
 };
 
+struct IncumbentRecord
+{
+    int bb_node;
+    double lambda;
+    double param_obj;
+    double density;
+    int size;
+    std::vector<int> nodes;
+};
+
 struct SolverStats
 {
     int total_bb_nodes = 0;
@@ -61,6 +71,7 @@ struct SolverStats
     int final_open_nodes = 0;
     std::string final_gap_status = "not_run";
     std::vector<DinkelbachIter> lambda_trajectory;
+    std::vector<IncumbentRecord> incumbent_trajectory;
 };
 
 class IDMapper

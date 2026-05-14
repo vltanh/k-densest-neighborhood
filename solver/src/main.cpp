@@ -34,6 +34,7 @@ void print_usage(const char *prog_name)
          << "  --output <out.csv>        Path to save the resulting subgraph node IDs\n"
          << "  --emit-json               Emit a structured JSON payload (stdout JSON_RESULT: prefix, or --json-output path)\n"
          << "  --json-output <path>      Write JSON to <path> instead of stdout (implies --emit-json)\n\n"
+         << "  --stream-incumbents       Emit structured INCUMBENT_JSON lines as BP improves incumbents\n"
          << "  --compute-qualities       Compute final density/internal-edge metrics (may issue extra oracle queries)\n\n"
          << "Solver Hyperparameters (Defaults shown):\n"
          << "  --time-limit <float>      Max Branch-and-Bound time in seconds; -1 disables (default: -1)\n"
@@ -121,6 +122,8 @@ int main(int argc, char *argv[])
     bool bfs_depth_provided = false;
     bool skip_materialize = false;
     bool skip_materialize_provided = false;
+    bool stream_incumbents = false;
+    bool stream_incumbents_provided = false;
 
     // ---------------------------------------------------------
     // 2. Command Line Argument Parsing
@@ -177,6 +180,13 @@ int main(int argc, char *argv[])
             {
                 skip_materialize = true;
                 skip_materialize_provided = true;
+                continue;
+            }
+
+            if (arg == "--stream-incumbents")
+            {
+                stream_incumbents = true;
+                stream_incumbents_provided = true;
                 continue;
             }
 
@@ -313,18 +323,31 @@ int main(int argc, char *argv[])
         cerr << "Error: --no-materialize is only valid for --bp.\n";
         return 1;
     }
+    if (!run_bp && solver_count != 0 && stream_incumbents_provided)
+    {
+        cerr << "Error: --stream-incumbents is only valid for --bp.\n";
+        return 1;
+    }
 
     // ---------------------------------------------------------
     // 4. Engine Execution
     // ---------------------------------------------------------
     try
     {
-        GRBEnv env = GRBEnv(true);
-        env.set("OutputFlag", "0");
-        env.set("Method", "1");
-        env.start();
-        if (gurobi_seed >= 0)
-            env.set(GRB_IntParam_Seed, gurobi_seed);
+        std::unique_ptr<GRBEnv> env_ptr;
+        auto gurobi_env = [&]() -> GRBEnv &
+        {
+            if (!env_ptr)
+            {
+                env_ptr = std::make_unique<GRBEnv>(true);
+                env_ptr->set("OutputFlag", "0");
+                env_ptr->set("Method", "1");
+                env_ptr->start();
+                if (gurobi_seed >= 0)
+                    env_ptr->set(GRB_IntParam_Seed, gurobi_seed);
+            }
+            return *env_ptr;
+        };
 
         unique_ptr<IGraphOracle> oracle_ptr;
 
@@ -381,7 +404,23 @@ int main(int argc, char *argv[])
                                 {"bb_best_bound", finite_json(it.bb_best_bound)},
                                 {"optimality_gap", finite_json(it.optimality_gap)}});
             }
+            json incumbents = json::array();
+            for (const auto &inc : solver.stats.incumbent_trajectory)
+            {
+                json node_ids = json::array();
+                for (int node : inc.nodes)
+                    node_ids.push_back(oracle_ptr->mapper.get_str(node));
+                incumbents.push_back({
+                    {"bb_node", inc.bb_node},
+                    {"lambda", inc.lambda},
+                    {"param_obj", finite_json(inc.param_obj)},
+                    {"density", finite_json(inc.density)},
+                    {"size", inc.size},
+                    {"nodes", node_ids},
+                });
+            }
             bp_block["lambda_trajectory"] = traj;
+            bp_block["incumbent_trajectory"] = incumbents;
             bp_block["stats"] = {
                 {"total_bb_nodes", solver.stats.total_bb_nodes},
                 {"total_lp_solves", solver.stats.total_lp_solves},
@@ -417,10 +456,11 @@ int main(int argc, char *argv[])
             cout << "==================================================" << endl;
 
             auto t_start = chrono::high_resolution_clock::now();
+            GRBEnv &env = gurobi_env();
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
                                             dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
-                                            kappa, hard_time_limit, skip_materialize);
+                                            kappa, hard_time_limit, skip_materialize, stream_incumbents);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
@@ -474,10 +514,11 @@ int main(int argc, char *argv[])
         else
         {
             auto t_start = chrono::high_resolution_clock::now();
+            GRBEnv &env = gurobi_env();
             FullBranchAndPriceSolver solver(*oracle_ptr, q_node_int, k, env,
                                             tol, node_limit, time_limit, gap_tol,
                                             dinkelbach_iter, cg_batch_frac, cg_min_batch, cg_max_batch,
-                                            kappa, hard_time_limit, skip_materialize);
+                                            kappa, hard_time_limit, skip_materialize, stream_incumbents);
 
             auto bp_result = solver.solve();
             best_nodes.assign(bp_result.first.begin(), bp_result.first.end());
@@ -604,6 +645,7 @@ int main(int argc, char *argv[])
             {
                 j["lambda_final"] = lambda_final;
                 j["lambda_trajectory"] = bp_block.value("lambda_trajectory", json::array());
+                j["incumbent_trajectory"] = bp_block.value("incumbent_trajectory", json::array());
                 j["kappa_verified"] = bp_block.value("kappa_verified", json(nullptr));
                 j["kappa_verify_failed"] = bp_block.value("kappa_verify_failed", json(nullptr));
                 j["hard_cap_hit"] = bp_block.value("hard_cap_hit", false);
@@ -618,6 +660,7 @@ int main(int argc, char *argv[])
             {
                 j["lambda_final"] = nullptr;
                 j["lambda_trajectory"] = json::array();
+                j["incumbent_trajectory"] = json::array();
                 j["kappa_verified"] = nullptr;
                 j["kappa_verify_failed"] = nullptr;
                 j["hard_cap_hit"] = false;
@@ -647,6 +690,7 @@ int main(int argc, char *argv[])
                 {"cg_min_batch", cg_min_batch},
                 {"cg_max_batch", cg_max_batch},
                 {"tol", tol},
+                {"stream_incumbents", stream_incumbents},
                 {"gurobi_seed", gurobi_seed}};
             j["wall_time_s"] = wall_time_s;
 
@@ -677,10 +721,12 @@ int main(int argc, char *argv[])
     {
         cerr << "[" << get_timestamp() << "] Gurobi Error code = " << e.getErrorCode() << "\n"
              << e.getMessage() << endl;
+        return 2;
     }
     catch (const std::exception &e)
     {
         cerr << "[" << get_timestamp() << "] Exception: " << e.what() << endl;
+        return 3;
     }
 
     return 0;

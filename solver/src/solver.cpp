@@ -8,11 +8,18 @@
 #include <limits>
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/push_relabel_max_flow.hpp>
+#include <nlohmann/json.hpp>
 
 using namespace std;
+using json = nlohmann::json;
 
 namespace
 {
+json finite_json(double value)
+{
+    return std::isfinite(value) ? json(value) : json(nullptr);
+}
+
 double relative_gap(double best_bound, double incumbent, double tol)
 {
     if (!std::isfinite(best_bound))
@@ -28,12 +35,13 @@ FullBranchAndPriceSolver::FullBranchAndPriceSolver(IGraphOracle &oracle, int q, 
                                                    double bb_gap_tol, int dinkelbach_max_iter,
                                                    double cg_batch_fraction, int cg_min_batch, int cg_max_batch,
                                                    int kappa, double bb_hard_time_limit,
-                                                   bool skip_materialize)
+                                                   bool skip_materialize, bool stream_incumbents)
     : oracle(oracle), q(q), k(k), env(env), tol(tol), bb_node_limit(bb_node_limit),
       bb_time_limit(bb_time_limit), bb_hard_time_limit(bb_hard_time_limit),
       bb_gap_tol(bb_gap_tol), dinkelbach_max_iter(dinkelbach_max_iter),
       cg_batch_fraction(cg_batch_fraction), cg_min_batch(cg_min_batch), cg_max_batch(cg_max_batch),
-      kappa(std::max(0, kappa)), skip_materialize(skip_materialize), rmp(nullptr)
+      kappa(std::max(0, kappa)), stream_incumbents(stream_incumbents),
+      skip_materialize(skip_materialize), rmp(nullptr)
 {
     _initialize_active_set();
     _init_global_model();
@@ -495,6 +503,37 @@ bool FullBranchAndPriceSolver::_verify_kappa_connectivity(const std::unordered_s
             return false;
     }
     return true;
+}
+
+void FullBranchAndPriceSolver::_record_incumbent(const unordered_set<int> &sol_nodes, double param_obj, double lambda_val)
+{
+    vector<int> nodes(sol_nodes.begin(), sol_nodes.end());
+    sort(nodes.begin(), nodes.end());
+    double density = _density(sol_nodes);
+    stats.incumbent_trajectory.push_back({
+        stats.total_bb_nodes,
+        lambda_val,
+        param_obj,
+        density,
+        (int)nodes.size(),
+        nodes,
+    });
+
+    if (stream_incumbents)
+    {
+        json node_ids = json::array();
+        for (int node : nodes)
+            node_ids.push_back(oracle.mapper.get_str(node));
+        json payload = {
+            {"bb_node", stats.total_bb_nodes},
+            {"lambda", finite_json(lambda_val)},
+            {"param_obj", finite_json(param_obj)},
+            {"density", finite_json(density)},
+            {"size", (int)nodes.size()},
+            {"nodes", node_ids},
+        };
+        cout << "INCUMBENT_JSON:" << payload.dump() << endl;
+    }
 }
 
 // ── Dynamic Graph Expansion ───────────────────────────────────────────────────
@@ -1622,6 +1661,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                     {
                         best_int_obj = int_obj;
                         best_int_sol = std::move(sol_nodes);
+                        _record_incumbent(best_int_sol, int_obj, lambda_val);
                         t_start_bb = chrono::high_resolution_clock::now();
                         net_start_bb = oracle.cumulative_network_time;
                     }
@@ -1803,6 +1843,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::_branch_and_price(dou
                 {
                     best_int_obj = obj;
                     best_int_sol = sol_nodes;
+                    _record_incumbent(best_int_sol, obj, lambda_val);
                     cout << "[" << get_timestamp() << "]     > Incumbent updated at Node " << stats.total_bb_nodes
                          << " | Obj: " << fixed << setprecision(4) << obj
                          << " | Size: " << sol_nodes.size() << endl;
@@ -1855,14 +1896,19 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
     if (kappa > 0 && !_verify_kappa_connectivity(best_sol))
         best_sol = std::move(pre_prune_seed);
 
-    bool best_sol_feasible = (kappa <= 0) || _verify_kappa_connectivity(best_sol);
+    bool best_sol_feasible = best_sol.size() >= (size_t)k &&
+                             ((kappa <= 0) || _verify_kappa_connectivity(best_sol));
     double lambda_val = best_sol_feasible ? _density(best_sol) : 0.0;
 
     cout << fixed << setprecision(6);
     cout << "[" << get_timestamp() << "] Init Active Set | Size: " << best_sol.size() << " | Density: " << lambda_val << endl;
-    if (kappa > 0 && !best_sol_feasible)
+    if (!best_sol_feasible)
     {
-        cout << "[" << get_timestamp() << "]   Initial seed is not kappa-feasible; starting Dinkelbach at lambda=0." << endl;
+        cout << "[" << get_timestamp() << "]   Initial seed is not feasible; starting Dinkelbach at lambda=0." << endl;
+    }
+    else if (!best_sol.empty())
+    {
+        _record_incumbent(best_sol, _parametric_obj(best_sol, lambda_val), lambda_val);
     }
     cout << "--------------------------------------------------" << endl;
 
@@ -1899,9 +1945,9 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         if (sol.empty() || param_obj <= tol)
         {
             cout << "[" << get_timestamp() << "]   Status            : Converged (No improvement found)" << endl;
-            if (!best_sol_feasible && kappa > 0)
+            if (!best_sol_feasible)
             {
-                cout << "[" << get_timestamp() << "]   Status            : No kappa-feasible incumbent found." << endl;
+                cout << "[" << get_timestamp() << "]   Status            : No feasible incumbent found." << endl;
                 best_sol.clear();
                 lambda_val = 0.0;
             }
@@ -1914,7 +1960,7 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
         if (new_density <= lambda_val + tol)
         {
             cout << "[" << get_timestamp() << "]   Status            : Converged (Density bound reached)" << endl;
-            if (!best_sol_feasible && kappa > 0)
+            if (!best_sol_feasible)
             {
                 best_sol = sol;
                 lambda_val = new_density;
@@ -1943,6 +1989,12 @@ pair<unordered_set<int>, double> FullBranchAndPriceSolver::solve()
 
     auto t_end_global = chrono::high_resolution_clock::now();
     stats.t_total = chrono::duration<double>(t_end_global - t_start_global).count();
+
+    if (best_sol.size() < (size_t)k)
+    {
+        best_sol.clear();
+        lambda_val = 0.0;
+    }
 
     if (kappa > 0)
     {

@@ -40,7 +40,7 @@ export const TELEMETRY_INITIAL = Object.freeze({
   lambda: null,           // current density estimate (live)
   bbNodes: 0,             // cumulative B&B nodes explored
   lpSolves: 0,            // cumulative LP solves
-  incumbent: null,        // { obj, size } — best integer solution so far
+  incumbent: null,        // { obj, density, size, nodes, bbNode, lambda } — best integer solution so far
   density: null,          // final density (post-solve)
   size: null,             // final / current solution size
   columnsGenerated: null, // final

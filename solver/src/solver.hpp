@@ -26,6 +26,7 @@ private:
     int cg_min_batch;
     int cg_max_batch;
     int kappa;
+    bool stream_incumbents;
     // When true, frontier-internal edges among unqueried F members stay
     // invisible to pricing. Trades correctness on F-internal cliques for zero
     // extra oracle hits per CG iter; intended for expensive oracles (OpenAlex).
@@ -106,6 +107,7 @@ private:
     std::pair<std::unordered_set<int>, double> _branch_and_price(double lambda_val);
     void _prune_discrete_solution(std::unordered_set<int> &sol_nodes, double lambda_val, bool maximize_density, bool enforce_connectivity = false);
     bool _verify_kappa_connectivity(const std::unordered_set<int> &sol_nodes);
+    void _record_incumbent(const std::unordered_set<int> &sol_nodes, double param_obj, double lambda_val);
 
 public:
     SolverStats stats;
@@ -120,7 +122,7 @@ public:
                              double bb_gap_tol = -1.0, int dinkelbach_max_iter = -1,
                              double cg_batch_fraction = 1.0, int cg_min_batch = 0, int cg_max_batch = 50,
                              int kappa = 0, double bb_hard_time_limit = -1.0,
-                             bool skip_materialize = false);
+                             bool skip_materialize = false, bool stream_incumbents = false);
     // Solve start wall clock. Public so the Dinkelbach outer loop and the BB
     // inner loop share the same origin when checking the hard wall-time cap.
     std::chrono::high_resolution_clock::time_point t_start_solve;

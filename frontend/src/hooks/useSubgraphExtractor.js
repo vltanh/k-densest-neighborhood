@@ -29,6 +29,22 @@ export function useSubgraphExtractor(sessionId) {
         setMeta(packet.content);
       } else if (packet.type === 'qualities') {
         setTelemetry(prev => ({ ...prev, qualities: packet.content }));
+      } else if (packet.type === 'incumbent') {
+        const inc = packet.content || {};
+        setTelemetry(prev => ({
+          ...prev,
+          lambda: typeof inc.lambda === 'number' ? inc.lambda : prev.lambda,
+          bbNodes: typeof inc.bb_node === 'number' ? Math.max(prev.bbNodes || 0, inc.bb_node) : prev.bbNodes,
+          size: typeof inc.size === 'number' ? inc.size : prev.size,
+          incumbent: {
+            obj: typeof inc.param_obj === 'number' ? inc.param_obj : null,
+            density: typeof inc.density === 'number' ? inc.density : null,
+            size: typeof inc.size === 'number' ? inc.size : null,
+            nodes: Array.isArray(inc.nodes) ? inc.nodes : [],
+            bbNode: typeof inc.bb_node === 'number' ? inc.bb_node : null,
+            lambda: typeof inc.lambda === 'number' ? inc.lambda : null,
+          },
+        }));
       } else if (packet.type === 'error') {
         setError(packet.content);
         setTelemetry(prev => ({ ...prev, status: 'error', finishedAt: Date.now() }));
@@ -67,6 +83,7 @@ export function useSubgraphExtractor(sessionId) {
       cg_max_batch:       pi(params.cgMaxBatch,      50),
       tol:                pf(params.tol,             0.000001),
       no_materialize:     !!params.noMaterialize,
+      stream_incumbents:  true,
     };
 
     let endpoint, body;

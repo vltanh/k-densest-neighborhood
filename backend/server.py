@@ -46,6 +46,7 @@ class SolverParams(BaseModel):
     cg_max_batch: Optional[int] = 50
     tol: Optional[float] = 1e-6
     no_materialize: Optional[bool] = False
+    stream_incumbents: Optional[bool] = True
 
 
 class SolverRequest(SolverParams):
@@ -93,6 +94,8 @@ def _variant_argv(req: "SolverParams") -> list:
         args += ["--k", str(req.k), "--kappa", str(req.kappa)]
         if req.no_materialize:
             args.append("--no-materialize")
+        if req.stream_incumbents:
+            args.append("--stream-incumbents")
     if variant == "avgdeg":
         if req.k > 0:
             args += ["--k", str(req.k)]
@@ -403,9 +406,10 @@ def _compute_openalex_qualities(core_ids: List[str], core_metadata: List[dict]) 
 
 async def _spawn_solver_and_stream(session_id: str, cmd: List[str]):
     """Spawn solver subprocess, register in active_processes, stream stdout
-    line by line as NDJSON {type:log} packets. Yields (None, line_ndjson) per
-    log line and finally (process, None) so the caller can await wait() and
-    inspect returncode."""
+    line by line as NDJSON packets. Structured incumbent lines are forwarded as
+    {type:incumbent}; ordinary output remains {type:log}. Yields (None,
+    line_ndjson) per solver line and finally (process, None) so the caller can
+    await wait() and inspect returncode."""
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -417,9 +421,15 @@ async def _spawn_solver_and_stream(session_id: str, cmd: List[str]):
         line = await process.stdout.readline()
         if not line:
             break
-        yield None, json.dumps(
-            {"type": "log", "content": line.decode("utf-8").rstrip()}
-        ) + "\n"
+        content = line.decode("utf-8").rstrip()
+        if content.startswith("INCUMBENT_JSON:"):
+            try:
+                payload = json.loads(content[len("INCUMBENT_JSON:") :])
+                yield None, json.dumps({"type": "incumbent", "content": payload}) + "\n"
+                continue
+            except json.JSONDecodeError:
+                pass
+        yield None, json.dumps({"type": "log", "content": content}) + "\n"
     yield process, None
 
 

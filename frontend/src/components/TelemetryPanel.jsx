@@ -81,6 +81,7 @@ export function DispatchView({ telemetry, loading }) {
 
   const elapsed = fmtElapsed(telemetry.startedAt, telemetry.finishedAt);
   const bestObjDisplay  = telemetry.incumbent ? fmtFloat(telemetry.incumbent.obj, 4) : null;
+  const bestDensDisplay = telemetry.incumbent ? fmtFloat(telemetry.incumbent.density, 4) : null;
   const bestSizeDisplay = telemetry.incumbent ? fmtInt(telemetry.incumbent.size) : null;
   const showFinalBlock =
     telemetry.density != null || telemetry.solverTime != null || telemetry.status === 'converged' ||
@@ -98,6 +99,7 @@ export function DispatchView({ telemetry, loading }) {
           <Stat label="Iter"      value={fmtInt(telemetry.iteration)} accent />
           <Stat label="λ"         value={fmtFloat(telemetry.lambda, 6)} accent />
           <Stat label="Best Obj"  value={bestObjDisplay} accent />
+          <Stat label="Best Dens" value={bestDensDisplay} accent />
           <Stat label="Best Size" value={bestSizeDisplay} accent />
           <Stat label="Elapsed"   value={elapsed} />
           <Stat label="Started"   value={telemetry.startedAt ? new Date(telemetry.startedAt).toLocaleTimeString() : null} />
