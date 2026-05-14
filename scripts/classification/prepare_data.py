@@ -8,8 +8,10 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from split_utils import (  # noqa: E402
     build_out_adjacency,
+    build_undirected_adjacency,
     compute_hard_subset,
     EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE,
+    query_has_undirected_triangle,
     sha256_edge_list,
     write_split_meta,
 )
@@ -17,8 +19,7 @@ from split_utils import (  # noqa: E402
 try:
     from torch_geometric.datasets import CitationFull
 except ImportError:
-    print("Error: PyTorch Geometric not found.")
-    exit(1)
+    CitationFull = None
 
 
 def _out_reachable_size(start, out_adj, limit=None):
@@ -101,28 +102,15 @@ def _solver_build_id(bin_path: str) -> str:
     return "unknown"
 
 
-def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
-    print(f"--- Loading {dataset_name} (CitationFull) ---")
-
+def _split_and_write(dataset_name, seed: int, data_dir: str, df_edges, labels_np, num_nodes: int):
     ds_dir = os.path.join(data_dir, dataset_name)
-    os.makedirs(ds_dir, exist_ok=True)
-
-    dataset = CitationFull(root=ds_dir, name=dataset_name, to_undirected=False)
-    data = dataset[0]
-
-    edge_csv = os.path.join(ds_dir, "edge.csv")
     node_csv = os.path.join(ds_dir, "nodes.csv")
-
-    edges = data.edge_index.numpy().T
-    df_edges = pd.DataFrame(edges, columns=["source", "target"])
-    df_edges.to_csv(edge_csv, index=False)
-    print(f"Exported {len(df_edges)} directed edges to {edge_csv}")
-
     cited_nodes = set(df_edges["target"].astype(int).unique())
     all_citing_nodes = set(df_edges["source"].astype(int).unique())
     pure_sources = sorted(all_citing_nodes - cited_nodes)
 
     out_adj = build_out_adjacency(df_edges)
+    undirected_adj = build_undirected_adjacency(df_edges)
     pool = sorted(
         q
         for q in pure_sources
@@ -130,23 +118,28 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
         and _out_reachable_size(q, out_adj, limit=EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE)
         >= EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE
     )
+    triangle_pool = [
+        q for q in pool if query_has_undirected_triangle(q, undirected_adj)
+    ]
 
-    print(f"Total Nodes: {data.num_nodes}")
+    print(f"Total Nodes: {num_nodes}")
     print(f"Pure-source candidates: {len(pure_sources)}")
     print(
         f"Pool after out-degree >= 2 and out-reachable >= {EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE} filter: {len(pool)}"
     )
+    print(f"Triangle-eligible query pool: {len(triangle_pool)}")
 
-    labels_np = data.y.numpy().astype(int)
     rng = np.random.default_rng(seed)
-    val_nodes, test_nodes, singleton_labels = _stratified_half_split(pool, labels_np, rng)
+    val_nodes, test_nodes, singleton_labels = _stratified_half_split(
+        triangle_pool, labels_np, rng
+    )
     print(
         f"Label-stratified split: val={len(val_nodes)}, test={len(test_nodes)}, "
         f"singleton label buckets={len(singleton_labels)}"
     )
 
     df_nodes = pd.DataFrame(
-        {"node_id": range(data.num_nodes), "label": labels_np}
+        {"node_id": range(num_nodes), "label": labels_np}
     )
     df_nodes["val"] = df_nodes["node_id"].isin(val_nodes)
     df_nodes["test"] = df_nodes["node_id"].isin(test_nodes)
@@ -172,7 +165,7 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
     payload = write_split_meta(
         dataset_name=dataset_name,
         seed=seed,
-        num_nodes=int(data.num_nodes),
+        num_nodes=int(num_nodes),
         num_edges=int(len(df_edges)),
         train_ids=train_ids,
         val_ids=val_ids,
@@ -181,6 +174,7 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
         edges_hash=edges_hash,
         library_versions=_library_versions(),
         data_dir=data_dir,
+        query_pool_ids=triangle_pool,
     )
     print(
         f"split_meta.json: train={payload['splits']['train']['size']}, "
@@ -188,6 +182,63 @@ def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
         f"test={payload['splits']['test']['size']}, "
         f"hard_subset={payload['hard_subset']['size']}"
     )
+
+
+def prepare_citation_full(dataset_name, seed: int = 42, data_dir: str = "data"):
+    if CitationFull is None:
+        raise RuntimeError(
+            "PyTorch Geometric is not installed. Use --source existing to "
+            "regenerate masks from data/<dataset>/edge.csv and nodes.csv."
+        )
+
+    print(f"--- Loading {dataset_name} (CitationFull) ---")
+
+    ds_dir = os.path.join(data_dir, dataset_name)
+    os.makedirs(ds_dir, exist_ok=True)
+
+    dataset = CitationFull(root=ds_dir, name=dataset_name, to_undirected=False)
+    data = dataset[0]
+
+    edge_csv = os.path.join(ds_dir, "edge.csv")
+
+    edges = data.edge_index.numpy().T
+    df_edges = pd.DataFrame(edges, columns=["source", "target"])
+    df_edges.to_csv(edge_csv, index=False)
+    print(f"Exported {len(df_edges)} directed edges to {edge_csv}")
+
+    labels_np = data.y.numpy().astype(int)
+    _split_and_write(dataset_name, seed, data_dir, df_edges, labels_np, int(data.num_nodes))
+
+
+def prepare_existing_export(dataset_name, seed: int = 42, data_dir: str = "data"):
+    print(f"--- Loading {dataset_name} from existing CSV export ---")
+
+    ds_dir = os.path.join(data_dir, dataset_name)
+    edge_csv = os.path.join(ds_dir, "edge.csv")
+    node_csv = os.path.join(ds_dir, "nodes.csv")
+    if not os.path.exists(edge_csv):
+        raise FileNotFoundError(edge_csv)
+    if not os.path.exists(node_csv):
+        raise FileNotFoundError(node_csv)
+
+    df_edges = pd.read_csv(edge_csv)
+    df_nodes = pd.read_csv(node_csv)
+    if "node_id" not in df_nodes.columns or "label" not in df_nodes.columns:
+        raise ValueError(f"{node_csv} must contain node_id and label columns")
+
+    node_ids = df_nodes["node_id"].astype(int)
+    max_node = int(
+        max(
+            node_ids.max(),
+            df_edges["source"].astype(int).max(),
+            df_edges["target"].astype(int).max(),
+        )
+    )
+    num_nodes = max_node + 1
+    labels_np = np.zeros(num_nodes, dtype=int)
+    labels_np[node_ids.to_numpy()] = df_nodes["label"].astype(int).to_numpy()
+
+    _split_and_write(dataset_name, seed, data_dir, df_edges, labels_np, num_nodes)
 
 
 if __name__ == "__main__":
@@ -200,6 +251,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data-dir", type=str, default="data")
+    parser.add_argument(
+        "--source",
+        choices=["auto", "citationfull", "existing"],
+        default="auto",
+        help=(
+            "Where to read graph/label data from. auto uses CitationFull when "
+            "available, otherwise existing data/<dataset> CSVs."
+        ),
+    )
     args = parser.parse_args()
 
-    prepare_citation_full(args.dataset, seed=args.seed, data_dir=args.data_dir)
+    if args.source == "existing" or (args.source == "auto" and CitationFull is None):
+        prepare_existing_export(args.dataset, seed=args.seed, data_dir=args.data_dir)
+    else:
+        prepare_citation_full(args.dataset, seed=args.seed, data_dir=args.data_dir)

@@ -13,9 +13,9 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
 EXPECTED_SCHEMA_VERSION = "2.0"
-EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2_out_reachable_geq_5"
+EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2_out_reachable_geq_5_undirected_triangle"
 EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE = 5
-EXPECTED_SPLIT_STRATEGY = "label_stratified_50_50"
+EXPECTED_SPLIT_STRATEGY = "label_stratified_50_50_triangle_eligible"
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ class SplitMeta:
     pool_criterion: Optional[str] = None
     pool_min_out_reachable_size: Optional[int] = None
     split_strategy: Optional[str] = None
+    query_pool: Optional[dict] = None
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -73,6 +74,7 @@ def load_split_meta(dataset: str, data_dir: str = "data") -> SplitMeta:
         pool_criterion=payload.get("pool_criterion"),
         pool_min_out_reachable_size=payload.get("pool_min_out_reachable_size"),
         split_strategy=payload.get("split_strategy"),
+        query_pool=payload.get("query_pool"),
     )
 
 
@@ -88,6 +90,7 @@ def write_split_meta(
     edges_hash: str,
     library_versions: dict,
     data_dir: str = "data",
+    query_pool_ids: Optional[List[int]] = None,
 ) -> dict:
     payload = {
         "schema_version": "2.0",
@@ -102,6 +105,13 @@ def write_split_meta(
             "train": {"size": len(train_ids), "hash": sha256_node_set(train_ids)},
             "val": {"size": len(val_ids), "hash": sha256_node_set(val_ids)},
             "test": {"size": len(test_ids), "hash": sha256_node_set(test_ids)},
+        },
+        "query_pool": None
+        if query_pool_ids is None
+        else {
+            "criterion": EXPECTED_POOL_CRITERION,
+            "size": len(query_pool_ids),
+            "hash": sha256_node_set(query_pool_ids),
         },
         "hard_subset": None
         if hard_subset_ids is None
@@ -139,6 +149,23 @@ def build_undirected_adjacency(df_edges) -> Dict[int, Set[int]]:
         adj[s].add(t)
         adj[t].add(s)
     return adj
+
+
+def query_has_undirected_triangle(q_node: int, undirected_adj: Dict[int, Set[int]]) -> bool:
+    """Return true when q participates in at least one triangle in the
+    undirected support graph.
+
+    For k=3, kappa=2 this is exactly the local feasibility condition for a
+    3-node query-containing answer under the solver's undirected support
+    interpretation of edge connectivity.
+    """
+    neighbours = sorted(undirected_adj.get(int(q_node), ()))
+    for i, u in enumerate(neighbours):
+        u_neighbours = undirected_adj.get(u, set())
+        for v in neighbours[i + 1 :]:
+            if v in u_neighbours:
+                return True
+    return False
 
 
 def argmax_label_value(counter: Counter):

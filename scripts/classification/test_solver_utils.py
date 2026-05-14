@@ -408,6 +408,21 @@ class EffectiveParamsHashTests(unittest.TestCase):
         self.assertEqual(h1, h2)
 
 
+class TriangleEligibilityTests(unittest.TestCase):
+    def test_query_has_undirected_triangle(self):
+        from split_utils import query_has_undirected_triangle
+
+        adj = {
+            0: {1, 2, 3},
+            1: {0, 2},
+            2: {0, 1},
+            3: {0, 4},
+            4: {3},
+        }
+        self.assertTrue(query_has_undirected_triangle(0, adj))
+        self.assertFalse(query_has_undirected_triangle(3, adj))
+
+
 class SplitMetaIdempotencyTests(unittest.TestCase):
     """prepare_data shuffle + split logic must be deterministic on a fixed
     seed so split_meta.json hashes match across regenerations."""
