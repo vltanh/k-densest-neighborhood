@@ -137,6 +137,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--bin-path", type=str, default="./solver/bin/solver")
+    parser.add_argument(
+        "--code-hash-override",
+        type=str,
+        default=None,
+        help=(
+            "Use this code hash in the cache key instead of hashing --bin-path. "
+            "This is intended only for resuming a run whose solver binary hash "
+            "changed while the cached records are still valid for comparison."
+        ),
+    )
     parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument("--exps-dir", type=str, default="exps")
     parser.add_argument("--max-workers", type=int, default=8)
@@ -218,7 +228,7 @@ def main():
     ctx = build_graph_context(
         os.path.join(args.data_dir, args.dataset, "edge.csv"), max_in_edges=0
     )
-    solver_bin_hash = sha256_file(args.bin_path)
+    solver_bin_hash = args.code_hash_override or sha256_file(args.bin_path)
 
     out_root = os.path.join(args.exps_dir, "classification", args.dataset, "cluster_quality")
     os.makedirs(out_root, exist_ok=True)

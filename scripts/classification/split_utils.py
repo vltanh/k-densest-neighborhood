@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
-EXPECTED_SCHEMA_VERSION = "2.0"
-EXPECTED_POOL_CRITERION = "pure_source_with_outdegree_geq_2_out_reachable_geq_5_undirected_triangle"
-EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE = 5
-EXPECTED_SPLIT_STRATEGY = "label_stratified_50_50_triangle_eligible"
+EXPECTED_SCHEMA_VERSION = "3.0"
+EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE = 5
+EXPECTED_POOL_CRITERION = "pure_source_with_out_reachable_2edge_component_geq_5"
+EXPECTED_SPLIT_STRATEGY = "label_stratified_50_50_out_2edge_component_eligible"
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ class SplitMeta:
     created_at: str
     pool_criterion: Optional[str] = None
     pool_min_out_reachable_size: Optional[int] = None
+    pool_min_out_2edge_component_size: Optional[int] = None
     split_strategy: Optional[str] = None
     query_pool: Optional[dict] = None
 
@@ -73,6 +74,7 @@ def load_split_meta(dataset: str, data_dir: str = "data") -> SplitMeta:
         created_at=payload["created_at"],
         pool_criterion=payload.get("pool_criterion"),
         pool_min_out_reachable_size=payload.get("pool_min_out_reachable_size"),
+        pool_min_out_2edge_component_size=payload.get("pool_min_out_2edge_component_size"),
         split_strategy=payload.get("split_strategy"),
         query_pool=payload.get("query_pool"),
     )
@@ -93,13 +95,13 @@ def write_split_meta(
     query_pool_ids: Optional[List[int]] = None,
 ) -> dict:
     payload = {
-        "schema_version": "2.0",
+        "schema_version": EXPECTED_SCHEMA_VERSION,
         "dataset_name": dataset_name,
         "seed": seed,
         "num_nodes": num_nodes,
         "num_edges": num_edges,
         "pool_criterion": EXPECTED_POOL_CRITERION,
-        "pool_min_out_reachable_size": EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE,
+        "pool_min_out_2edge_component_size": EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE,
         "split_strategy": EXPECTED_SPLIT_STRATEGY,
         "splits": {
             "train": {"size": len(train_ids), "hash": sha256_node_set(train_ids)},
@@ -149,6 +151,102 @@ def build_undirected_adjacency(df_edges) -> Dict[int, Set[int]]:
         adj[s].add(t)
         adj[t].add(s)
     return adj
+
+
+def out_reachable_nodes(start: int, out_adj: Dict[int, Set[int]]) -> Set[int]:
+    seen = {int(start)}
+    stack = [int(start)]
+    while stack:
+        node = stack.pop()
+        for nb in out_adj.get(node, ()):
+            if nb in seen:
+                continue
+            seen.add(nb)
+            stack.append(nb)
+    return seen
+
+
+def out_reachable_2edge_component_size(
+    q_node: int,
+    out_adj: Dict[int, Set[int]],
+    undirected_adj: Dict[int, Set[int]],
+) -> int:
+    """Size of q's bridge-free component in its outgoing-reachable support.
+
+    The solver sweep uses ``max_in_edges=0``, so query feasibility should be
+    judged in the undirected support induced by nodes reachable from q via
+    outgoing edges. Removing bridges leaves the 2-edge-connected components.
+    """
+    q_node = int(q_node)
+    reachable = out_reachable_nodes(q_node, out_adj)
+    if len(reachable) <= 1:
+        return len(reachable)
+
+    timer = 0
+    tin: Dict[int, int] = {}
+    low: Dict[int, int] = {}
+    bridges: Set[Tuple[int, int]] = set()
+
+    def edge_key(u: int, v: int) -> Tuple[int, int]:
+        return (u, v) if u < v else (v, u)
+
+    def dfs(u: int, parent: Optional[int]) -> None:
+        nonlocal timer
+        tin[u] = timer
+        low[u] = timer
+        timer += 1
+        for v in undirected_adj.get(u, ()):
+            if v not in reachable:
+                continue
+            if v == parent:
+                continue
+            if v in tin:
+                low[u] = min(low[u], tin[v])
+                continue
+            dfs(v, u)
+            low[u] = min(low[u], low[v])
+            if low[v] > tin[u]:
+                bridges.add(edge_key(u, v))
+
+    dfs(q_node, None)
+
+    component = {q_node}
+    stack = [q_node]
+    while stack:
+        u = stack.pop()
+        for v in undirected_adj.get(u, ()):
+            if v not in reachable or v in component:
+                continue
+            if edge_key(u, v) in bridges:
+                continue
+            component.add(v)
+            stack.append(v)
+    return len(component)
+
+
+def build_query_pool(df_edges) -> Tuple[List[int], dict]:
+    """Return query ids satisfying the consolidated split-pool criterion."""
+    cited_nodes = set(df_edges["target"].astype(int).unique())
+    all_citing_nodes = set(df_edges["source"].astype(int).unique())
+    pure_sources = sorted(all_citing_nodes - cited_nodes)
+
+    out_adj = build_out_adjacency(df_edges)
+    undirected_adj = build_undirected_adjacency(df_edges)
+    component_sizes = {
+        int(q): out_reachable_2edge_component_size(q, out_adj, undirected_adj)
+        for q in pure_sources
+    }
+    query_pool = sorted(
+        q
+        for q, size in component_sizes.items()
+        if size >= EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE
+    )
+    stats = {
+        "pure_source_count": len(pure_sources),
+        "eligible_count": len(query_pool),
+        "component_size_counts": dict(Counter(component_sizes.values())),
+    }
+    return query_pool, stats
 
 
 def query_has_undirected_triangle(q_node: int, undirected_adj: Dict[int, Set[int]]) -> bool:
@@ -219,10 +317,14 @@ def assert_split_meta_matches(
             f"{dataset}: split_meta.json pool_criterion {meta.pool_criterion!r} "
             f"does not match expected {EXPECTED_POOL_CRITERION!r}. Regenerate via prepare_data.py."
         )
-    if meta.pool_min_out_reachable_size != EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE:
+    if (
+        meta.pool_min_out_2edge_component_size
+        != EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE
+    ):
         raise ValueError(
-            f"{dataset}: split_meta.json pool_min_out_reachable_size {meta.pool_min_out_reachable_size!r} "
-            f"does not match expected {EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE!r}. Regenerate via prepare_data.py."
+            f"{dataset}: split_meta.json pool_min_out_2edge_component_size "
+            f"{meta.pool_min_out_2edge_component_size!r} does not match expected "
+            f"{EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE!r}. Regenerate via prepare_data.py."
         )
     if meta.split_strategy != EXPECTED_SPLIT_STRATEGY:
         raise ValueError(

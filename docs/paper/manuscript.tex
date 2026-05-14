@@ -12,11 +12,12 @@
 \usepackage[ruled,vlined,linesnumbered]{algorithm2e}
 \SetAlgoLined
 \SetAlgoNlRelativeSize{-1}
-\SetAlFnt{\small}
+\SetAlFnt{\footnotesize}
 \SetKwInput{KwInput}{Input}
 \SetKwInput{KwOutput}{Output}
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage{xcolor}
+\usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage[nameinlink,noabbrev]{cleveref}
 
@@ -51,7 +52,7 @@
 
   Each oracle call reveals outgoing references and a capped number of incoming citations, so optimization and graph materialization proceed together.  The solver combines Dinkelbach's fractional transform with lazy branch-and-price over a growing active set, with frontier pricing, branch-and-bound, triangle cuts, max-flow connectivity cuts, and incumbent pruning.  We compare this objective against BFS, query-anchored average-degree, and grow-to-$k$ baselines.
 
-  On Cora-ML, branch-and-price returns denser and more compact communities than the baselines.  At $k=3$, its edge density is $0.51\pm0.10$, against $0.35\pm0.11$ for depth-1 BFS and $0.21\pm0.12$ for AvgDeg.  Depth-1 BFS remains the strongest classifier on the full Cora-ML test split, while dense-community search performs best on the subset where the direct BFS vote fails.  The two findings separate cheap local classification from retrieval under explicit density, size, and connectivity constraints.
+  On Cora-ML, the compact branch-and-price settings return denser communities than the baselines.  At $k=3$ and $\kappa=0$, edge density is $0.52\pm0.08$, against $0.34\pm0.12$ for depth-1 BFS and $0.18\pm0.09$ for AvgDeg; the $\kappa=2$ setting instead trades compactness for rooted connectivity.  Depth-1 BFS remains the strongest classifier on the full Cora-ML test split, while branch-and-price has the highest F1 on the diagnostic subset where the direct BFS vote fails.  The two findings separate cheap local classification from retrieval under explicit density, size, and connectivity constraints.
 \end{abstract}
 
 \section{Introduction}
@@ -183,7 +184,7 @@ Both incoming and outgoing active neighbors count, since the objective counts di
 \end{equation}
 A positive score indicates that promoting $f$ can improve the restricted LP.  We promote a batch of the top positive frontier nodes rather than a single node, controlled by configurable minimum, maximum, and fractional batch-size parameters; in our experiments we use a fractional batch size of $1.0$ with a hard cap of $50$ per round.
 
-Note that solo pricing is only a first-order test.  A group of frontier nodes may have weak individual scores but strong mutual edges, so that each node appears unprofitable alone even though the group completes a dense block.  We address this failure mode in two stages.  First, when solo pricing stalls and unqueried frontier nodes remain, we materialize their adjacencies so that hidden frontier-frontier edges become visible, and we restart pricing.  Second, once no further materialization is possible within the round, we invoke a bounded joint-pricing heuristic over $\A\cup\F$: when the number of combinations is within a budget of $5\times10^5$ query-containing $k$-sets we enumerate them exactly, and otherwise we greedily grow from $\{q\}$ by a cheap directed gain rule.  This procedure improves recovery of clique-completer sets but remains a heuristic pricing oracle.  A non-positive solo score combined with a failed bounded joint pass therefore certifies only that the pricing routine found no improving subset of $\A\cup\F$; it makes no claim over the unrevealed graph.  We also expose a flag (\texttt{--no-materialize}) that disables this materialization step for expensive oracles, at the cost of reduced recall on frontier-internal cliques.  The exhaustive joint-pricing branch scores full directed internal edge count.  The greedy fallback scores each candidate by outgoing edges from the candidate into $S$, then breaks ties first by outgoing edges into the remaining pool and then by ascending node id.
+Note that solo pricing is only a first-order test.  A group of frontier nodes may have weak individual scores but strong mutual edges, so that each node appears unprofitable alone even though the group completes a dense block.  We address this failure mode in two stages.  First, when solo pricing stalls and unqueried frontier nodes remain, we materialize their adjacencies so that hidden frontier-frontier edges become visible, and we restart pricing.  Second, once no further materialization is possible within the round, we invoke a bounded joint-pricing heuristic over $\A\cup\F$: when the number of combinations is within a budget of $5\times10^5$ query-containing $k$-sets we enumerate them exactly, and otherwise we greedily grow from $\{q\}$ by a cheap directed gain rule.  This procedure improves recovery of clique-completer sets but remains a heuristic pricing oracle.  A non-positive solo score combined with a failed bounded joint pass therefore says only that this pricing routine found no additional set to promote inside $\A\cup\F$; it makes no claim over the unrevealed graph.  We also expose a flag (\texttt{--no-materialize}) that disables this materialization step for expensive oracles, at the cost of reduced recall on frontier-internal cliques.  The exhaustive joint-pricing branch scores full directed internal edge count.  The greedy fallback scores each candidate by outgoing edges from the candidate into $S$, then breaks ties first by outgoing edges into the remaining pool and then by ascending node id.
 
 \paragraph{Branching and cuts.}
 Once column generation stalls, we use the LP solution for bounding.  When the solution is integral, we treat the selected set as an incumbent candidate.  When it is fractional, we select exactly one branching variable per LP node according to a $2\lambda$ internal-degree rule.  If at least one fractional node has internal degree below $2\lambda$, we call it a \emph{hanging} node and branch on the hanging node with the smallest internal degree, with ties broken by closeness of $\bar{x}_v$ to $0.5$, and we explore the $x_v=0$ child first.  Otherwise every fractional node has internal degree at or above $2\lambda$, a \emph{core} configuration, and we branch on the most fractional core node, with ties broken by larger internal degree, and we explore the $x_v=1$ child first.  The threshold follows the same marginal calculation as pricing: a selected node must contribute enough directed internal edge mass to offset the pair penalty induced by density $\lambda$.
@@ -396,13 +397,13 @@ We organize our evaluation around three questions.  First, does branch-and-price
 \subsection{Datasets, splits, and methods}
 \label{subsec:datasets-methods}
 
-We use Cora-ML from the CitationFull family as our main dataset.  It contains $2{,}995$ papers, $8{,}416$ directed citation edges, and seven labels.  We apply an inductive split that isolates queries from their own labels.  The query pool consists of the \emph{pure sources}: papers that cite other papers but are not themselves cited in the exported graph.  We then filter to out-degree at least two and split the resulting pool evenly into validation and test by shuffling under random seed $42$; the remaining papers form the training pool.  We use $402$ validation queries and $402$ test queries; the training pool contains $2{,}191$ labeled papers.  Query nodes from validation and test are never used as labels for one another.
+We use Cora-ML from the CitationFull family as our main dataset.  It contains $2{,}995$ papers, $8{,}416$ directed citation edges, and seven labels.  We apply an inductive split that isolates queries from their own labels.  The query pool consists of \emph{pure sources}: papers that cite other papers but are not themselves cited in the exported graph.  Because the main experiments use outgoing expansion only, we retain a pure source only when the bridge-free component containing it in its outgoing-reachable undirected support has at least five nodes.  This criterion gives a query pool of $578$ papers, which we split into validation and test by label-stratified shuffling under random seed $42$.  We use $289$ validation queries and $289$ test queries; the remaining $2{,}417$ papers form the training pool.  Query nodes from validation and test are never used as labels for one another.
 
-We compare three methods: depth-1 BFS, query-anchored AvgDeg, and branch-and-price (BP), evaluated at $k\in\{3,4,5\}$ and $\kappa\in\{0,1,2\}$.  We apply grow-to-$k$ to BFS and AvgDeg only when their native output has fewer than $k$ nodes.  We run BP with a $60$ second soft no-improvement cap and a $300$ second hard wall-time cap in the cost and quality experiments.  Recall from \Cref{subsec:guarantees} that the soft cap is an algorithmic no-improvement budget that fires only after a positive incumbent exists, while the hard cap is a wall-clock bound on the solve.  In these Cora-ML experiments we use the default incoming cap of zero, so that our main signal is the outgoing citation structure plus edges discovered through queried outgoing references.  AvgDeg and BFS are deterministic and we run each one once per cell.  BP depends on Gurobi's random seed, which we fix to $42$ throughout: in pilot experiments the across-seed spread of BP's pair density was small relative to the wall-time cost of repeating the cluster-quality and cost sweep on additional seeds.  We select validation-best parameters on these single-seed records and report test-set confidence intervals through a paired bootstrap with $B=500$ resamples on the per-query prediction indicators.
+We compare three methods: depth-1 BFS, query-anchored AvgDeg, and branch-and-price (BP), evaluated at $k\in\{3,4,5\}$ and $\kappa\in\{0,1,2\}$.  We apply grow-to-$k$ to BFS and AvgDeg only when their native output has fewer than $k$ nodes.  We run BP with a $60$ second soft no-improvement cap and a $300$ second hard wall-time cap in the cost and quality experiments.  Recall from \Cref{subsec:guarantees} that the soft cap is an algorithmic no-improvement budget that fires only after a positive incumbent exists, while the hard cap is a wall-clock bound on the solve.  In these Cora-ML experiments we use the default incoming cap of zero, so that our main signal is the outgoing citation structure plus edges discovered through queried outgoing references.  AvgDeg and BFS are deterministic and we run each one once per cell.  BP depends on Gurobi's random seed, which we fix to $42$ throughout; the cluster-quality and cost sweep is therefore a single-seed BP evaluation.  We select validation-best parameters on these single-seed records and report test-set confidence intervals through a bootstrap with $B=500$ resamples of the per-query predictions.
 
 Our intrinsic quality metrics include output size, algebraic connectivity $\lambda_2$ of the normalized Laplacian on the undirected induced support, an internal min-normalized-cut robustness score, directed internal average degree, and directed pair density.  We use the normalized-cut score as an internal robustness diagnostic: larger values indicate that the induced support is harder to split by a sparse internal cut.  We compute directed average degree and directed pair density from outgoing edge lists, matching the directed objective of our solver.  Our cost metrics include wall time, oracle queries, branch-and-bound nodes, LP solves, cuts, and LP time.  For reproducibility, we fix the Gurobi random seed via \texttt{--gurobi-seed} and record for each solver run the output size, oracle-query count, wall and LP-solve times, cut and branch-and-bound counts, hard-cap status, $\kappa$-verification flags, and the requested intrinsic quality metrics; we optionally persist the selected node list and the full Dinkelbach trajectory to a separate solver-dump file when full traceability is needed.
 
-We classify each query by a uniform majority vote over the training-labeled members of the returned community, breaking ties by ascending label for reproducibility.  When a returned community contains no training nodes, we apply a concentric BFS fallback over the directed citation graph that searches outward up to $10$ hops while excluding validation and test nodes as stepping stones, votes a uniform majority over the nearest reachable training-labeled nodes, and falls back to the global training-majority label when no training label is reachable.  In our Cora-ML records, this fallback path is never triggered: every returned community contains at least one training-labelled paper.  We report macro-averaged precision, recall, and F1 throughout.  We compute the hard subset independently of BP and of any solver: it consists of the test nodes whose true label disagrees with the majority label over their outgoing $1$-hop training neighbours, with a global training-majority fallback when no training neighbour is reachable.  We materialise this subset at data-preparation time directly from the citation graph and the training mask, and we store its hash in the split metadata.  Note that this is a diagnostic subset for shallow-neighborhood failure, not a new primary benchmark.
+We classify each query by an inverse-distance weighted vote over the training-labeled members of the returned community, breaking ties by ascending label for reproducibility.  Distances for this vote are measured from the query in the undirected support of the local citation graph, with validation and test nodes excluded as intermediate vertices.  When a returned community contains no training nodes, we apply a concentric BFS fallback over the directed citation graph that searches outward up to $10$ hops while excluding validation and test nodes as stepping stones, votes a uniform majority over the nearest reachable training-labeled nodes, and falls back to the global training-majority label when no training label is reachable.  In our Cora-ML records, this fallback path is never triggered: every returned community contains at least one training-labelled paper.  We report macro-averaged precision, recall, and F1 throughout.  We compute the hard subset independently of BP and of any solver: it consists of the test nodes whose true label disagrees with the majority label over their outgoing $1$-hop training neighbours, with a global training-majority fallback when no training neighbour is reachable.  We materialise this subset at data-preparation time directly from the citation graph and the training mask, and we store its hash in the split metadata.  It contains $44$ test queries.  Note that this is a diagnostic subset for shallow-neighborhood failure, not a new primary benchmark.
 
 \subsection{Brute-force correctness protocol}
 \label{subsec:correctness-protocol}
@@ -425,88 +426,26 @@ We do not present this test as a scalability claim.  Its value lies in isolating
 \subsection{Intrinsic community quality}
 \label{subsec:intrinsic-results}
 
-\Cref{tab:quality} reports cluster quality on the combined validation and test pools ($804$ queries).  Each method recovers what it optimizes.  BP, which optimizes directed pair density, returns the highest pair-density communities in every $k$ block.  AvgDeg, which optimizes directed edges per selected node, attains the highest average internal degree but substantially lower pair density.  BFS optimizes neither objective, and its cohesion is incidental to a reachability rule.
+\Cref{tab:quality} reports cluster quality on the combined validation and test pools ($578$ queries).  Each method recovers what it optimizes.  The $\kappa=0$ BP row, which optimizes directed pair density without a rooted-connectivity requirement, returns the highest pair-density communities in every $k$ block.  AvgDeg, which optimizes directed edges per selected node, attains the highest average internal degree but substantially lower pair density.  BFS optimizes neither objective, and its cohesion is incidental to a reachability rule.
 
-\begin{table}[H]
-  \centering
-  \scriptsize
-  \caption{Cluster quality on Cora-ML validation+test queries ($804$ queries), mean $\pm$ standard deviation.  The best value within each $k$ block is underlined; the best value across all $k$ values is bold.  Higher is better for $\lambda_2$, the internal normalized-cut robustness score, avg.deg, and density; size is descriptive.}
-  \label{tab:quality}
-  \begin{tabular}{lccccc}
-    \toprule
-    Method        & $|S|$           & $\lambda_2$                        & ncut                               & avg.deg                            & dens.                              \\
-    \midrule
-    \multicolumn{6}{l}{\textit{$k=3$}}                                                                                                                                                  \\
-    BFS $d=1$     & $4.87\pm2.75$   & $0.96\pm0.30$                      & $1.23\pm0.15$                      & $1.17\pm0.50$                      & $0.35\pm0.11$                      \\
-    AvgDeg        & $21.20\pm15.20$ & $0.32\pm0.38$                      & $0.70\pm0.53$                      & \underline{\textbf{$3.02\pm1.55$}} & $0.21\pm0.12$                      \\
-    BP $\kappa=0$ & $3.34\pm0.71$   & $1.23\pm0.34$                      & $1.36\pm0.26$                      & $1.20\pm0.42$                      & \underline{\textbf{$0.51\pm0.10$}} \\
-    BP $\kappa=1$ & $3.32\pm0.67$   & $1.25\pm0.28$                      & $1.39\pm0.13$                      & $1.19\pm0.41$                      & \underline{$0.51\pm0.10$}          \\
-    BP $\kappa=2$ & $3.28\pm0.72$   & \underline{\textbf{$1.27\pm0.27$}} & \underline{\textbf{$1.41\pm0.11$}} & $1.10\pm0.44$                      & $0.48\pm0.12$                      \\
-    \midrule
-    \multicolumn{6}{l}{\textit{$k=4$}}                                                                                                                                                  \\
-    BFS $d=1$     & $5.20\pm2.56$   & $0.78\pm0.25$                      & $1.17\pm0.09$                      & $1.22\pm0.47$                      & $0.32\pm0.10$                      \\
-    AvgDeg        & $21.21\pm15.18$ & $0.31\pm0.35$                      & $0.69\pm0.53$                      & \underline{$3.02\pm1.55$}          & $0.21\pm0.11$                      \\
-    BP $\kappa=0$ & $4.35\pm0.78$   & $0.75\pm0.48$                      & $0.94\pm0.53$                      & $1.59\pm0.48$                      & \underline{$0.47\pm0.09$}          \\
-    BP $\kappa=1$ & $4.23\pm0.76$   & $0.92\pm0.28$                      & $1.21\pm0.10$                      & $1.47\pm0.42$                      & $0.46\pm0.09$                      \\
-    BP $\kappa=2$ & $4.19\pm0.72$   & \underline{$0.94\pm0.28$}          & \underline{$1.24\pm0.08$}          & $1.34\pm0.46$                      & $0.42\pm0.12$                      \\
-    \midrule
-    \multicolumn{6}{l}{\textit{$k=5$}}                                                                                                                                                  \\
-    BFS $d=1$     & $5.72\pm2.36$   & $0.66\pm0.24$                      & $1.13\pm0.08$                      & $1.29\pm0.46$                      & $0.29\pm0.09$                      \\
-    AvgDeg        & $21.25\pm15.14$ & $0.30\pm0.34$                      & $0.69\pm0.52$                      & \underline{$3.02\pm1.55$}          & $0.20\pm0.11$                      \\
-    BP $\kappa=0$ & $5.03\pm0.72$   & $0.50\pm0.44$                      & $0.74\pm0.57$                      & $1.76\pm0.51$                      & \underline{$0.43\pm0.09$}          \\
-    BP $\kappa=1$ & $5.14\pm1.03$   & \underline{$0.73\pm0.27$}          & $1.14\pm0.08$                      & $1.67\pm0.47$                      & $0.41\pm0.09$                      \\
-    BP $\kappa=2$ & $5.16\pm1.13$   & $0.72\pm0.28$                      & \underline{$1.16\pm0.08$}          & $1.52\pm0.54$                      & $0.37\pm0.11$                      \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+\input{generated_tables/quality_table.tex}
 
-The contrast between AvgDeg and BP is informative.  At $k=3$, AvgDeg has average degree $3.02\pm1.55$, the highest value in the block, but pair density of only $0.21\pm0.12$.  BP at $\kappa=0$ has lower average degree, $1.20\pm0.42$, and higher pair density, $0.51\pm0.10$.  Note that the two metrics differ in their denominator: average degree divides edges by $|S|$ and rewards large sets that maintain a constant per-node edge contribution, while pair density divides by $|S|(|S|-1)$ and penalizes diffuse expansion.  AvgDeg therefore collects broad citation regions with many internal edges in absolute terms, while BP extracts a smaller core in which a larger fraction of admissible directed pairs is realized.
+The contrast between AvgDeg and BP is informative.  At $k=3$, AvgDeg has average degree $3.65\pm1.31$, the highest value in the block, but pair density of only $0.18\pm0.09$.  BP at $\kappa=0$ has lower average degree, $1.21\pm0.36$, and higher pair density, $0.52\pm0.08$.  Note that the two metrics differ in their denominator: average degree divides edges by $|S|$ and rewards large sets that maintain a constant per-node edge contribution, while pair density divides by $|S|(|S|-1)$ and penalizes diffuse expansion.  AvgDeg therefore collects broad citation regions with many internal edges in absolute terms, while BP extracts a smaller core in which a larger fraction of admissible directed pairs is realized.
 
-We also observe that as $k$ grows from $3$ to $5$, BP's pair density at $\kappa=0$ falls from $0.51$ to $0.43$.  The denominator grows quadratically with each additional required paper, and Cora-ML citation neighborhoods rarely contribute enough new internal edges to compensate.  BP responds by keeping the returned set close to the requested minimum, while AvgDeg remains near twenty-one nodes across all $k$, since its unconstrained optimum already exceeds the requested size.
+As $k$ grows from $3$ to $5$, BP's pair density at $\kappa=0$ falls from $0.52$ to $0.47$.  The denominator grows quadratically with each additional required paper, and Cora-ML citation neighborhoods rarely contribute enough new internal edges to compensate.  BP responds by keeping the returned set close to the requested minimum, while AvgDeg remains near twenty-six nodes across all $k$, since its unconstrained optimum already exceeds the requested size.
 
-Increasing $\kappa$ improves the support-graph connectivity diagnostics and lowers pair density.  For example, at $k=4$, algebraic connectivity rises from $0.75\pm0.48$ at $\kappa=0$ to $0.94\pm0.28$ at $\kappa=2$, while pair density falls from $0.47\pm0.09$ to $0.42\pm0.12$.  Rooted edge connectivity excludes dense pieces that are attached to the query only through narrow bottlenecks, at the cost of slightly lower density.  In retrieval terms, $\kappa=0$ returns the densest compact core, while larger $\kappa$ returns a less dense but more cut-resilient community.
+Increasing $\kappa$ changes the returned object.  At $\kappa=1$, BP still returns compact communities and moves most rooted-connectivity diagnostics in the expected direction relative to $\kappa=0$.  At $\kappa=2$, the constraint is much more restrictive under outgoing-only revelation: BP often returns substantially larger communities, with mean sizes above $96$ across the three $k$ values, and pair density falls accordingly.  These rows should be read as robust retrieval under a hard connectivity requirement rather than as direct competitors to the compact $\kappa=0$ cores.
 
 \subsection{Computational cost}
 \label{subsec:cost-results}
 
 \Cref{tab:cost} reports cost on the same Cora-ML val+test runs.  BFS finishes in tens of milliseconds, AvgDeg remains fast at this scale, and BP is the expensive method.  The ordering tracks how much search each method performs.  BFS issues a small number of oracle calls and runs no optimization.  AvgDeg materializes a larger local region and solves a sequence of max-flow problems.  BP synchronizes the active set, solves repeated LP relaxations, prices, branches, separates triangle cuts, and, when $\kappa>0$, also separates max-flow connectivity cuts.
 
-\begin{table}[H]
-  \centering
-  \scriptsize
-  \caption{Cost on Cora-ML validation+test queries ($804$ queries), mean $\pm$ standard deviation.  BP uses a $60$ s soft no-improvement cap and a $300$ s hard cap.  ``hc'' is the fraction of queries on which the hard cap fired.}
-  \label{tab:cost}
-  \begin{tabular}{lccccccc}
-    \toprule
-    Method        & wall (s)       & queries     & BB nodes      & LP solves     & cuts          & $t_{\mathrm{LP}}$ (s) & hc \\
-    \midrule
-    \multicolumn{8}{l}{\textit{$k=3$}}                                                                                                  \\
-    BFS $d=1$     & $0.03\pm0.01$  & $5\pm3$     & --            & --            & --            & --                    & --       \\
-    AvgDeg        & $0.08\pm0.05$  & $202\pm210$ & --            & --            & --            & --                    & --       \\
-    BP $\kappa=0$ & $1.54\pm15.19$ & $179\pm201$ & $121\pm837$   & $131\pm861$   & $87\pm315$    & $0.93\pm11.50$        & $0.001$  \\
-    BP $\kappa=1$ & $1.47\pm13.71$ & $179\pm201$ & $121\pm772$   & $132\pm796$   & $90\pm308$    & $0.87\pm10.4$         & $0.000$  \\
-    BP $\kappa=2$ & $10.3\pm53.1$  & $180\pm202$ & $81\pm429$    & $1106\pm5876$ & $1106\pm5868$ & $6.26\pm36.3$         & $0.032$  \\
-    \midrule
-    \multicolumn{8}{l}{\textit{$k=4$}}                                                                                                  \\
-    BFS $d=1$     & $0.03\pm0.01$  & $5\pm3$     & --            & --            & --            & --                    & --       \\
-    AvgDeg        & $0.08\pm0.05$  & $202\pm210$ & --            & --            & --            & --                    & --       \\
-    BP $\kappa=0$ & $9.85\pm38.12$ & $200\pm210$ & $833\pm2025$  & $881\pm2079$  & $492\pm677$   & $9.21\pm36.31$        & $0.009$  \\
-    BP $\kappa=1$ & $28.2\pm79.7$  & $200\pm210$ & $1549\pm3593$ & $1618\pm3696$ & $756\pm1348$  & $26.9\pm76.8$         & $0.070$  \\
-    BP $\kappa=2$ & $47.9\pm103.3$ & $200\pm210$ & $1363\pm3061$ & $3794\pm9691$ & $3300\pm9483$ & $44.1\pm95.6$         & $0.133$  \\
-    \midrule
-    \multicolumn{8}{l}{\textit{$k=5$}}                                                                                                  \\
-    BFS $d=1$     & $0.04\pm0.01$  & $6\pm2$     & --            & --            & --            & --                    & --       \\
-    AvgDeg        & $0.08\pm0.05$  & $202\pm210$ & --            & --            & --            & --                    & --       \\
-    BP $\kappa=0$ & $66.7\pm110.0$ & $202\pm210$ & $2967\pm4275$ & $3079\pm4392$ & $1291\pm1477$ & $63.2\pm105.6$        & $0.134$  \\
-    BP $\kappa=1$ & $92.4\pm130.6$ & $202\pm210$ & $3799\pm5311$ & $3961\pm5485$ & $1992\pm2825$ & $88.4\pm126.3$        & $0.248$  \\
-    BP $\kappa=2$ & $96.0\pm131.8$ & $202\pm210$ & $3197\pm4493$ & $4409\pm7318$ & $3326\pm6744$ & $90.8\pm126.7$        & $0.270$  \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+\input{generated_tables/cost_table.tex}
 
-The mean BP wall time at $\kappa=0$ rises from $1.54$ seconds at $k=3$ to $66.7$ seconds at $k=5$.  Larger $k$ enlarges the coordinated node set, introduces more pair variables, and makes fractional solutions harder to close in a small number of branches.  The LP-solve counts and branch-and-bound node counts grow in the same direction, so the dominant cost is the combinatorial search over compact dense cores rather than oracle access.
+The mean BP wall time at $\kappa=0$ rises from $0.96$ seconds at $k=3$ to $91.10$ seconds at $k=5$.  Larger $k$ enlarges the coordinated node set, introduces more pair variables, and makes fractional solutions harder to close in a small number of branches.  The LP-solve counts and branch-and-bound node counts grow in the same direction, so the dominant cost is the combinatorial search over compact dense cores rather than oracle access.
 
-Increasing $\kappa$ acts through a different mechanism.  The robustness constraint is inactive on most easy candidates but expensive once violated: each violating integer candidate triggers max-flow separation, adds a cut, and forces an LP resolve.  At $k=4$, moving from $\kappa=0$ to $\kappa=2$ raises the mean cut count from $492$ to $3300$ and the mean LP solves from $881$ to $3794$.  The wall-time standard deviations are also large, indicating that the mean is driven by a long tail of difficult queries in which density, size, frontier discovery, and rooted connectivity fail to align on an obvious local core.  The same tail manifests as hard-cap incidence: at $k=5$, the hard cap fires on $13.4\%$ of queries at $\kappa=0$, rising to $24.8\%$ at $\kappa=1$ and $27.0\%$ at $\kappa=2$ (column $\textrm{hc}$ in \Cref{tab:cost}).  Means in those cells are therefore lower bounds on the wall time that an uncapped solver would record.
+Increasing $\kappa$ acts through a different mechanism.  The robustness constraint is inactive on many easy candidates but expensive once violated: each violating integer candidate triggers max-flow separation, adds a cut, and forces an LP resolve.  At $k=4$, moving from $\kappa=0$ to $\kappa=2$ raises the mean cut count from $632$ to $7{,}751$ and the mean wall time from $13.00$ to $137.70$ seconds.  The wall-time standard deviations are also large, indicating that the mean is driven by a long tail of difficult queries in which density, size, frontier discovery, and rooted connectivity fail to align on an obvious local core.  The same tail manifests as hard-cap incidence: at $k=5$, the hard cap fires on $18.0\%$ of queries at $\kappa=0$, rising to $33.6\%$ at $\kappa=1$ and $51.7\%$ at $\kappa=2$ (column $\textrm{hc}$ in \Cref{tab:cost}).  Means in those cells are therefore lower bounds on the wall time that an uncapped solver would record.
 
 Note that BP is not the appropriate tool when any neighborhood will do.  Its purpose is to optimize a structural retrieval objective that BFS does not attempt.  For fast topical preview, the cost table favors BFS; for an explicit density objective with a minimum size and optional connectivity, the additional LP and cut work is the cost of solving the harder problem.
 
@@ -515,95 +454,32 @@ The standard deviations also caution against treating the mean as a typical inte
 \subsection{Classification readout}
 \label{subsec:classification-results}
 
-In this experiment, we ask whether the retrieved communities preserve label information.  We tune each method on validation and then evaluate on test.  Our prediction rule is intentionally simple: a majority vote over the training-labeled nodes in the returned community, with deterministic tie-breaking and the fallback described in \Cref{subsec:datasets-methods}.  We chose this rule to isolate the effect of the retrieved subgraph rather than introducing a learned classifier.  It also makes the limitations visible: a method can return an excellent structural community but still lose a classification vote if it filters out the most label-informative direct references.
+In this experiment, we ask whether the retrieved communities preserve label information.  We tune each method on validation and then evaluate on test.  Our prediction rule is intentionally simple: an inverse-distance vote over the training-labeled nodes in the returned community, with deterministic tie-breaking and the fallback described in \Cref{subsec:datasets-methods}.  We chose this rule to isolate the effect of the retrieved subgraph rather than introducing a learned classifier.  It also makes the limitations visible: a method can return an excellent structural community but still lose a classification vote if it filters out the most label-informative direct references.
 
-\Cref{tab:validation} reports validation results for the tuned grid.  BFS at depth $1$ and $k=4$ is the strongest validation classifier; among BP configurations, $k=4,\kappa=2$ is best.  AvgDeg trails, since its larger output communities dilute the local label signal.
+\Cref{tab:validation} reports validation results for the tuned grid.  BFS at depth $1$ and $k=5$ is the strongest validation classifier, with F1 $0.852\pm0.020$.  Among BP configurations, $k=4,\kappa=1$ is best, with F1 $0.830\pm0.026$.  AvgDeg trails, since its larger output communities dilute the local label signal.
 
-\begin{table}[H]
-  \centering
-  \scriptsize
-  \caption{Validation performance on Cora-ML ($402$ queries), mean $\pm$ bootstrap standard error (estimated as one quarter of the $95\%$ paired-bootstrap CI width).  Best within each $k$ block is underlined; overall best is bold.}
-  \label{tab:validation}
-  \begin{tabular}{llll}
-    \toprule
-    Method        & Precision                            & Recall                               & F1                                   \\
-    \midrule
-    \multicolumn{4}{l}{\textit{$k=3$}}                                                                                                 \\
-    BFS $d=1$     & \underline{$0.836\pm0.019$}          & \underline{$0.832\pm0.020$}          & \underline{$0.826\pm0.021$}          \\
-    AvgDeg        & $0.714\pm0.026$                      & $0.540\pm0.024$                      & $0.558\pm0.026$                      \\
-    BP $\kappa=0$ & $0.797\pm0.021$                      & $0.787\pm0.022$                      & $0.782\pm0.022$                      \\
-    BP $\kappa=1$ & $0.799\pm0.020$                      & $0.790\pm0.021$                      & $0.785\pm0.021$                      \\
-    BP $\kappa=2$ & $0.801\pm0.020$                      & $0.794\pm0.021$                      & $0.785\pm0.022$                      \\
-    \midrule
-    \multicolumn{4}{l}{\textit{$k=4$}}                                                                                                 \\
-    BFS $d=1$     & \underline{\textbf{$0.844\pm0.019$}} & \underline{\textbf{$0.843\pm0.019$}} & \underline{\textbf{$0.838\pm0.020$}} \\
-    AvgDeg        & $0.717\pm0.026$                      & $0.544\pm0.024$                      & $0.563\pm0.025$                      \\
-    BP $\kappa=0$ & $0.762\pm0.021$                      & $0.683\pm0.025$                      & $0.694\pm0.025$                      \\
-    BP $\kappa=1$ & $0.808\pm0.020$                      & $0.789\pm0.021$                      & $0.789\pm0.022$                      \\
-    BP $\kappa=2$ & $0.827\pm0.020$                      & $0.810\pm0.021$                      & $0.811\pm0.021$                      \\
-    \midrule
-    \multicolumn{4}{l}{\textit{$k=5$}}                                                                                                 \\
-    BFS $d=1$     & \underline{$0.814\pm0.021$}          & \underline{$0.816\pm0.021$}          & \underline{$0.810\pm0.021$}          \\
-    AvgDeg        & $0.717\pm0.026$                      & $0.544\pm0.024$                      & $0.563\pm0.025$                      \\
-    BP $\kappa=0$ & $0.725\pm0.023$                      & $0.616\pm0.026$                      & $0.628\pm0.026$                      \\
-    BP $\kappa=1$ & $0.772\pm0.024$                      & $0.744\pm0.023$                      & $0.741\pm0.024$                      \\
-    BP $\kappa=2$ & $0.795\pm0.022$                      & $0.784\pm0.021$                      & $0.780\pm0.022$                      \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+\input{generated_tables/validation_table.tex}
 
-The validation table already indicates that classification and dense retrieval are not identical objectives.  BP substantially improves pair density in \Cref{tab:quality}, yet that improvement does not translate into the best label vote.  Recall that our query pool restricts validation and test queries to pure sources, which by construction cite labelled training papers; in that setting, depth-1 BFS retrieves precisely the references whose labels are most predictive.  BP filters this neighborhood to satisfy density and (when $\kappa>0$) robustness, and the filter can remove direct labeled neighbors that are useful for voting but weakly embedded in the dense core.
+The validation table already indicates that classification and dense retrieval are not identical objectives.  BP substantially improves pair density in \Cref{tab:quality}, yet that improvement does not translate into the best label vote.  Recall that our query pool restricts validation and test queries to pure sources, which by construction cite labelled training papers; in that setting, depth-1 BFS retrieves precisely the references whose labels are most predictive.  BP filters this neighborhood to satisfy density and robustness, and the filter can remove direct labeled neighbors that are useful for voting but weakly embedded in the dense core.
 
-We evaluate the validation-best configurations on the test set in \Cref{tab:test}.  BFS remains strongest, BP is second, and AvgDeg is third.  The gap between BP and AvgDeg is informative.  AvgDeg often includes more training papers, but a larger community can mix labels from multiple nearby topics.  BP keeps the set close to the requested size and therefore preserves a sharper local vote, even though it does not match the direct-neighbor signal that BFS captures on the full split.
+We evaluate the validation-best configurations on the test set in \Cref{tab:test}.  BFS remains strongest, BP is second, and AvgDeg is third.  The gap between BP and AvgDeg is informative.  AvgDeg often includes more training papers, but a larger community can mix labels from multiple nearby topics.  BP keeps the set structurally cohesive and therefore preserves a sharper local vote, even though it does not match the direct-neighbor signal that BFS captures on the full split.
 
-\begin{table}[H]
-  \centering
-  \small
-  \caption{Validation-best configurations evaluated on Cora-ML test queries ($402$ queries), mean $\pm$ bootstrap standard error (estimated as one quarter of the $95\%$ paired-bootstrap CI width).}
-  \label{tab:test}
-  \begin{tabular}{lllll}
-    \toprule
-    Method & validation-best parameters & Precision                & Recall                   & F1                       \\
-    \midrule
-    BFS    & $d=1,
-               k=4$                     & \textbf{$0.871\pm0.016$} & \textbf{$0.853\pm0.020$} & \textbf{$0.856\pm0.019$} \\
-    AvgDeg & $k=4$                      & $0.772\pm0.022$          & $0.579\pm0.024$          & $0.603\pm0.024$          \\
-    BP     & $k=4,
-               \kappa=2$                & $0.818\pm0.021$          & $0.815\pm0.021$          & $0.811\pm0.021$          \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+\input{generated_tables/test_table.tex}
 
-We also examine a complementary subset: the $59$ test nodes on which the outgoing depth-1 BFS vote is wrong by construction.  \Cref{tab:hard} reports performance on this subset, where BP attains the highest F1.  Note that this subset is conditional and should not be used as the primary benchmark; we use it diagnostically, to study what happens after the direct citation vote has already failed.
+We also examine a complementary subset: the $44$ test nodes on which the outgoing depth-1 training-neighbour vote is wrong by construction.  \Cref{tab:hard} reports performance on this subset, where BP attains the highest F1.  Note that this subset is conditional and should not be used as the primary benchmark; we use it diagnostically, to study what happens after the direct citation vote has already failed.
 
-\begin{table}[H]
-  \centering
-  \small
-  \caption{Validation-best configurations on the $59$ test nodes where the outgoing depth-1 BFS vote is wrong, mean $\pm$ bootstrap standard error (estimated as one quarter of the $95\%$ paired-bootstrap CI width).}
-  \label{tab:hard}
-  \begin{tabular}{lllll}
-    \toprule
-    Method & validation-best parameters & Precision                & Recall                   & F1                       \\
-    \midrule
-    BFS    & $d=1,
-               k=4$                     & $0.183\pm0.061$          & $0.097\pm0.049$          & $0.080\pm0.042$          \\
-    AvgDeg & $k=4$                      & \textbf{$0.269\pm0.084$} & $0.251\pm0.079$          & $0.146\pm0.056$          \\
-    BP     & $k=4,
-               \kappa=2$                & $0.174\pm0.053$          & \textbf{$0.282\pm0.090$} & \textbf{$0.190\pm0.056$} \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+\input{generated_tables/hard_table.tex}
 
-We read this hard-subset result as clarifying when dense-community search helps.  When direct neighbors already provide the correct label, BFS is difficult to beat with any filtered community.  When direct neighbors point in the wrong direction, returning the same shallow neighborhood cannot fix the error.  BP's advantage on the hard subset suggests that a dense, query-anchored core can recover signal that is not captured by the immediate citation vote.  The precision and recall pattern is still modest and noisy, since the subset has only $59$ queries, but the direction is informative: density optimization is most valuable when shallow reachability is misleading, ambiguous, or contaminated by bridge citations.
+We read this hard-subset result as clarifying when dense-community search helps.  When direct neighbors already provide the correct label, BFS is difficult to beat with any filtered community.  When direct neighbors point in the wrong direction, returning the same shallow neighborhood cannot reliably fix the error.  BP's advantage on hard-subset F1 suggests that a dense, query-anchored core can recover signal that is not captured by the immediate citation vote.  The precision and recall pattern is still modest and noisy, since the subset has only $44$ queries, but the direction is informative: density optimization is most valuable when shallow reachability is misleading, ambiguous, or contaminated by bridge citations.
 
 This readout suggests a two-mode deployment.  A literature-search system can expose both a shallow-neighborhood mode and a dense-community mode: the former for fast label-propagation relevance and first-pass exploration, the latter for focused reading sets and for identifying a cohesive structural context around a query paper.  Disagreement between the two outputs is itself informative: it may indicate that the query is a bridge paper, a survey, or a paper whose references span multiple areas while one dense subcommunity dominates its local citation structure.
 
 \subsection{Interpretation of empirical trends}
 \label{subsec:results-discussion}
 
-Each of the three methods returns a different graph object because each optimizes a different notion of locality.  BFS returns a shallow reachability neighbourhood.  AvgDeg returns a broad region with many internal edges per node.  BP returns a compact set with high induced pair density and, when $\kappa>0$, rooted edge-connectivity from the query.  None of these objects is universally best; each is appropriate for a different retrieval question.
+Each of the three methods returns a different graph object because each optimizes a different notion of locality.  BFS returns a shallow reachability neighbourhood.  AvgDeg returns a broad region with many internal edges per node.  BP without an aggressive connectivity requirement returns a compact set with high induced pair density, while larger $\kappa$ trades compactness for rooted edge-connectivity from the query.  None of these objects is universally best; each is appropriate for a different retrieval question.
 
-The computational trends follow from this algorithmic structure.  BFS has low query counts because it stops after a fixed radius and performs no global optimization.  AvgDeg has higher query counts because it materializes the local reachable graph before solving its flow sequence, and its optimization is polynomial and cheap at our scale.  BP has similar or slightly lower oracle counts than AvgDeg in many cells but much higher wall time, since the dominant work is LP search rather than graph loading.  The large cut and LP counts at $\kappa=2$ show that rooted connectivity actively reshapes the search through lazy max-flow separation, rather than acting as a post-hoc filter.
+The computational trends follow from this algorithmic structure.  BFS has low query counts because it stops after a fixed radius and performs no global optimization.  AvgDeg has higher query counts because it materializes the local reachable graph before solving its flow sequence, and its optimization is polynomial and cheap at our scale.  In the outgoing-only Cora-ML records, BP and AvgDeg issue the same oracle queries on every query; BP nevertheless has much higher wall time, since the dominant work is LP search rather than graph loading.  The large cut and LP counts at $\kappa=2$ show that rooted connectivity actively reshapes the search through lazy max-flow separation, rather than acting as a post-hoc filter.
 
 On classification, structural cohesion and predictive label propagation can diverge.  On the full Cora-ML test split, direct references to training papers are highly informative, and BFS is the best classifier on that split.  On the BFS-hard subset, where this direct vote is known to fail, BP recovers more signal than the baselines.  These results support a two-mode use of the system: BFS for fast topical expansion and label-propagation tasks, and dense-community search when the goal is a cohesive, size-controlled, query-centered research community.
 
@@ -613,7 +489,7 @@ On classification, structural cohesion and predictive label propagation can dive
 \paragraph{Summary.}
 In this paper, we formulated query-anchored dense community search for directed citation networks and developed a lazy optimization method for it.  Our formulation asks for a query-containing set of at least $k$ papers that maximizes induced directed pair density, with optional rooted edge-connectivity from the query.  We solve this formulation with a branch-and-price method that combines Dinkelbach updates, an active-set restricted master problem, frontier pricing, branch-and-bound, triangle cuts, max-flow connectivity cuts, and incumbent pruning.  Our method is an exact optimizer for the active-set subproblems, embedded within a practical oracle-limited expansion process.  We compared it to BFS, AvgDeg, and grow-to-$k$ baselines, which clarify the trade-off among reachability, average-degree density, pair density, size control, and computational cost.
 
-Empirically, the method does what its objective prescribes: it returns compact communities with substantially higher pair density than BFS and AvgDeg on Cora-ML.  It is also more expensive, particularly as $k$ and $\kappa$ increase.  Our downstream classification results show that this structural gain does not translate into universal predictive superiority.  Direct one-hop neighbours are the strongest signal on the full Cora-ML test split, since our query pool of pure sources makes direct citations highly informative; dense-community search becomes more useful on the diagnostic subset where that direct vote fails.  We therefore position our method as a retrieval primitive that returns a structurally distinct graph object, complementary to shallow reachability rather than a replacement for it.
+Empirically, the method does what its objective prescribes: the compact BP settings return communities with substantially higher pair density than BFS and AvgDeg on Cora-ML, while the strongest rooted-connectivity setting returns larger and more robust communities.  It is also more expensive, particularly as $k$ and $\kappa$ increase.  Our downstream classification results show that this structural gain does not translate into universal predictive superiority.  Direct one-hop neighbours are the strongest signal on the full Cora-ML test split, since our query pool of pure sources makes direct citations highly informative; dense-community search becomes more useful on the diagnostic subset where that direct vote fails.  We therefore position our method as a retrieval primitive that returns a structurally distinct graph object, complementary to shallow reachability rather than a replacement for it.
 
 \paragraph{Future work.}
 This study suggests several directions for future research.

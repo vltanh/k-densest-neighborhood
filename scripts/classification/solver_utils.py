@@ -177,6 +177,96 @@ def _record_nodes(record: dict) -> Optional[List[int]]:
     return [int(n) for n in nodes]
 
 
+def _solver_params(params: Optional[dict]) -> dict:
+    """Params that affect the solver result, excluding split/eval metadata."""
+    return {k: v for k, v in (params or {}).items() if k != "_eval"}
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value or {}, sort_keys=True, separators=(",", ":"))
+
+
+def _solver_resume_key(
+    *,
+    query_node: int,
+    method: str,
+    params: Optional[dict],
+    dataset: Optional[str],
+    seed: Optional[int],
+) -> Tuple:
+    """Key for reusing a completed solver output across split-hash changes.
+
+    The retrieved node set depends on the graph, solver variant, solver-facing
+    params, seed, and solver config. It does not depend on the val/test split,
+    forbidden set, classifier weighting, or cache-stamping binary hash, so those
+    fields are intentionally ignored here and recomputed into a fresh record on
+    reuse.
+    """
+    eval_block = (params or {}).get("_eval") or {}
+    key = [
+        int(query_node),
+        method,
+        dataset,
+        _canonical_json(_solver_params(params)),
+        _canonical_json(eval_block.get("solver_config") or {}),
+    ]
+    if method == "bp":
+        key.append(seed)
+    return tuple(key)
+
+
+def _solver_resume_key_for_record(record: dict) -> Optional[Tuple]:
+    nodes = _record_nodes(record)
+    if not nodes:
+        return None
+    if record.get("returncode", 0) != 0:
+        return None
+    method = record.get("method")
+    query_node = record.get("query_node")
+    if method is None or query_node is None:
+        return None
+    return _solver_resume_key(
+        query_node=int(query_node),
+        method=method,
+        params=record.get("params") or {},
+        dataset=record.get("dataset"),
+        seed=record.get("seed") if method == "bp" else None,
+    )
+
+
+def _path_touches_backup(path: str) -> bool:
+    return any(part.endswith(".bak") for part in os.path.normpath(path).split(os.sep))
+
+
+def _resume_record_files(records_path: str) -> List[str]:
+    """Sibling records to read for solver-output reuse.
+
+    For cluster-quality sweeps, records live under
+    ``.../cluster_quality/<method>/<params_hash>/records.ndjson``. A split
+    change creates a new params hash because the forbidden hash changes, but
+    sibling hashes under the same method directory may still contain completed
+    solver outputs for the same query/method/seed. Backup directories such as
+    bp.bak are deliberately ignored.
+    """
+    method_dir = os.path.dirname(os.path.abspath(records_path))
+    if _path_touches_backup(method_dir):
+        return []
+    out: List[str] = []
+    try:
+        entries = list(os.scandir(method_dir))
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        candidate = os.path.join(entry.path, "records.ndjson")
+        if _path_touches_backup(candidate):
+            continue
+        if os.path.exists(candidate):
+            out.append(candidate)
+    return out
+
+
 def argmax_label(counter: Counter):
     """Deterministic argmax over label counts. Ties broken by ascending label."""
     if not counter:
@@ -643,6 +733,7 @@ def evaluate_nodes(
     method_name = method or ("bp" if k is not None else "unknown")
 
     cached_records: Dict[Tuple, dict] = {}
+    reusable_solver_records: Dict[Tuple, dict] = {}
     records_file_path: Optional[str] = None
     solver_dumps_dir: Optional[str] = None
     if records_path is not None:
@@ -655,6 +746,12 @@ def evaluate_nodes(
             if rec.get("returncode", 0) != 0:
                 continue
             cached_records[_record_key(rec)] = rec
+        for path in _resume_record_files(records_path):
+            for rec in _records_from_ndjson(path):
+                key = _solver_resume_key_for_record(rec)
+                if key is None:
+                    continue
+                reusable_solver_records.setdefault(key, rec)
 
     record_lock = Lock()
 
@@ -670,11 +767,81 @@ def evaluate_nodes(
             *([seed_part] if method_for_seed == "bp" else []),
         )
 
+    def _make_solver_resume_key(q_node: int) -> Tuple:
+        return _solver_resume_key(
+            query_node=int(q_node),
+            method=method_name,
+            params=params or {},
+            dataset=dataset_name,
+            seed=seed if method_name == "bp" else None,
+        )
+
+    def _record_from_reused_solver(q_node: int, source: dict) -> dict:
+        retrieved_nodes = _record_nodes(source) or []
+        qualities_local = None
+        if compute_qualities:
+            qualities_local = compute_subgraph_quality(
+                retrieved_nodes, out_neighbors, mincut_neighbors
+            )
+            qualities_local.update(
+                compute_per_class_breakdown(
+                    retrieved_nodes,
+                    out_neighbors,
+                    mincut_neighbors,
+                    labels,
+                    train_mask,
+                    int(q_node),
+                )
+            )
+        # Do not copy predicted_label or fallback_used from the source record:
+        # train/val/test masks may have changed even though retrieved_nodes did
+        # not. The main loop recomputes classification before writing.
+        return {
+            "dataset": dataset_name,
+            "method": method_name,
+            "params": params or {},
+            "params_hash": p_hash,
+            "seed": seed if method_name == "bp" else None,
+            "split_hash": split_hash,
+            "query_node": int(q_node),
+            "query_split": query_split,
+            "query_label": int(labels[q_node]) if q_node < len(labels) else None,
+            "size": len(retrieved_nodes),
+            "neighborhood": retrieved_nodes,
+            "retrieved_nodes": retrieved_nodes,
+            "oracle_queries": source.get("oracle_queries"),
+            "wall_time_s": source.get("wall_time_s"),
+            "qualities": qualities_local,
+            "quality_schema_version": QUALITY_SCHEMA_VERSION if compute_qualities else None,
+            "solver_dump_path": None,
+            "returncode": source.get("returncode", 0),
+            "solver_build_id": source.get("solver_build_id"),
+            "kappa_verified": source.get("kappa_verified"),
+            "kappa_verify_failed": source.get("kappa_verify_failed"),
+            "hard_cap_hit": source.get("hard_cap_hit"),
+            "optimality_gap": source.get("optimality_gap"),
+            "bb_incumbent_obj": source.get("bb_incumbent_obj"),
+            "bb_best_bound": source.get("bb_best_bound"),
+            "gap_status": source.get("gap_status"),
+            "soft_time_limit_s": source.get("soft_time_limit_s"),
+            "hard_time_limit_s": source.get("hard_time_limit_s"),
+            "solver_wall_time_s": source.get("solver_wall_time_s"),
+            "incumbent_trajectory": source.get("incumbent_trajectory") or [],
+            "stats": source.get("stats"),
+            "reused_solver_record": True,
+            "reused_from_params_hash": source.get("params_hash"),
+            "reused_from_split_hash": source.get("split_hash"),
+            "reused_from_query_split": source.get("query_split"),
+        }
+
     def _resolve(q_node: int):
         key = _make_lookup_key(q_node)
         cached = cached_records.get(key)
         if cached is not None:
             return cached, True
+        reusable = reusable_solver_records.get(_make_solver_resume_key(q_node))
+        if reusable is not None:
+            return _record_from_reused_solver(q_node, reusable), False
         solver_dump_path: Optional[str] = None
         if solver_dumps_dir is not None:
             seed_tag = "noseed" if (seed is None or method_name != "bp") else f"s{seed}"

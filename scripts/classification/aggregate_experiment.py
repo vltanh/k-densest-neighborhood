@@ -39,7 +39,7 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from record_io import load_ndjson_records  # noqa: E402
+from record_io import load_records_from_path  # noqa: E402
 from split_utils import build_out_adjacency, compute_hard_subset, sha256_node_set  # noqa: E402
 
 
@@ -69,16 +69,7 @@ CATEGORICAL_COUNT_COLS = [
 
 
 def _load_records(path: str) -> List[dict]:
-    if os.path.isdir(path):
-        records: List[dict] = []
-        for root, _dirs, files in os.walk(path):
-            for fn in files:
-                if fn == "records.ndjson":
-                    records.extend(load_ndjson_records(os.path.join(root, fn)))
-        return records
-    if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    return load_ndjson_records(path)
+    return load_records_from_path(path)
 
 
 def _safe_col(raw: str) -> str:

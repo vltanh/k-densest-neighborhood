@@ -8,10 +8,9 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from split_utils import (  # noqa: E402
     build_out_adjacency,
-    build_undirected_adjacency,
+    build_query_pool,
     compute_hard_subset,
-    EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE,
-    query_has_undirected_triangle,
+    EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE,
     sha256_edge_list,
     write_split_meta,
 )
@@ -20,21 +19,6 @@ try:
     from torch_geometric.datasets import CitationFull
 except ImportError:
     CitationFull = None
-
-
-def _out_reachable_size(start, out_adj, limit=None):
-    seen = {start}
-    stack = [start]
-    while stack:
-        node = stack.pop()
-        for nb in out_adj.get(node, ()):
-            if nb in seen:
-                continue
-            seen.add(nb)
-            if limit is not None and len(seen) >= limit:
-                return len(seen)
-            stack.append(nb)
-    return len(seen)
 
 
 def _stratified_half_split(pool, labels, rng):
@@ -105,33 +89,20 @@ def _solver_build_id(bin_path: str) -> str:
 def _split_and_write(dataset_name, seed: int, data_dir: str, df_edges, labels_np, num_nodes: int):
     ds_dir = os.path.join(data_dir, dataset_name)
     node_csv = os.path.join(ds_dir, "nodes.csv")
-    cited_nodes = set(df_edges["target"].astype(int).unique())
-    all_citing_nodes = set(df_edges["source"].astype(int).unique())
-    pure_sources = sorted(all_citing_nodes - cited_nodes)
 
     out_adj = build_out_adjacency(df_edges)
-    undirected_adj = build_undirected_adjacency(df_edges)
-    pool = sorted(
-        q
-        for q in pure_sources
-        if len(out_adj.get(q, ())) >= 2
-        and _out_reachable_size(q, out_adj, limit=EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE)
-        >= EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE
-    )
-    triangle_pool = [
-        q for q in pool if query_has_undirected_triangle(q, undirected_adj)
-    ]
+    query_pool, pool_stats = build_query_pool(df_edges)
 
     print(f"Total Nodes: {num_nodes}")
-    print(f"Pure-source candidates: {len(pure_sources)}")
+    print(f"Pure-source candidates: {pool_stats['pure_source_count']}")
     print(
-        f"Pool after out-degree >= 2 and out-reachable >= {EXPECTED_POOL_MIN_OUT_REACHABLE_SIZE} filter: {len(pool)}"
+        "Query pool after outgoing-reachable 2-edge component "
+        f">= {EXPECTED_POOL_MIN_OUT_2EDGE_COMPONENT_SIZE}: {len(query_pool)}"
     )
-    print(f"Triangle-eligible query pool: {len(triangle_pool)}")
 
     rng = np.random.default_rng(seed)
     val_nodes, test_nodes, singleton_labels = _stratified_half_split(
-        triangle_pool, labels_np, rng
+        query_pool, labels_np, rng
     )
     print(
         f"Label-stratified split: val={len(val_nodes)}, test={len(test_nodes)}, "
@@ -174,7 +145,7 @@ def _split_and_write(dataset_name, seed: int, data_dir: str, df_edges, labels_np
         edges_hash=edges_hash,
         library_versions=_library_versions(),
         data_dir=data_dir,
-        query_pool_ids=triangle_pool,
+        query_pool_ids=query_pool,
     )
     print(
         f"split_meta.json: train={payload['splits']['train']['size']}, "

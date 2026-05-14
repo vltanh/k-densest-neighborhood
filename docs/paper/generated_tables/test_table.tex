@@ -1,0 +1,15 @@
+\begin{table}[H]
+  \centering
+  \scriptsize
+  \caption{Validation-best configurations evaluated on Cora-ML test queries ($289$ queries), mean $\pm$ bootstrap standard error.}
+  \label{tab:test}
+  \begin{tabular}{lllll}
+    \toprule
+    Method & validation-best parameters & Precision & Recall & F1 \\
+    \midrule
+    BFS & $d=1, k=5$ & $0.862\pm0.018$ & $0.819\pm0.023$ & $0.826\pm0.023$ \\
+    AvgDeg & $k=3$ & $0.793\pm0.024$ & $0.491\pm0.029$ & $0.529\pm0.033$ \\
+    BP & $k=4, \kappa=1$ & $0.816\pm0.028$ & $0.768\pm0.026$ & $0.772\pm0.027$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}

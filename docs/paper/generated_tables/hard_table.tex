@@ -1,0 +1,15 @@
+\begin{table}[H]
+  \centering
+  \scriptsize
+  \caption{Validation-best configurations evaluated on Cora-ML BFS-depth-1-wrong queries ($44$ queries), mean $\pm$ bootstrap standard error.}
+  \label{tab:hard}
+  \begin{tabular}{lllll}
+    \toprule
+    Method & validation-best parameters & Precision & Recall & F1 \\
+    \midrule
+    BFS & $d=1, k=5$ & $0.184\pm0.056$ & $0.033\pm0.019$ & $0.052\pm0.027$ \\
+    AvgDeg & $k=3$ & $0.057\pm0.032$ & $0.160\pm0.043$ & $0.042\pm0.017$ \\
+    BP & $k=4, \kappa=1$ & $0.119\pm0.050$ & $0.232\pm0.068$ & $0.123\pm0.041$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}

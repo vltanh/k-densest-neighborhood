@@ -93,8 +93,16 @@ OpenAlex mode uses live OpenAlex work IDs:
 Variant flags:
 
 - `--bp`: branch-and-price. Requires `--k >= 2`; accepts `--kappa`.
-- `--avgdeg`: average-degree baseline. Optional `--k` triggers grow-to-k.
+  Omitting all variant flags still defaults to BP for legacy CLI compatibility,
+  but scripts should pass `--bp` explicitly.
+- `--avgdeg`: query-anchored average-degree baseline on the materialized local
+  graph. Optional `--k` triggers grow-to-k when the returned set is smaller
+  than requested. Paper-style sweeps call it through `main.cpp` with depth `-1`,
+  so it explores all outgoing-reachable nodes exposed by the oracle convention.
 - `--bfs`: BFS baseline. Uses `--bfs-depth`; optional `--k` triggers grow-to-k.
+  The implementation queries layers `0..d`, returns the closed ball through
+  depth `d`, and keeps the queried final layer's discoveries as grow-to-k
+  candidates.
 
 Useful solver options:
 
@@ -109,7 +117,8 @@ Useful solver options:
 - `--no-materialize`: BP-only switch that skips extra frontier materialization.
 - `--compute-qualities`: compute post-solve quality metrics. This can issue extra oracle queries.
 - `--emit-json`: print one `JSON_RESULT:<payload>` line.
-- `--json-output <path>`: write the JSON payload to a file.
+- `--json-output <path>`: write the raw JSON payload to a file instead of
+  stdout; implies `--emit-json`.
 - `--stream-incumbents`: emit `INCUMBENT_JSON:<payload>` lines when BP improves the incumbent.
 
 The Python wrappers treat missing JSON or a nonzero solver exit as a hard
@@ -160,11 +169,11 @@ The manuscript in `docs/paper/` organizes the evaluation around three questions:
 2. On Cora-ML, what intrinsic community geometry and cost does BP return
    compared with BFS and AvgDeg?
 3. How much label information do the returned communities preserve under a
-   simple majority-vote classifier?
+   simple inverse-distance vote over training-labelled returned nodes?
 
-The codebase currently implements those workflows with the scripts below.  Some
-historical numbers in the paper draft may reflect an earlier split definition;
-current experiment runs should be interpreted through `data/<dataset>/split_meta.json`.
+The codebase currently implements those workflows with the scripts below.
+Current experiment runs should be interpreted through
+`data/<dataset>/split_meta.json` and the aggregate CSVs under `exps/`.
 
 ## Brute-Force Correctness Experiment
 
@@ -214,16 +223,22 @@ and rewrites the masks plus `split_meta.json`.
 
 Current split semantics in code:
 
-- candidate queries are pure sources,
-- out-degree is at least 2,
-- out-reachable size is at least 5,
-- the query participates in at least one undirected triangle,
-- validation and test are label-stratified 50/50 under seed 42.
+- candidate queries are pure sources: nodes that cite other papers but are not
+  themselves cited in the exported directed graph,
+- for each pure source, the code follows outgoing edges from the query, induces
+  the undirected support on that outgoing-reachable set, removes bridge edges,
+  and keeps the query only when the bridge-free component containing it has at
+  least five nodes,
+- validation and test are label-stratified 50/50 from that pool under seed 42;
+  odd label buckets are balanced by the current val/test sizes,
+- the BFS-hard diagnostic subset is computed from test nodes whose true label
+  disagrees with the outgoing depth-1 training-neighbour majority vote, with a
+  global training-majority fallback when no training neighbour is reachable.
 
 For the checked-in Cora_ML export at the time of this README, `split_meta.json`
-records 2,995 nodes, 8,416 directed edges, a 504-node query pool, 252 validation
-queries, 252 test queries, 2,491 training nodes, and a 29-node BFS-depth-1-wrong
-hard subset.
+records 2,995 nodes, 8,416 directed edges, 1,249 pure-source candidates, a
+578-node query pool, 289 validation queries, 289 test queries, 2,417 training
+nodes, and a 44-node BFS-depth-1-wrong hard subset.
 
 Run the paper-style Cora_ML sweep:
 
@@ -251,6 +266,22 @@ methods store one record per query; BP records are keyed by query, params hash,
 dataset, split hash, and Gurobi seed.  The aggregators reject stale split hashes
 and incomplete cells by default.  Use `--allow-partial` only for interim
 inspection while a long sweep is still running.
+
+The effective params hash includes more than the visible solver grid: classifier
+weighting, fallback-hop limit, the forbidden val/test node set, quality schema
+version, solver binary hash, and solver config such as `max_in_edges=0`.
+Completed solver outputs may be reused across split-hash changes when the graph,
+method, solver-facing params, solver config, and BP seed match; labels,
+classification predictions, and qualities are recomputed for the current split
+before new records are appended.
+
+Classification records use inverse-distance voting by default.  The vote is over
+training-labelled members of the returned community, with validation/test nodes
+excluded as intermediate vertices in the distance calculation and ties broken by
+ascending label.  If a returned community contains no training-labelled node,
+the evaluator runs a directed fallback BFS out to `--max-fallback-hops` and then
+falls back to the global training-majority label.  The current Cora_ML aggregate
+records have zero fallback uses.
 
 Create broad aggregate CSVs:
 
@@ -313,5 +344,5 @@ Recent commits use short scoped summaries such as:
 ```text
 solver: stream BP incumbent telemetry
 scripts: harden solver record caching
-scripts: restrict splits to triangle queries
+scripts: hash-pin split metadata
 ```

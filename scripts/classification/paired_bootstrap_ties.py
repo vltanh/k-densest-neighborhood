@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from record_io import load_ndjson_records  # noqa: E402
+from record_io import load_records_from_path  # noqa: E402
 
 
 def _cell_key(record: dict) -> Optional[Tuple]:
@@ -224,16 +224,7 @@ def _validate_split_hashes(records: Iterable[dict], dataset: str, data_dir: str,
 
 
 def _load_records(records_path: str, dataset: Optional[str]) -> List[dict]:
-    if os.path.isdir(records_path):
-        records: List[dict] = []
-        for root, _dirs, files in os.walk(records_path):
-            for fn in files:
-                if fn == "records.ndjson":
-                    records.extend(load_ndjson_records(os.path.join(root, fn)))
-    else:
-        if not os.path.exists(records_path):
-            raise FileNotFoundError(records_path)
-        records = load_ndjson_records(records_path)
+    records = load_records_from_path(records_path)
     if dataset is not None:
         records = [r for r in records if r.get("dataset") == dataset]
     return records

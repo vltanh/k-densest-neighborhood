@@ -1,0 +1,32 @@
+\begin{table}[H]
+  \centering
+  \scriptsize
+  \caption{Validation performance on Cora-ML ($289$ queries), mean $\pm$ bootstrap standard error.}
+  \label{tab:validation}
+  \begin{tabular}{llll}
+    \toprule
+    Method & Precision & Recall & F1 \\
+    \midrule
+    \multicolumn{4}{l}{\textit{$k=3$}} \\
+    BFS $d=1$ & $0.846\pm0.023$ & $0.836\pm0.024$ & $0.833\pm0.024$ \\
+    AvgDeg & $0.778\pm0.033$ & $0.501\pm0.030$ & $0.541\pm0.034$ \\
+    BP $\kappa=0$ & $0.833\pm0.019$ & $0.788\pm0.026$ & $0.792\pm0.027$ \\
+    BP $\kappa=1$ & $0.833\pm0.020$ & $0.793\pm0.026$ & $0.799\pm0.028$ \\
+    BP $\kappa=2$ & $0.791\pm0.028$ & $0.715\pm0.027$ & $0.713\pm0.031$ \\
+    \midrule
+    \multicolumn{4}{l}{\textit{$k=4$}} \\
+    BFS $d=1$ & $0.863\pm0.018$ & $0.840\pm0.023$ & $0.840\pm0.022$ \\
+    AvgDeg & $0.778\pm0.031$ & $0.501\pm0.031$ & $0.541\pm0.034$ \\
+    BP $\kappa=0$ & $0.812\pm0.025$ & $0.699\pm0.028$ & $0.720\pm0.029$ \\
+    BP $\kappa=1$ & $0.852\pm0.023$ & $0.824\pm0.026$ & $0.830\pm0.026$ \\
+    BP $\kappa=2$ & $0.787\pm0.028$ & $0.712\pm0.028$ & $0.708\pm0.029$ \\
+    \midrule
+    \multicolumn{4}{l}{\textit{$k=5$}} \\
+    BFS $d=1$ & $0.871\pm0.016$ & $0.851\pm0.021$ & $0.852\pm0.020$ \\
+    AvgDeg & $0.778\pm0.032$ & $0.501\pm0.029$ & $0.541\pm0.034$ \\
+    BP $\kappa=0$ & $0.760\pm0.030$ & $0.581\pm0.031$ & $0.604\pm0.033$ \\
+    BP $\kappa=1$ & $0.800\pm0.029$ & $0.745\pm0.029$ & $0.750\pm0.031$ \\
+    BP $\kappa=2$ & $0.789\pm0.029$ & $0.715\pm0.028$ & $0.710\pm0.031$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}

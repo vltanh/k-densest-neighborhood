@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from record_io import load_ndjson_records  # noqa: E402
+from record_io import load_records_from_path  # noqa: E402
 
 
 COST_NUMERIC_FIELDS = [
@@ -278,17 +278,7 @@ def main():
     args = parser.parse_args()
 
     records_path = args.records
-    if os.path.isdir(records_path):
-        gathered = []
-        for root, _dirs, files in os.walk(records_path):
-            for fn in files:
-                if fn == "records.ndjson":
-                    gathered.extend(load_ndjson_records(os.path.join(root, fn)))
-        records = gathered
-    else:
-        if not os.path.exists(records_path):
-            raise FileNotFoundError(records_path)
-        records = load_ndjson_records(records_path)
+    records = load_records_from_path(records_path)
 
     if args.dataset:
         records = [r for r in records if r.get("dataset") == args.dataset]

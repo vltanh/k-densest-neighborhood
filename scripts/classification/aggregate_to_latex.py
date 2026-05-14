@@ -105,6 +105,16 @@ def _method_label(method: str, kappa) -> str:
     return method
 
 
+def _dataset_label(dataset: str) -> str:
+    return str(dataset).replace("_", "-")
+
+
+def _subset_label(subset: str) -> str:
+    if subset == "bfs_depth1_wrong":
+        return "BFS-depth-1-wrong"
+    return str(subset).replace("_", "-")
+
+
 def _params_label(row: pd.Series) -> str:
     method = row["method"]
     k = int(row["param_k"]) if "param_k" in row and not _is_missing(row["param_k"]) else None
@@ -117,6 +127,10 @@ def _params_label(row: pd.Series) -> str:
         kappa = int(row["param_kappa"]) if "param_kappa" in row and not _is_missing(row["param_kappa"]) else 0
         return rf"$k={k}, \kappa={kappa}$"
     return "--"
+
+
+def _pending_caption_note(lines: list[str]) -> str:
+    return " Pending cells are incomplete in the aggregate CSV." if any("(pending)" in line for line in lines) else ""
 
 
 def _select_cell(df: pd.DataFrame, dataset: str, method: str, k: int, kappa, expected_n: int) -> Optional[pd.Series]:
@@ -162,8 +176,31 @@ def _select_classification(
     return row
 
 
-def _table_env(label: str, caption: str, colspec: str, header: str, body_lines: list[str], size: str = r"\scriptsize") -> str:
+def _table_env(
+    label: str,
+    caption: str,
+    colspec: str,
+    header: str,
+    body_lines: list[str],
+    size: str = r"\scriptsize",
+    resize: bool = False,
+) -> str:
     body = "\n".join(body_lines)
+    tabular = [
+        f"  \\begin{{tabular}}{{{colspec}}}",
+        r"    \toprule",
+        f"    {header} \\\\",
+        r"    \midrule",
+        body,
+        r"    \bottomrule",
+        r"  \end{tabular}",
+    ]
+    if resize:
+        tabular = [
+            r"  \resizebox{\textwidth}{!}{%",
+            *tabular,
+            r"  }",
+        ]
     return "\n".join(
         [
             r"\begin{table}[H]",
@@ -171,13 +208,7 @@ def _table_env(label: str, caption: str, colspec: str, header: str, body_lines: 
             f"  {size}",
             f"  \\caption{{{caption}}}",
             f"  \\label{{{label}}}",
-            f"  \\begin{{tabular}}{{{colspec}}}",
-            r"    \toprule",
-            f"    {header} \\\\",
-            r"    \midrule",
-            body,
-            r"    \bottomrule",
-            r"  \end{tabular}",
+            *tabular,
             r"\end{table}",
             "",
         ]
@@ -189,7 +220,7 @@ def render_quality(union: pd.DataFrame, dataset: str, expected_union: int) -> st
     for k in (3, 4, 5):
         if lines:
             lines.append(r"    \midrule")
-        lines.append(rf"    \multicolumn{{10}}{{l}}{{\textit{{$k={k}$}}}} \\")
+        lines.append(rf"    \multicolumn{{8}}{{l}}{{\textit{{$k={k}$}}}} \\")
         for method, kappa in METHOD_ORDER:
             row = _select_cell(union, dataset, method, k, kappa, expected_union)
             lines.append(
@@ -198,12 +229,10 @@ def render_quality(union: pd.DataFrame, dataset: str, expected_union: int) -> st
                     [
                         _method_label(method, kappa),
                         _mean_std(row, "size"),
-                        _rate(row, "size_lt_k_rate"),
                         _mean_std(row, "quality_kappa_s"),
                         _rate(row, "kappa_s_lt_1_rate"),
                         _rate(row, "kappa_s_lt_2_rate"),
                         _mean_std(row, "quality_algebraic_connectivity_lambda2"),
-                        _mean_std(row, "quality_undir_internal_ncut"),
                         _mean_std(row, "quality_dir_internal_avg_degree"),
                         _mean_std(row, "quality_dir_internal_edge_density"),
                     ]
@@ -212,10 +241,11 @@ def render_quality(union: pd.DataFrame, dataset: str, expected_union: int) -> st
             )
     return _table_env(
         "tab:quality",
-        rf"Cluster quality on {dataset} validation+test queries (${expected_union}$ queries), mean $\pm$ standard deviation. Pending cells are incomplete in the aggregate CSV.",
-        "lccccccccc",
-        r"Method & $|S|$ & $\Pr[|S|<k]$ & $\kappa_S$ & $\Pr[\kappa_S<1]$ & $\Pr[\kappa_S<2]$ & $\lambda_2$ & ncut & avg.deg & dens.",
+        rf"Cluster quality on {_dataset_label(dataset)} validation+test queries (${expected_union}$ queries), mean $\pm$ standard deviation.{_pending_caption_note(lines)}",
+        "lccccccc",
+        r"Method & $|S|$ & $\kappa_S$ & $\Pr[\kappa_S<1]$ & $\Pr[\kappa_S<2]$ & $\lambda_2$ & avg.deg & dens.",
         lines,
+        resize=True,
     )
 
 
@@ -224,7 +254,7 @@ def render_cost(union: pd.DataFrame, dataset: str, expected_union: int) -> str:
     for k in (3, 4, 5):
         if lines:
             lines.append(r"    \midrule")
-        lines.append(rf"    \multicolumn{{8}}{{l}}{{\textit{{$k={k}$}}}} \\")
+        lines.append(rf"    \multicolumn{{9}}{{l}}{{\textit{{$k={k}$}}}} \\")
         for method, kappa in METHOD_ORDER:
             row = _select_cell(union, dataset, method, k, kappa, expected_union)
             lines.append(
@@ -238,6 +268,7 @@ def render_cost(union: pd.DataFrame, dataset: str, expected_union: int) -> str:
                         _mean_std(row, "stat_total_lp_solves", digits=0),
                         _mean_std(row, "stat_total_cuts_added", digits=0),
                         _mean_std(row, "stat_t_lp_solve"),
+                        _mean_std(row, "optimality_gap"),
                         _rate(row, "hard_cap_hit_rate"),
                     ]
                 )
@@ -245,10 +276,11 @@ def render_cost(union: pd.DataFrame, dataset: str, expected_union: int) -> str:
             )
     return _table_env(
         "tab:cost",
-        rf"Cost on {dataset} validation+test queries (${expected_union}$ queries), mean $\pm$ standard deviation. Pending cells are incomplete in the aggregate CSV.",
-        "lccccccc",
-        r"Method & wall (s) & queries & BB nodes & LP solves & cuts & $t_{\mathrm{LP}}$ (s) & hc",
+        rf"Cost on {_dataset_label(dataset)} validation+test queries (${expected_union}$ queries), mean $\pm$ standard deviation.{_pending_caption_note(lines)}",
+        "lcccccccc",
+        r"Method & wall (s) & queries & BB nodes & LP solves & cuts & $t_{\mathrm{LP}}$ (s) & gap & hc",
         lines,
+        resize=True,
     )
 
 
@@ -267,7 +299,7 @@ def render_validation(grid: pd.DataFrame, dataset: str, expected_val: int) -> st
             )
     return _table_env(
         "tab:validation",
-        rf"Validation performance on {dataset} (${expected_val}$ queries), mean $\pm$ bootstrap standard error. Pending cells are incomplete in the aggregate CSV.",
+        rf"Validation performance on {_dataset_label(dataset)} (${expected_val}$ queries), mean $\pm$ bootstrap standard error.{_pending_caption_note(lines)}",
         "llll",
         "Method & Precision & Recall & F1",
         lines,
@@ -308,8 +340,8 @@ def render_best_eval(grid: pd.DataFrame, dataset: str, subset: str, expected_val
             + r" \\"
         )
     caption = (
-        rf"Validation-best configurations evaluated on {dataset} {subset} queries (${expected_subset}$ queries), "
-        r"mean $\pm$ bootstrap standard error. Pending cells are incomplete in the aggregate CSV."
+        rf"Validation-best configurations evaluated on {_dataset_label(dataset)} {_subset_label(subset)} queries (${expected_subset}$ queries), "
+        rf"mean $\pm$ bootstrap standard error.{_pending_caption_note(lines)}"
     )
     return _table_env(
         label,
@@ -317,7 +349,7 @@ def render_best_eval(grid: pd.DataFrame, dataset: str, subset: str, expected_val
         "lllll",
         "Method & validation-best parameters & Precision & Recall & F1",
         lines,
-        size=r"\small",
+        size=r"\scriptsize",
     )
 
 

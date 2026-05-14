@@ -259,6 +259,102 @@ class EvaluateNodesRecordsTests(unittest.TestCase):
             self.assertEqual(records[0]["retrieved_nodes"], [0, 2])
             self.assertNotIn("neighborhood", records[0])
 
+    def test_split_change_reuses_done_retrieved_nodes_without_solver(self):
+        with tempfile.TemporaryDirectory() as td:
+            edge_csv = os.path.join(td, "edge.csv")
+            pd.DataFrame([(0, 2)], columns=["source", "target"]).to_csv(
+                edge_csv, index=False
+            )
+            df_nodes = pd.DataFrame(
+                {
+                    "node_id": [0, 1, 2],
+                    "label": [1, 7, 1],
+                    "train": [False, True, True],
+                    "val": [True, False, False],
+                    "test": [False, False, False],
+                }
+            )
+            method_root = os.path.join(td, "bfs")
+            old_records_dir = os.path.join(method_root, "oldhash")
+            new_records_dir = os.path.join(method_root, "newhash")
+            os.makedirs(old_records_dir)
+            old_params = {
+                "k": 2,
+                "bfs_depth": 1,
+                "bfs_use_k": True,
+                "_eval": {
+                    "forbidden_hash": "old",
+                    "quality_schema_version": "2",
+                    "code_hash": "old-solver-hash",
+                    "solver_config": {"max_in_edges": 0},
+                },
+            }
+            new_params = {
+                "k": 2,
+                "bfs_depth": 1,
+                "bfs_use_k": True,
+                "_eval": {
+                    "forbidden_hash": "new",
+                    "quality_schema_version": "2",
+                    "code_hash": "new-solver-hash",
+                    "solver_config": {"max_in_edges": 0},
+                },
+            }
+            old_record = {
+                "dataset": "D",
+                "method": "bfs",
+                "params": old_params,
+                "params_hash": "oldhash",
+                "seed": None,
+                "split_hash": "oldsplit",
+                "query_node": 0,
+                "query_split": "test",
+                "size": 2,
+                "retrieved_nodes": [0, 2],
+                "oracle_queries": 3,
+                "wall_time_s": 0.01,
+                "returncode": 0,
+                "solver_build_id": "build",
+                "predicted_label": 7,
+                "fallback_used": True,
+            }
+            with open(os.path.join(old_records_dir, "records.ndjson"), "w") as f:
+                f.write(json.dumps(old_record) + "\n")
+
+            with patch("solver_utils.run_one_query") as run_one_query:
+                run_one_query.side_effect = AssertionError("solver should not run")
+                evaluate_nodes(
+                    [0],
+                    k=2,
+                    edge_csv=edge_csv,
+                    df_nodes=df_nodes,
+                    bin_path="solver",
+                    tmp_dir=td,
+                    max_workers=1,
+                    show_progress=False,
+                    records_path=new_records_dir,
+                    dataset_name="D",
+                    method="bfs",
+                    params=new_params,
+                    split_hash="newsplit",
+                    query_split="val",
+                    compute_qualities=True,
+                )
+
+            with open(os.path.join(new_records_dir, "records.ndjson")) as f:
+                records = [json.loads(line) for line in f if line.strip()]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["retrieved_nodes"], [0, 2])
+            self.assertEqual(records[0]["split_hash"], "newsplit")
+            self.assertEqual(records[0]["query_split"], "val")
+            self.assertEqual(records[0]["params"], new_params)
+            self.assertNotEqual(records[0]["params_hash"], "oldhash")
+            self.assertTrue(records[0]["reused_solver_record"])
+            self.assertEqual(records[0]["reused_from_params_hash"], "oldhash")
+            self.assertEqual(records[0]["qualities"]["size"], 2)
+            self.assertEqual(records[0]["predicted_label"], 1)
+            self.assertFalse(records[0]["fallback_used"])
+
 
 @unittest.skipIf(
     compute_subgraph_quality is None,
@@ -421,6 +517,56 @@ class TriangleEligibilityTests(unittest.TestCase):
         }
         self.assertTrue(query_has_undirected_triangle(0, adj))
         self.assertFalse(query_has_undirected_triangle(3, adj))
+
+
+class QueryPoolEligibilityTests(unittest.TestCase):
+    def test_out_reachable_2edge_component_size(self):
+        from split_utils import (
+            build_out_adjacency,
+            build_undirected_adjacency,
+            out_reachable_2edge_component_size,
+        )
+
+        df_edges = pd.DataFrame(
+            [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 4),
+                (0, 4),
+                (4, 5),  # bridge tail, not part of q's 2-edge component
+                (10, 11),
+                (10, 12),
+                (11, 12),
+            ],
+            columns=["source", "target"],
+        )
+        out_adj = build_out_adjacency(df_edges)
+        undirected_adj = build_undirected_adjacency(df_edges)
+
+        self.assertEqual(out_reachable_2edge_component_size(0, out_adj, undirected_adj), 5)
+        self.assertEqual(out_reachable_2edge_component_size(10, out_adj, undirected_adj), 3)
+
+    def test_build_query_pool_uses_consolidated_component_filter(self):
+        from split_utils import build_query_pool
+
+        df_edges = pd.DataFrame(
+            [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 4),
+                (0, 4),
+                (10, 11),
+                (10, 12),
+                (11, 12),
+            ],
+            columns=["source", "target"],
+        )
+
+        query_pool, stats = build_query_pool(df_edges)
+        self.assertEqual(query_pool, [0])
+        self.assertEqual(stats["pure_source_count"], 2)
 
 
 class SplitMetaIdempotencyTests(unittest.TestCase):
